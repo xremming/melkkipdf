@@ -68,12 +68,6 @@ component PageRowView inherits Rectangle {
     }
 }
 
-// A thin vertical divider between toolbar groups.
-component ToolbarSeparator inherits Rectangle {
-    width: 1px;
-    background: #555555;
-}
-
 // One segment of a fused segmented control. The active segment is recessed
 // (darker) so it reads as pressed in.
 component Segment inherits Rectangle {
@@ -83,14 +77,17 @@ component Segment inherits Rectangle {
     callback clicked <=> touch.clicked;
 
     min-width: 56px;
-    background: root.active ? #252525 : (touch.has-hover ? #505050 : #454545);
+    // Recessed while selected (radio use) or held down (action use).
+    background: (root.active || touch.pressed)
+        ? #252525
+        : (touch.has-hover ? #505050 : #454545);
 
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 12px;
         Text {
             text: root.text;
-            color: root.active ? #ffffff : #b8b8b8;
+            color: (root.active || touch.pressed) ? #ffffff : #b8b8b8;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -101,32 +98,6 @@ component Segment inherits Rectangle {
         x: 0;
         width: 1px;
         background: #5a5a5a;
-    }
-
-    touch := TouchArea { }
-}
-
-// A plain action button, styled to match the segmented control (same fill,
-// border, radius, and height) so the toolbar reads as one set of controls.
-component ToolButton inherits Rectangle {
-    in property <string> text;
-    callback clicked <=> touch.clicked;
-
-    height: 28px;
-    border-width: 1px;
-    border-color: #5a5a5a;
-    border-radius: 5px;
-    background: touch.pressed ? #252525 : (touch.has-hover ? #505050 : #454545);
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        Text {
-            text: root.text;
-            color: #dddddd;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
     }
 
     touch := TouchArea { }
@@ -283,24 +254,37 @@ export component MainWindow inherits Window {
                     padding-right: 8px;
                     spacing: 6px;
 
+                    // Action groups: `current: -1` so no segment stays selected;
+                    // they just fire on click (with press feedback).
                     VerticalLayout {
                         alignment: center;
-                        ToolButton { text: "Zoom −"; clicked => { root.zoom-out(); } }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        ToolButton { text: "Zoom +"; clicked => { root.zoom-in(); } }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        ToolButton { text: "Fit width"; clicked => { root.fit-width(); } }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        ToolButton { text: "Fit page"; clicked => { root.fit-page(); } }
+                        SegmentedControl {
+                            options: ["Zoom −", "Zoom +"];
+                            current: -1;
+                            select(index) => {
+                                if (index == 0) {
+                                    root.zoom-out();
+                                } else {
+                                    root.zoom-in();
+                                }
+                            }
+                        }
                     }
 
-                    ToolbarSeparator { }
+                    VerticalLayout {
+                        alignment: center;
+                        SegmentedControl {
+                            options: ["Fit width", "Fit page"];
+                            current: -1;
+                            select(index) => {
+                                if (index == 0) {
+                                    root.fit-width();
+                                } else {
+                                    root.fit-page();
+                                }
+                            }
+                        }
+                    }
 
                     // Fused segmented toggles for the two mode groups.
                     VerticalLayout {
@@ -313,8 +297,6 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-
-                    ToolbarSeparator { }
 
                     VerticalLayout {
                         alignment: center;
