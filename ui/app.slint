@@ -1,42 +1,105 @@
-import { ListView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 
-// One page in the scrollable document. The size is stored once in PDF points and
-// never changes; zoom is applied through the shared `density` property below.
-// `image` is empty until the page has been rendered.
-export struct PageSlot {
+// One page's fixed size (in PDF points) and its rendered image. The image is
+// empty until the page has been rendered.
+export struct PageEntry {
     page: int,
     width-pt: float,
     height-pt: float,
     image: image,
-    rendered: bool,
 }
 
-// Top-level window: a status line above a virtualized, scrollable column of
-// pages. Rendering and layout math live in Rust; this file is presentation and
-// input only.
-export component MainWindow inherits Window {
-    // The document's pages. Only visible delegates are instantiated.
-    in property <[PageSlot]> pages;
-    // Logical pixels per PDF point at the current zoom. Changing this one value
-    // resizes every page without rewriting the model.
-    in property <float> density: 1.333;
-    // Status line: page count and zoom, or an error/usage message.
-    in property <string> status;
-    // Bumped by Rust whenever zoom or display density changes, so visible pages
-    // re-render crisply at the new scale.
-    in property <int> render-generation;
+// A row in the document: a single page, or two pages side by side (a spread).
+// When `has-right` is false, `right` is unused.
+export struct PageRow {
+    left: PageEntry,
+    right: PageEntry,
+    has-right: bool,
+}
 
-    // A visible page wants its pixels; the argument is the page index.
-    callback request-render(int);
+// A single page: white paper with the rendered image on top. Sized from the
+// page's points times the shared density.
+component PageImageView inherits Rectangle {
+    in property <PageEntry> entry;
+    in property <float> density;
+    width: entry.width-pt * density * 1px;
+    height: entry.height-pt * density * 1px;
+    background: white;
+    Image {
+        source: entry.image;
+        width: 100%;
+        height: 100%;
+    }
+}
+
+// One row, centered horizontally and vertically. A single page centers on its
+// own; a spread centers as a pair so the two pages meet at the middle.
+//
+// Every row reserves the same height (`row-height-pt`, the tallest row in the
+// document). Slint's ListView assumes uniform item heights when estimating the
+// scroll extent; giving it exactly that keeps the viewport anchor stable while
+// scrolling instead of oscillating, which otherwise triggers a long
+// instantiation-chain warning.
+component PageRowView inherits Rectangle {
+    in property <PageRow> page-row;
+    in property <float> density;
+    in property <float> row-height-pt;
+    height: row-height-pt * density * 1px + 16px;
+    background: #2b2b2b;
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+
+        VerticalLayout {
+            alignment: center;
+            PageImageView {
+                entry: page-row.left;
+                density: root.density;
+            }
+        }
+        if page-row.has-right: VerticalLayout {
+            alignment: center;
+            PageImageView {
+                entry: page-row.right;
+                density: root.density;
+            }
+        }
+    }
+}
+
+// Top-level window: a status line above the document, shown either as a
+// continuous scrollable column of rows or one row at a time.
+export component MainWindow inherits Window {
+    // All rows of the document. Only visible delegates are instantiated.
+    in property <[PageRow]> rows;
+    // The single row shown in paged (non-continuous) mode.
+    in property <PageRow> current-row-content;
+    // Continuous scroll vs. one row per screen.
+    in property <bool> continuous: true;
+    // Logical pixels per PDF point at the current zoom.
+    in property <float> density: 1.333;
+    // The tallest row's height in points; every row reserves this so the
+    // ListView's uniform-height assumption holds.
+    in property <float> row-height-pt: 1.0;
+    in property <string> status;
+
+    // A visible row wants its pages rendered; the argument is the row index.
+    callback request-render-row(int);
     // Invoked from Rust when a page has finished rendering (page index, image).
     callback page-rendered(int, image);
-    // The rendered page area was resized (width, height in logical pixels).
+    // The page area was resized (width, height in logical pixels).
     callback viewport-resized(length, length);
     callback zoom-in();
     callback zoom-out();
     callback zoom-reset();
     callback fit-width();
     callback fit-page();
+    callback toggle-continuous();
+    // Spread mode: 0 = none, 1 = odd, 2 = even.
+    callback set-spread(int);
+    callback next-row();
+    callback prev-row();
 
     title: "melkkipdf";
     preferred-width: 800px;
@@ -44,8 +107,8 @@ export component MainWindow inherits Window {
     forward-focus: key-handler;
 
     // Report the page-area geometry so Rust can compute fit-to-width/page zooms.
-    property <length> view-w: list.width;
-    property <length> view-h: list.height;
+    property <length> view-w: content.width;
+    property <length> view-h: content.height;
     changed view-w => { root.viewport-resized(root.view-w, root.view-h); }
     changed view-h => { root.viewport-resized(root.view-w, root.view-h); }
 
@@ -53,22 +116,31 @@ export component MainWindow inherits Window {
         key-pressed(event) => {
             if (event.modifiers.control && (event.text == "+" || event.text == "=")) {
                 root.zoom-in();
-                accept
-            } else if (event.modifiers.control && event.text == "-") {
-                root.zoom-out();
-                accept
-            } else if (event.modifiers.control && event.text == "0") {
-                root.zoom-reset();
-                accept
-            } else if (event.text == "f") {
-                root.fit-width();
-                accept
-            } else if (event.text == "p") {
-                root.fit-page();
-                accept
-            } else {
-                reject
+                return accept;
             }
+            if (event.modifiers.control && event.text == "-") {
+                root.zoom-out();
+                return accept;
+            }
+            if (event.modifiers.control && event.text == "0") {
+                root.zoom-reset();
+                return accept;
+            }
+            if (event.text == "f") { root.fit-width(); return accept; }
+            if (event.text == "p") { root.fit-page(); return accept; }
+            if (event.text == "c") { root.toggle-continuous(); return accept; }
+            if (event.text == "1") { root.set-spread(0); return accept; }
+            if (event.text == "2") { root.set-spread(1); return accept; }
+            if (event.text == "3") { root.set-spread(2); return accept; }
+            if (event.text == Key.PageDown || event.text == Key.RightArrow || event.text == " ") {
+                root.next-row();
+                return accept;
+            }
+            if (event.text == Key.PageUp || event.text == Key.LeftArrow) {
+                root.prev-row();
+                return accept;
+            }
+            return reject;
         }
 
         VerticalLayout {
@@ -80,37 +152,26 @@ export component MainWindow inherits Window {
                 }
             }
 
-            list := ListView {
-                for slot in root.pages: Rectangle {
-                    // Reserve the page height plus a gap, with a neutral backdrop
-                    // between pages. Size derives from the shared density.
-                    height: slot.height-pt * root.density * 1px + 16px;
-                    background: #2b2b2b;
-
-                    Rectangle {
-                        // Center the page horizontally; white paper shows through
-                        // until the rendered image arrives.
-                        x: (parent.width - self.width) / 2;
-                        y: 8px;
-                        width: slot.width-pt * root.density * 1px;
-                        height: slot.height-pt * root.density * 1px;
-                        background: white;
-
-                        Image {
-                            source: slot.image;
-                            width: 100%;
-                            height: 100%;
+            content := Rectangle {
+                if root.continuous: ListView {
+                    for entry[idx] in root.rows: PageRowView {
+                        page-row: entry;
+                        density: root.density;
+                        row-height-pt: root.row-height-pt;
+                        // Request pixels when this row scrolls into view. Zoom
+                        // re-renders are driven from Rust (see rerender_loaded) to
+                        // keep delegates free of change handlers, which otherwise
+                        // stretch Slint's instantiation settle loop during scroll.
+                        init => {
+                            root.request-render-row(idx);
                         }
                     }
-
-                    // Request pixels when this page scrolls into view, and again
-                    // when the render generation changes (zoom/density).
-                    init => {
-                        root.request-render(slot.page);
-                    }
-                    property <int> gen: root.render-generation;
-                    changed gen => {
-                        root.request-render(slot.page);
+                }
+                if !root.continuous: ScrollView {
+                    PageRowView {
+                        page-row: root.current-row-content;
+                        density: root.density;
+                        row-height-pt: root.row-height-pt;
                     }
                 }
             }

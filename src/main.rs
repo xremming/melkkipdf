@@ -49,9 +49,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sender = render::spawn(path, window.as_weak());
     let viewer = Viewer::new(&window, pages_pt, scale_factor, sender);
 
-    window.on_request_render({
+    window.on_request_render_row({
         let viewer = viewer.clone();
-        move |page| viewer.request_render(page)
+        move |row| viewer.request_render_row(row)
     });
     window.on_page_rendered({
         let viewer = viewer.clone();
@@ -80,6 +80,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     window.on_fit_page({
         let viewer = viewer.clone();
         move || viewer.fit_page()
+    });
+    window.on_toggle_continuous({
+        let viewer = viewer.clone();
+        move || viewer.toggle_continuous()
+    });
+    window.on_set_spread({
+        let viewer = viewer.clone();
+        move |mode| viewer.set_spread(mode)
+    });
+    window.on_next_row({
+        let viewer = viewer.clone();
+        move || viewer.next_row()
+    });
+    window.on_prev_row({
+        let viewer = viewer.clone();
+        move || viewer.prev_row()
     });
 
     window.run()?;

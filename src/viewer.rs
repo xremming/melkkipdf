@@ -1,10 +1,10 @@
-//! UI-thread view state: layout, zoom, and the page model.
+//! UI-thread view state: layout, zoom, spread/scroll modes, and the row model.
 //!
 //! Everything here runs on the UI thread, so interior mutability via `RefCell`
-//! is enough — no locking. Each page's size is fixed in PDF points and stored in
-//! the model once; zoom is applied through the window's shared `density`
-//! property, so a zoom change writes one value instead of every row. The viewer
-//! drives the render worker and keeps only a bounded window of images in memory.
+//! is enough — no locking. Pages are grouped into rows (one page, or two side by
+//! side for a spread); the model holds rows, and only rendered pages carry an
+//! image. Zoom is applied through the window's shared `density` property so a
+//! zoom change writes one value instead of every row.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -14,76 +14,133 @@ use std::sync::mpsc::Sender;
 use slint::{ComponentHandle, Image, Model, ModelRc, VecModel, Weak};
 
 use crate::render::RenderRequest;
-use crate::{MainWindow, PageSlot};
+use crate::{MainWindow, PageEntry, PageRow};
+
+/// How pages are grouped into rows.
+#[derive(Clone, Copy, PartialEq)]
+enum Spread {
+    /// One page per row.
+    None,
+    /// Two pages per row starting at the first page: [0,1] [2,3] …
+    Odd,
+    /// First page alone (centered), then pairs: [0] [1,2] [3,4] …
+    Even,
+}
 
 /// How pages are scaled to the viewport when a fit mode is active.
 #[derive(Clone, Copy, PartialEq)]
 enum FitMode {
-    /// Explicit zoom set by the user; ignore the viewport size.
     Free,
-    /// Fit the reference page's width to the viewport.
     Width,
-    /// Fit the reference page entirely within the viewport.
     Page,
 }
 
-/// Multiplicative step for zoom in/out.
+/// The page indices making up one row.
+#[derive(Clone, Copy)]
+struct RowSpec {
+    left: usize,
+    right: Option<usize>,
+}
+
 const ZOOM_STEP: f32 = 1.25;
 const MIN_ZOOM: f32 = 0.1;
 const MAX_ZOOM: f32 = 8.0;
 /// Logical pixels per point when zoom is "100%". 96/72 renders a point at one CSS
 /// pixel's worth of density, a comfortable default reading size.
 const BASE_DENSITY: f32 = 96.0 / 72.0;
-/// Horizontal room left for the scrollbar and a small gutter when fitting width.
+/// Room left for the scrollbar and a small gutter when fitting.
 const FIT_GUTTER: f32 = 24.0;
-/// Maximum number of rendered page images retained at once. Beyond this the
-/// furthest-back pages are dropped; the worker's cache makes re-rendering cheap.
+/// Maximum number of rendered page images retained at once.
 const MAX_RETAINED: usize = 24;
 
+/// Groups `page_count` pages into rows according to the spread mode.
+fn build_row_specs(page_count: usize, spread: Spread) -> Vec<RowSpec> {
+    let pair_from = |start: usize, rows: &mut Vec<RowSpec>| {
+        let mut i = start;
+        while i < page_count {
+            let right = (i + 1 < page_count).then_some(i + 1);
+            rows.push(RowSpec { left: i, right });
+            i += 2;
+        }
+    };
+
+    let mut rows = Vec::new();
+    match spread {
+        Spread::None => {
+            for i in 0..page_count {
+                rows.push(RowSpec { left: i, right: None });
+            }
+        }
+        Spread::Odd => pair_from(0, &mut rows),
+        Spread::Even => {
+            if page_count > 0 {
+                // First page sits alone (centered), then pairs.
+                rows.push(RowSpec { left: 0, right: None });
+                pair_from(1, &mut rows);
+            }
+        }
+    }
+    rows
+}
+
+/// Builds the reverse map from page index to (row index, is-right-of-spread).
+fn page_locations(specs: &[RowSpec], page_count: usize) -> Vec<(usize, bool)> {
+    let mut locations = vec![(0usize, false); page_count];
+    for (row, spec) in specs.iter().enumerate() {
+        locations[spec.left] = (row, false);
+        if let Some(right) = spec.right {
+            locations[right] = (row, true);
+        }
+    }
+    locations
+}
+
+/// The largest row's width and height in points, used as the fit reference so no
+/// row overflows the viewport.
+fn reference_dims(specs: &[RowSpec], pages_pt: &[(f32, f32)]) -> (f32, f32) {
+    let mut width = 0.0f32;
+    let mut height = 0.0f32;
+    for spec in specs {
+        let (left_w, left_h) = pages_pt[spec.left];
+        let (right_w, right_h) = spec.right.map_or((0.0, 0.0), |r| pages_pt[r]);
+        width = width.max(left_w + right_w);
+        height = height.max(left_h.max(right_h));
+    }
+    (width, height)
+}
+
 struct Inner {
-    /// Per-page size in PDF points (width, height).
     pages_pt: Vec<(f32, f32)>,
-    /// Current zoom as a multiplier on `BASE_DENSITY`.
     zoom: f32,
-    /// Window device-pixel ratio; render at this extra factor for crisp HiDPI.
     scale_factor: f32,
-    /// Latest known page-area size in logical pixels.
     view: Option<(f32, f32)>,
     fit: FitMode,
-    generation: i32,
-    /// Indices of slots currently holding an image, in the order rendered.
     retained: VecDeque<usize>,
+    spread: Spread,
+    continuous: bool,
+    current_row: usize,
+    specs: Vec<RowSpec>,
+    page_loc: Vec<(usize, bool)>,
+    ref_w_pt: f32,
+    ref_h_pt: f32,
 }
 
 pub struct Viewer {
     inner: RefCell<Inner>,
-    model: Rc<VecModel<PageSlot>>,
+    model: Rc<VecModel<PageRow>>,
     window: Weak<MainWindow>,
     sender: Sender<RenderRequest>,
 }
 
 impl Viewer {
-    /// Builds the viewer, populates the page model with correctly-sized (but not
-    /// yet rendered) slots in a single update, and installs it on the window.
     pub fn new(
         window: &MainWindow,
         pages_pt: Vec<(f32, f32)>,
         scale_factor: f32,
         sender: Sender<RenderRequest>,
     ) -> Rc<Self> {
-        let slots: Vec<PageSlot> = pages_pt
-            .iter()
-            .enumerate()
-            .map(|(index, &(width_pt, height_pt))| PageSlot {
-                page: index as i32,
-                width_pt,
-                height_pt,
-                image: Image::default(),
-                rendered: false,
-            })
-            .collect();
-        let model = Rc::new(VecModel::from(slots));
-        window.set_pages(ModelRc::from(model.clone()));
+        let model = Rc::new(VecModel::<PageRow>::default());
+        window.set_rows(ModelRc::from(model.clone()));
 
         let viewer = Rc::new(Self {
             inner: RefCell::new(Inner {
@@ -91,59 +148,80 @@ impl Viewer {
                 zoom: 1.0,
                 scale_factor,
                 view: None,
-                // Fit width by default, applied once the viewport size is known.
                 fit: FitMode::Width,
-                generation: 0,
                 retained: VecDeque::new(),
+                spread: Spread::None,
+                continuous: true,
+                current_row: 0,
+                specs: Vec::new(),
+                page_loc: Vec::new(),
+                ref_w_pt: 0.0,
+                ref_h_pt: 0.0,
             }),
             model,
             window: window.as_weak(),
             sender,
         });
 
+        viewer.build_layout();
         viewer.apply_density();
         viewer.update_status();
         viewer
     }
 
-    /// Sends a render request for `page` at the current physical scale.
-    pub fn request_render(&self, page: i32) {
+    /// Requests renders for every page in a row.
+    pub fn request_render_row(&self, row: i32) {
         let inner = self.inner.borrow();
-        if page < 0 || page as usize >= inner.pages_pt.len() {
-            return;
-        }
-        let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
-        let _ = self.sender.send(RenderRequest { page, scale });
-    }
-
-    /// Installs a freshly rendered page image, evicting the furthest-back image
-    /// if we are over the retention budget.
-    pub fn on_page_rendered(&self, page: i32, image: Image) {
-        let mut inner = self.inner.borrow_mut();
-        let index = page as usize;
-        let Some(&(width_pt, height_pt)) = inner.pages_pt.get(index) else {
+        let Some(spec) = inner.specs.get(row.max(0) as usize) else {
             return;
         };
-
-        self.model.set_row_data(
-            index,
-            PageSlot { page, width_pt, height_pt, image, rendered: true },
-        );
-
-        inner.retained.push_back(index);
-        while inner.retained.len() > MAX_RETAINED {
-            if let Some(evicted) = inner.retained.pop_front() {
-                // Skip if the page was re-rendered more recently and is still live.
-                if evicted != index && !inner.retained.contains(&evicted) {
-                    self.clear_slot(&inner, evicted);
-                }
-            }
+        let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
+        self.send(spec.left, scale);
+        if let Some(right) = spec.right {
+            self.send(right, scale);
         }
     }
 
-    /// Updates the remembered viewport size and, if a fit mode is active,
-    /// recomputes zoom to match. Also refreshes the HiDPI scale factor, which is
-    /// only reliable once the window has actually been shown.
+    /// Installs a freshly rendered page image into its row, evicting the
+    /// furthest-back images if we are over the retention budget.
+    ///
+    /// Borrows of `inner` are kept to short scopes: the model updates and the
+    /// self-calls below (which borrow `inner` themselves) must not run while a
+    /// borrow is held, or a re-entrant call panics.
+    pub fn on_page_rendered(&self, page: i32, image: Image) {
+        let index = page as usize;
+        let (row_index, is_right, width_pt, height_pt, is_current_paged, evicted) = {
+            let mut inner = self.inner.borrow_mut();
+            let Some(&(row_index, is_right)) = inner.page_loc.get(index) else {
+                return;
+            };
+            let (width_pt, height_pt) = inner.pages_pt[index];
+            let is_current_paged = !inner.continuous && row_index == inner.current_row;
+
+            inner.retained.push_back(index);
+            let mut evicted = Vec::new();
+            while inner.retained.len() > MAX_RETAINED {
+                if let Some(candidate) = inner.retained.pop_front() {
+                    if candidate != index && !inner.retained.contains(&candidate) {
+                        evicted.push(candidate);
+                    }
+                }
+            }
+            (row_index, is_right, width_pt, height_pt, is_current_paged, evicted)
+        };
+
+        let entry = PageEntry { page, width_pt, height_pt, image };
+        self.set_row_entry(row_index, is_right, entry);
+        if is_current_paged {
+            self.refresh_current_row();
+        }
+        for page in evicted {
+            self.clear_page_image(page);
+        }
+    }
+
+    /// Updates the remembered viewport size and refreshes the HiDPI scale factor,
+    /// re-fitting or re-rendering as needed.
     pub fn set_viewport(&self, width: f32, height: f32) {
         let scale_factor = self
             .window
@@ -160,12 +238,9 @@ impl Viewer {
         };
 
         if fit_active {
-            // apply_fit re-renders at the (possibly new) scale factor for us.
             self.apply_fit();
         } else if density_changed {
-            // Free zoom, but the display density changed: re-render crisply
-            // (page sizes in logical pixels are unaffected).
-            self.bump_generation();
+            self.rerender_loaded();
         }
     }
 
@@ -193,7 +268,51 @@ impl Viewer {
         self.apply_fit();
     }
 
-    /// Sets an explicit zoom, leaving any fit mode.
+    /// Toggles between continuous scroll and one-row-per-screen.
+    pub fn toggle_continuous(&self) {
+        let continuous = {
+            let mut inner = self.inner.borrow_mut();
+            inner.continuous = !inner.continuous;
+            inner.continuous
+        };
+        if let Some(window) = self.window.upgrade() {
+            window.set_continuous(continuous);
+        }
+        if !continuous {
+            self.refresh_current_row();
+            self.request_current_row();
+        }
+        self.reapply_scale();
+        self.update_status();
+    }
+
+    /// Sets the spread mode (0 = none, 1 = odd, 2 = even) and rebuilds rows.
+    pub fn set_spread(&self, mode: i32) {
+        let spread = match mode {
+            1 => Spread::Odd,
+            2 => Spread::Even,
+            _ => Spread::None,
+        };
+        self.inner.borrow_mut().spread = spread;
+        self.build_layout();
+        self.reapply_scale();
+        self.update_status();
+    }
+
+    pub fn next_row(&self) {
+        if !self.inner.borrow().continuous {
+            let current = self.inner.borrow().current_row as i32;
+            self.go_to_row(current + 1);
+        }
+    }
+
+    pub fn prev_row(&self) {
+        if !self.inner.borrow().continuous {
+            let current = self.inner.borrow().current_row as i32;
+            self.go_to_row(current - 1);
+        }
+    }
+
     fn set_zoom(&self, zoom: f32) {
         {
             let mut inner = self.inner.borrow_mut();
@@ -201,28 +320,25 @@ impl Viewer {
             inner.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         }
         self.apply_density();
-        self.bump_generation();
+        self.rerender_loaded();
         self.update_status();
     }
 
-    /// Recomputes zoom from the active fit mode and the reference (first) page.
     fn apply_fit(&self) {
         let recomputed = {
             let inner = self.inner.borrow();
-            let (Some((view_w, view_h)), Some(&(page_w, page_h))) =
-                (inner.view, inner.pages_pt.first())
-            else {
+            let Some((view_w, view_h)) = inner.view else {
                 return;
             };
-            if page_w <= 0.0 || page_h <= 0.0 {
+            if inner.ref_w_pt <= 0.0 || inner.ref_h_pt <= 0.0 {
                 return;
             }
-            // Convert a target logical size into a zoom multiplier on the base
-            // density: logical = points * density * zoom.
-            let width_zoom = (view_w - FIT_GUTTER).max(1.0) / (page_w * BASE_DENSITY);
+            let width_zoom = (view_w - FIT_GUTTER).max(1.0) / (inner.ref_w_pt * BASE_DENSITY);
             match inner.fit {
                 FitMode::Width => width_zoom,
-                FitMode::Page => width_zoom.min(view_h / (page_h * BASE_DENSITY)),
+                FitMode::Page => {
+                    width_zoom.min((view_h - FIT_GUTTER).max(1.0) / (inner.ref_h_pt * BASE_DENSITY))
+                }
                 FitMode::Free => return,
             }
             .clamp(MIN_ZOOM, MAX_ZOOM)
@@ -230,12 +346,148 @@ impl Viewer {
 
         self.inner.borrow_mut().zoom = recomputed;
         self.apply_density();
-        self.bump_generation();
+        self.rerender_loaded();
         self.update_status();
     }
 
-    /// Pushes the current zoom to the window's shared `density` property, resizing
-    /// every page at once without touching the model.
+    /// Re-applies the current zoom after a layout change: re-fit if a fit mode is
+    /// active, otherwise just push the density.
+    fn reapply_scale(&self) {
+        if self.inner.borrow().fit != FitMode::Free {
+            self.apply_fit();
+        } else {
+            self.apply_density();
+        }
+    }
+
+    /// Rebuilds rows for the current spread mode and installs a fresh model.
+    fn build_layout(&self) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            let count = inner.pages_pt.len();
+            inner.specs = build_row_specs(count, inner.spread);
+            inner.page_loc = page_locations(&inner.specs, count);
+            let (ref_w, ref_h) = reference_dims(&inner.specs, &inner.pages_pt);
+            inner.ref_w_pt = ref_w;
+            inner.ref_h_pt = ref_h;
+            inner.retained.clear();
+            let last_row = inner.specs.len().saturating_sub(1);
+            inner.current_row = inner.current_row.min(last_row);
+        }
+
+        let rows = self.build_model_rows();
+        self.model.set_vec(rows);
+        if let Some(window) = self.window.upgrade() {
+            window.set_row_height_pt(self.inner.borrow().ref_h_pt);
+        }
+        self.refresh_current_row();
+        self.request_current_row_if_paged();
+    }
+
+    fn build_model_rows(&self) -> Vec<PageRow> {
+        let inner = self.inner.borrow();
+        inner
+            .specs
+            .iter()
+            .map(|spec| {
+                let left = Self::empty_page(&inner, spec.left);
+                match spec.right {
+                    Some(right) => PageRow {
+                        left,
+                        right: Self::empty_page(&inner, right),
+                        has_right: true,
+                    },
+                    None => PageRow { left, right: Self::placeholder(), has_right: false },
+                }
+            })
+            .collect()
+    }
+
+    /// An unrendered slot carrying only the page's fixed size.
+    fn empty_page(inner: &Inner, page: usize) -> PageEntry {
+        let (width_pt, height_pt) = inner.pages_pt[page];
+        PageEntry { page: page as i32, width_pt, height_pt, image: Image::default() }
+    }
+
+    /// A dummy entry for the unused right half of a single-page row.
+    fn placeholder() -> PageEntry {
+        PageEntry { page: -1, width_pt: 0.0, height_pt: 0.0, image: Image::default() }
+    }
+
+    /// Writes one page's entry into its row's left or right slot.
+    fn set_row_entry(&self, row_index: usize, is_right: bool, entry: PageEntry) {
+        let Some(mut row) = self.model.row_data(row_index) else {
+            return;
+        };
+        if is_right {
+            row.right = entry;
+        } else {
+            row.left = entry;
+        }
+        self.model.set_row_data(row_index, row);
+    }
+
+    /// Drops a page's image, keeping its geometry so layout is unchanged and it
+    /// re-renders when scrolled back into view. Uses only short borrows so it is
+    /// safe to call from anywhere.
+    fn clear_page_image(&self, page: usize) {
+        let (row_index, is_right, entry, is_current_paged) = {
+            let inner = self.inner.borrow();
+            let Some(&(row_index, is_right)) = inner.page_loc.get(page) else {
+                return;
+            };
+            let entry = Self::empty_page(&inner, page);
+            let is_current_paged = !inner.continuous && row_index == inner.current_row;
+            (row_index, is_right, entry, is_current_paged)
+        };
+        self.set_row_entry(row_index, is_right, entry);
+        if is_current_paged {
+            self.refresh_current_row();
+        }
+    }
+
+    fn go_to_row(&self, target: i32) {
+        let changed = {
+            let mut inner = self.inner.borrow_mut();
+            let count = inner.specs.len() as i32;
+            if count == 0 {
+                return;
+            }
+            let clamped = target.clamp(0, count - 1) as usize;
+            let changed = clamped != inner.current_row;
+            inner.current_row = clamped;
+            changed
+        };
+        if changed {
+            self.refresh_current_row();
+            self.request_current_row();
+            self.update_status();
+        }
+    }
+
+    /// Pushes the current row's data to the paged view.
+    fn refresh_current_row(&self) {
+        let index = self.inner.borrow().current_row;
+        if let (Some(window), Some(row)) = (self.window.upgrade(), self.model.row_data(index)) {
+            window.set_current_row_content(row);
+        }
+    }
+
+    fn request_current_row(&self) {
+        let row = self.inner.borrow().current_row as i32;
+        self.request_render_row(row);
+    }
+
+    fn request_current_row_if_paged(&self) {
+        if !self.inner.borrow().continuous {
+            self.request_current_row();
+        }
+    }
+
+    fn send(&self, page: usize, scale: f32) {
+        let _ = self.sender.send(RenderRequest { page: page as i32, scale });
+    }
+
     fn apply_density(&self) {
         let density = BASE_DENSITY * self.inner.borrow().zoom;
         if let Some(window) = self.window.upgrade() {
@@ -243,39 +495,113 @@ impl Viewer {
         }
     }
 
-    /// Drops a slot's image to reclaim memory, keeping its geometry so layout is
-    /// unchanged and the page re-renders if scrolled back into view.
-    fn clear_slot(&self, inner: &Inner, index: usize) {
-        let (width_pt, height_pt) = inner.pages_pt[index];
-        self.model.set_row_data(
-            index,
-            PageSlot {
-                page: index as i32,
-                width_pt,
-                height_pt,
-                image: Image::default(),
-                rendered: false,
-            },
-        );
-    }
-
-    fn bump_generation(&self) {
-        let generation = {
-            let mut inner = self.inner.borrow_mut();
-            inner.generation += 1;
-            inner.generation
+    /// Re-requests every page that currently holds an image, so displayed pages
+    /// re-render crisply at the new scale. Driven from Rust (rather than a
+    /// per-delegate change handler) to keep the delegates side-effect-free.
+    fn rerender_loaded(&self) {
+        let (pages, scale) = {
+            let inner = self.inner.borrow();
+            let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
+            (inner.retained.iter().copied().collect::<Vec<_>>(), scale)
         };
-        if let Some(window) = self.window.upgrade() {
-            window.set_render_generation(generation);
+        for page in pages {
+            self.send(page, scale);
         }
+        self.request_current_row_if_paged();
     }
 
     fn update_status(&self) {
         let inner = self.inner.borrow();
         let percent = (inner.zoom * 100.0).round() as i32;
-        let status = format!("{} pages · {percent}%", inner.pages_pt.len());
+        let spread = match inner.spread {
+            Spread::None => "single",
+            Spread::Odd => "odd spread",
+            Spread::Even => "even spread",
+        };
+        let status = if inner.continuous {
+            format!("{} pages · {percent}% · continuous · {spread}", inner.pages_pt.len())
+        } else {
+            format!(
+                "{} pages · {percent}% · paged {}/{} · {spread}",
+                inner.pages_pt.len(),
+                inner.current_row + 1,
+                inner.specs.len().max(1),
+            )
+        };
         if let Some(window) = self.window.upgrade() {
             window.set_status(status.into());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Spread, Viewer, build_row_specs, page_locations};
+    use crate::MainWindow;
+    use slint::ComponentHandle;
+
+    fn as_pairs(specs: &[super::RowSpec]) -> Vec<(usize, Option<usize>)> {
+        specs.iter().map(|s| (s.left, s.right)).collect()
+    }
+
+    /// Regression: a page arriving in paged mode used to re-enter a held borrow
+    /// of `inner` via `refresh_current_row` and panic. Drive that exact path.
+    /// Skips silently if no windowing backend is available in the test runner.
+    #[test]
+    fn paged_render_does_not_reenter_borrow() {
+        let Ok(window) = MainWindow::new() else {
+            return;
+        };
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let pages = vec![(600.0, 800.0); 5];
+        let viewer = Viewer::new(&window, pages, 1.0, sender);
+
+        // Switch to paged mode, then deliver renders — including enough to force
+        // the eviction path, which also calls back into the viewer.
+        viewer.toggle_continuous();
+        for page in 0..5 {
+            viewer.on_page_rendered(page, slint::Image::default());
+        }
+        viewer.next_row();
+        viewer.on_page_rendered(2, slint::Image::default());
+    }
+
+    #[test]
+    fn no_spreads_is_one_page_per_row() {
+        let specs = build_row_specs(3, Spread::None);
+        assert_eq!(as_pairs(&specs), vec![(0, None), (1, None), (2, None)]);
+    }
+
+    #[test]
+    fn odd_spreads_pair_from_the_first_page() {
+        let specs = build_row_specs(5, Spread::Odd);
+        // [0,1] [2,3] [4]
+        assert_eq!(as_pairs(&specs), vec![(0, Some(1)), (2, Some(3)), (4, None)]);
+    }
+
+    #[test]
+    fn even_spreads_keep_the_first_page_alone() {
+        let specs = build_row_specs(5, Spread::Even);
+        // [0] [1,2] [3,4]
+        assert_eq!(as_pairs(&specs), vec![(0, None), (1, Some(2)), (3, Some(4))]);
+    }
+
+    #[test]
+    fn locations_map_pages_back_to_rows() {
+        let specs = build_row_specs(5, Spread::Even);
+        let loc = page_locations(&specs, 5);
+        // page 0 -> row 0 left; page 2 -> row 1 right; page 3 -> row 2 left.
+        assert_eq!(loc[0], (0, false));
+        assert_eq!(loc[1], (1, false));
+        assert_eq!(loc[2], (1, true));
+        assert_eq!(loc[3], (2, false));
+        assert_eq!(loc[4], (2, true));
+    }
+
+    #[test]
+    fn handles_empty_and_single_page_documents() {
+        assert!(build_row_specs(0, Spread::Even).is_empty());
+        assert_eq!(as_pairs(&build_row_specs(1, Spread::Odd)), vec![(0, None)]);
+        assert_eq!(as_pairs(&build_row_specs(1, Spread::Even)), vec![(0, None)]);
     }
 }
