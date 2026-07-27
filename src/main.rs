@@ -93,6 +93,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         let viewer = viewer.clone();
         move |offset| viewer.scrolled(offset)
     });
+    window.on_go_to_page({
+        let viewer = viewer.clone();
+        move |text| viewer.go_to_page(text.as_str())
+    });
     window.on_set_spread({
         let viewer = viewer.clone();
         move |mode| viewer.set_spread(mode)

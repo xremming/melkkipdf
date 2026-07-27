@@ -345,6 +345,38 @@ impl Viewer {
         self.update_current_page();
     }
 
+    /// Jumps to a 1-based page typed into the toolbar field. Invalid input is
+    /// ignored. In continuous mode this scrolls the ListView (rows are uniform
+    /// height, so the target offset is exact); in paged mode it swaps the row.
+    pub fn go_to_page(&self, text: &str) {
+        let Ok(requested) = text.trim().parse::<i32>() else {
+            return;
+        };
+
+        let (row, continuous, scroll_target) = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.page_loc.is_empty() {
+                return;
+            }
+            let page = (requested - 1).clamp(0, inner.page_loc.len() as i32 - 1) as usize;
+            let row = inner.page_loc[page].0;
+            inner.current_row = row;
+            let row_height = inner.ref_h_pt * BASE_DENSITY * inner.zoom + ROW_GAP;
+            (row, inner.continuous, -(row as f32) * row_height)
+        };
+
+        if continuous {
+            if let Some(window) = self.window.upgrade() {
+                window.set_scroll_y(scroll_target);
+            }
+            self.request_render_row(row as i32);
+        } else {
+            self.refresh_current_row();
+            self.request_current_row();
+        }
+        self.update_current_page();
+    }
+
     pub fn next_row(&self) {
         if !self.inner.borrow().continuous {
             let current = self.inner.borrow().current_row as i32;
@@ -626,6 +658,29 @@ mod tests {
         }
         viewer.next_row();
         viewer.on_page_rendered(2, slint::Image::default());
+    }
+
+    /// go_to_page parses, clamps, and reports the resulting page.
+    #[test]
+    fn go_to_page_parses_and_clamps() {
+        let Ok(window) = MainWindow::new() else {
+            return;
+        };
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let viewer = Viewer::new(&window, vec![(600.0, 800.0); 10], 1.0, sender);
+        // Paged mode avoids touching the scroll offset property.
+        viewer.set_continuous(false);
+
+        viewer.go_to_page("4");
+        assert_eq!(window.get_current_page(), 4);
+
+        // Out of range clamps to the last page.
+        viewer.go_to_page("999");
+        assert_eq!(window.get_current_page(), 10);
+
+        // Non-numeric input is ignored (page unchanged).
+        viewer.go_to_page("abc");
+        assert_eq!(window.get_current_page(), 10);
     }
 
     #[test]

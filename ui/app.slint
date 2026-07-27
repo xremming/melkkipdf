@@ -158,6 +158,37 @@ component SegmentedControl inherits Rectangle {
     }
 }
 
+// An editable page-number field. Shows the current page and, on Enter, emits the
+// typed text for the viewer to jump to. Styled to match the dark toolbar.
+component PageField inherits Rectangle {
+    in property <int> page;
+    callback go-to(string);
+
+    width: 48px;
+    height: 26px;
+    border-width: 1px;
+    border-color: #5a5a5a;
+    border-radius: 4px;
+    background: #2b2b2b;
+
+    input := TextInput {
+        width: 100%;
+        height: 100%;
+        // One-way binding: user edits persist until `page` changes externally
+        // (scroll/nav), which then refreshes the field.
+        text: "\{root.page}";
+        color: #eeeeee;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        single-line: true;
+        input-type: number;
+        accepted => {
+            root.go-to(self.text);
+        }
+    }
+}
+
 // Top-level window: a toolbar above the document, shown either as a continuous
 // scrollable column of rows or one row at a time.
 export component MainWindow inherits Window {
@@ -171,6 +202,8 @@ export component MainWindow inherits Window {
     // 1-based page currently at the top of the view, and total page count.
     in property <int> current-page;
     in property <int> page-count;
+    // Two-way bound to the ListView's scroll offset so Rust can jump to a page.
+    in-out property <length> scroll-y;
     // Shown in the document area only when there are no pages (errors/usage).
     in property <string> status;
 
@@ -186,6 +219,8 @@ export component MainWindow inherits Window {
     callback fit-page();
     callback set-continuous(bool);
     callback toggle-continuous();
+    // Jump to a page from the toolbar field (raw text, parsed in Rust).
+    callback go-to-page(string);
     // Spread mode: 0 = single, 1 = odd, 2 = even.
     callback set-spread(int);
     callback next-row();
@@ -292,9 +327,21 @@ export component MainWindow inherits Window {
 
                     VerticalLayout {
                         alignment: center;
-                        Text {
-                            text: "Page \{root.current-page} / \{root.page-count}";
-                            color: #dddddd;
+                        HorizontalLayout {
+                            spacing: 5px;
+                            PageField {
+                                page: root.current-page;
+                                go-to(value) => {
+                                    root.go-to-page(value);
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: "/ \{root.page-count}";
+                                    color: #dddddd;
+                                }
+                            }
                         }
                     }
                 }
@@ -311,7 +358,9 @@ export component MainWindow inherits Window {
                 }
 
                 if root.page-count > 0 && root.continuous: ListView {
-                    // Track the scroll offset so Rust can report the current page.
+                    // Two-way bound so Rust can both read the scroll offset (for the
+                    // page counter) and set it (to jump to a page).
+                    viewport-y <=> root.scroll-y;
                     changed viewport-y => {
                         root.scrolled(-self.viewport-y / 1px);
                     }
