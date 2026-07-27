@@ -2,12 +2,11 @@
 //!
 //! MuPDF handles are not `Send`, so a single worker thread owns the `Document`
 //! for its whole lifetime and does all rendering. The UI thread talks to it over
-//! a channel and only ever receives finished, reference-counted RGBA buffers.
+//! a channel and only ever receives finished, reference-counted RGB buffers,
+//! which it hands to the viewer through the `page-rendered` callback.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
@@ -45,13 +44,10 @@ fn cache_key(request: &RenderRequest) -> CacheKey {
 
 /// Spawns the render worker and returns a channel for sending it requests.
 ///
-/// `page_count` is populated once the document is open so the UI can clamp
-/// navigation without holding a (non-`Send`) MuPDF handle itself.
-pub fn spawn(
-    path: String,
-    window: Weak<MainWindow>,
-    page_count: Arc<AtomicI32>,
-) -> Sender<RenderRequest> {
+/// The worker opens its own `Document` (the UI thread reads page sizes from a
+/// separate handle), renders on demand, and delivers each finished page back to
+/// the viewer via the window's `page-rendered` callback.
+pub fn spawn(path: String, window: Weak<MainWindow>) -> Sender<RenderRequest> {
     let (sender, receiver) = mpsc::channel::<RenderRequest>();
 
     thread::spawn(move || {
@@ -63,46 +59,52 @@ pub fn spawn(
             }
         };
 
-        let count = document.page_count().unwrap_or(0);
-        page_count.store(count, Ordering::Relaxed);
-
         let mut cache: LruCache<CacheKey, PageBuffer> = LruCache::new(CACHE_CAPACITY);
 
-        while let Ok(mut request) = receiver.recv() {
-            // Coalesce: if several requests piled up while we were rendering (fast
-            // paging), skip the intermediate ones and honor only the latest.
-            while let Ok(newer) = receiver.try_recv() {
-                request = newer;
+        while let Ok(first) = receiver.recv() {
+            // Drain everything already queued and render newest-first: the most
+            // recently requested pages are the ones most likely still on screen,
+            // so a scrollbar jump doesn't wait behind stale requests. Dedupe so a
+            // page requested twice in a burst is only rendered once.
+            let mut batch = vec![first];
+            while let Ok(more) = receiver.try_recv() {
+                batch.push(more);
             }
 
-            let key = cache_key(&request);
-            let buffer = match cache.get(&key) {
-                Some(buffer) => buffer,
-                None => match render_page(&document, request.page, request.scale) {
-                    Ok(buffer) => {
-                        cache.put(key, buffer.clone());
-                        buffer
-                    }
-                    Err(err) => {
-                        let page = request.page + 1;
-                        push_status(&window, format!("Failed to render page {page}: {err}"));
-                        continue;
-                    }
-                },
-            };
+            let mut seen: HashSet<CacheKey> = HashSet::new();
+            for request in batch.into_iter().rev() {
+                let key = cache_key(&request);
+                if !seen.insert(key) {
+                    continue;
+                }
 
-            let status = format!("Page {} of {}", request.page + 1, count);
-            let _ = window.upgrade_in_event_loop(move |window| {
-                window.set_page_image(Image::from_rgb8(buffer));
-                window.set_status(status.into());
-            });
+                let buffer = match cache.get(&key) {
+                    Some(buffer) => buffer,
+                    None => match render_page(&document, request.page, request.scale) {
+                        Ok(buffer) => {
+                            cache.put(key, buffer.clone());
+                            buffer
+                        }
+                        Err(err) => {
+                            let page = request.page + 1;
+                            push_status(&window, format!("Failed to render page {page}: {err}"));
+                            continue;
+                        }
+                    },
+                };
+
+                let page = request.page;
+                let _ = window.upgrade_in_event_loop(move |window| {
+                    window.invoke_page_rendered(page, Image::from_rgb8(buffer));
+                });
+            }
         }
     });
 
     sender
 }
 
-/// Renders one page to a tightly-packed RGBA buffer.
+/// Renders one page to a tightly-packed RGB buffer.
 ///
 /// MuPDF rows can be padded, so we copy row by row using the pixmap stride rather
 /// than assuming the samples are contiguous.

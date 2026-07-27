@@ -1,27 +1,70 @@
-import { ScrollView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 
-// Top-level window for the viewer. It shows one rendered page inside a scrollable
-// area with a status line, and forwards page navigation keys to Rust.
+// One page in the scrollable document. The size is stored once in PDF points and
+// never changes; zoom is applied through the shared `density` property below.
+// `image` is empty until the page has been rendered.
+export struct PageSlot {
+    page: int,
+    width-pt: float,
+    height-pt: float,
+    image: image,
+    rendered: bool,
+}
+
+// Top-level window: a status line above a virtualized, scrollable column of
+// pages. Rendering and layout math live in Rust; this file is presentation and
+// input only.
 export component MainWindow inherits Window {
-    // The rendered page, handed over from the render worker as an RGBA image.
-    in property <image> page-image;
-    // Human-readable status: page counter, or an error/usage message.
+    // The document's pages. Only visible delegates are instantiated.
+    in property <[PageSlot]> pages;
+    // Logical pixels per PDF point at the current zoom. Changing this one value
+    // resizes every page without rewriting the model.
+    in property <float> density: 1.333;
+    // Status line: page count and zoom, or an error/usage message.
     in property <string> status;
-    // Emitted on page navigation; the argument is a signed page delta.
-    callback navigate(int);
+    // Bumped by Rust whenever zoom or display density changes, so visible pages
+    // re-render crisply at the new scale.
+    in property <int> render-generation;
+
+    // A visible page wants its pixels; the argument is the page index.
+    callback request-render(int);
+    // Invoked from Rust when a page has finished rendering (page index, image).
+    callback page-rendered(int, image);
+    // The rendered page area was resized (width, height in logical pixels).
+    callback viewport-resized(length, length);
+    callback zoom-in();
+    callback zoom-out();
+    callback zoom-reset();
+    callback fit-width();
+    callback fit-page();
 
     title: "melkkipdf";
     preferred-width: 800px;
     preferred-height: 1000px;
     forward-focus: key-handler;
 
+    // Report the page-area geometry so Rust can compute fit-to-width/page zooms.
+    property <length> view-w: list.width;
+    property <length> view-h: list.height;
+    changed view-w => { root.viewport-resized(root.view-w, root.view-h); }
+    changed view-h => { root.viewport-resized(root.view-w, root.view-h); }
+
     key-handler := FocusScope {
         key-pressed(event) => {
-            if (event.text == Key.RightArrow || event.text == Key.PageDown) {
-                root.navigate(1);
+            if (event.modifiers.control && (event.text == "+" || event.text == "=")) {
+                root.zoom-in();
                 accept
-            } else if (event.text == Key.LeftArrow || event.text == Key.PageUp) {
-                root.navigate(-1);
+            } else if (event.modifiers.control && event.text == "-") {
+                root.zoom-out();
+                accept
+            } else if (event.modifiers.control && event.text == "0") {
+                root.zoom-reset();
+                accept
+            } else if (event.text == "f") {
+                root.fit-width();
+                accept
+            } else if (event.text == "p") {
+                root.fit-page();
                 accept
             } else {
                 reject
@@ -37,13 +80,38 @@ export component MainWindow inherits Window {
                 }
             }
 
-            ScrollView {
-                // Render the page at its native pixel size so scrolling exposes the
-                // full page rather than shrinking it to fit.
-                Image {
-                    source: root.page-image;
-                    width: root.page-image.width * 1px;
-                    height: root.page-image.height * 1px;
+            list := ListView {
+                for slot in root.pages: Rectangle {
+                    // Reserve the page height plus a gap, with a neutral backdrop
+                    // between pages. Size derives from the shared density.
+                    height: slot.height-pt * root.density * 1px + 16px;
+                    background: #2b2b2b;
+
+                    Rectangle {
+                        // Center the page horizontally; white paper shows through
+                        // until the rendered image arrives.
+                        x: (parent.width - self.width) / 2;
+                        y: 8px;
+                        width: slot.width-pt * root.density * 1px;
+                        height: slot.height-pt * root.density * 1px;
+                        background: white;
+
+                        Image {
+                            source: slot.image;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+
+                    // Request pixels when this page scrolls into view, and again
+                    // when the render generation changes (zoom/density).
+                    init => {
+                        root.request-render(slot.page);
+                    }
+                    property <int> gen: root.render-generation;
+                    changed gen => {
+                        root.request-render(slot.page);
+                    }
                 }
             }
         }

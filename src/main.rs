@@ -1,17 +1,26 @@
 mod render;
+mod viewer;
 
-use std::cell::Cell;
 use std::error::Error;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
 
-use render::RenderRequest;
+use mupdf::Document;
+use slint::ComponentHandle;
+use viewer::Viewer;
 
 slint::include_modules!();
 
-/// Fixed render scale until zoom lands in the next step.
-const SCALE: f32 = 1.5;
+/// Reads every page's size in points, used to lay out the scrollable document
+/// before any page is rendered. This is fast even for large documents.
+fn read_page_sizes(path: &str) -> Result<Vec<(f32, f32)>, mupdf::Error> {
+    let document = Document::open(path)?;
+    let count = document.page_count()?;
+    let mut sizes = Vec::with_capacity(count.max(0) as usize);
+    for index in 0..count {
+        let bounds = document.load_page(index)?.bounds()?;
+        sizes.push((bounds.width(), bounds.height()));
+    }
+    Ok(sizes)
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let window = MainWindow::new()?;
@@ -22,30 +31,55 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
 
-    // Shared with the render worker: it fills this in once the document is open,
-    // letting the UI clamp navigation without touching a MuPDF handle.
-    let page_count = Arc::new(AtomicI32::new(0));
-    // The page currently on screen, owned by the UI thread.
-    let current_page = Rc::new(Cell::new(0i32));
-
-    let sender = render::spawn(path, window.as_weak(), page_count.clone());
-    let _ = sender.send(RenderRequest { page: 0, scale: SCALE });
-
-    window.on_navigate({
-        let sender = sender.clone();
-        let current_page = current_page.clone();
-        let page_count = page_count.clone();
-        move |delta| {
-            let count = page_count.load(Ordering::Relaxed);
-            if count == 0 {
-                return;
-            }
-            let target = (current_page.get() + delta).clamp(0, count - 1);
-            if target != current_page.get() {
-                current_page.set(target);
-                let _ = sender.send(RenderRequest { page: target, scale: SCALE });
-            }
+    let pages_pt = match read_page_sizes(&path) {
+        Ok(sizes) if !sizes.is_empty() => sizes,
+        Ok(_) => {
+            window.set_status("Document has no pages.".into());
+            window.run()?;
+            return Ok(());
         }
+        Err(err) => {
+            window.set_status(format!("Failed to open {path}: {err}").into());
+            window.run()?;
+            return Ok(());
+        }
+    };
+
+    let scale_factor = window.window().scale_factor();
+    let sender = render::spawn(path, window.as_weak());
+    let viewer = Viewer::new(&window, pages_pt, scale_factor, sender);
+
+    window.on_request_render({
+        let viewer = viewer.clone();
+        move |page| viewer.request_render(page)
+    });
+    window.on_page_rendered({
+        let viewer = viewer.clone();
+        move |page, image| viewer.on_page_rendered(page, image)
+    });
+    window.on_viewport_resized({
+        let viewer = viewer.clone();
+        move |width, height| viewer.set_viewport(width, height)
+    });
+    window.on_zoom_in({
+        let viewer = viewer.clone();
+        move || viewer.zoom_in()
+    });
+    window.on_zoom_out({
+        let viewer = viewer.clone();
+        move || viewer.zoom_out()
+    });
+    window.on_zoom_reset({
+        let viewer = viewer.clone();
+        move || viewer.zoom_reset()
+    });
+    window.on_fit_width({
+        let viewer = viewer.clone();
+        move || viewer.fit_width()
+    });
+    window.on_fit_page({
+        let viewer = viewer.clone();
+        move || viewer.fit_page()
     });
 
     window.run()?;
