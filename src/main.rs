@@ -85,6 +85,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let viewer = viewer.clone();
         move || viewer.toggle_continuous()
     });
+    window.on_set_continuous({
+        let viewer = viewer.clone();
+        move |continuous| viewer.set_continuous(continuous)
+    });
+    window.on_scrolled({
+        let viewer = viewer.clone();
+        move |offset| viewer.scrolled(offset)
+    });
     window.on_set_spread({
         let viewer = viewer.clone();
         move |mode| viewer.set_spread(mode)

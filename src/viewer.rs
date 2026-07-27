@@ -50,8 +50,20 @@ const MAX_ZOOM: f32 = 8.0;
 const BASE_DENSITY: f32 = 96.0 / 72.0;
 /// Room left for the scrollbar and a small gutter when fitting.
 const FIT_GUTTER: f32 = 24.0;
+/// Vertical gap added to each row's height. Must match the `+ 16px` in the
+/// `PageRowView` delegate so scroll-offset math matches the on-screen layout.
+const ROW_GAP: f32 = 16.0;
 /// Maximum number of rendered page images retained at once.
 const MAX_RETAINED: usize = 24;
+
+/// The 0/1/2 index used by the toolbar's spread radios.
+fn spread_index(spread: Spread) -> i32 {
+    match spread {
+        Spread::None => 0,
+        Spread::Odd => 1,
+        Spread::Even => 2,
+    }
+}
 
 /// Groups `page_count` pages into rows according to the spread mode.
 fn build_row_specs(page_count: usize, spread: Spread) -> Vec<RowSpec> {
@@ -163,9 +175,14 @@ impl Viewer {
             sender,
         });
 
+        let page_count = viewer.inner.borrow().pages_pt.len() as i32;
+        window.set_page_count(page_count);
+        window.set_spread_mode(spread_index(Spread::None));
+
         viewer.build_layout();
         viewer.apply_density();
         viewer.update_status();
+        viewer.update_current_page();
         viewer
     }
 
@@ -268,13 +285,13 @@ impl Viewer {
         self.apply_fit();
     }
 
-    /// Toggles between continuous scroll and one-row-per-screen.
-    pub fn toggle_continuous(&self) {
-        let continuous = {
-            let mut inner = self.inner.borrow_mut();
-            inner.continuous = !inner.continuous;
-            inner.continuous
-        };
+    /// Selects continuous scroll or one-row-per-screen. Paged mode starts at the
+    /// row the continuous view was scrolled to, so switching keeps the position.
+    pub fn set_continuous(&self, continuous: bool) {
+        if self.inner.borrow().continuous == continuous {
+            return;
+        }
+        self.inner.borrow_mut().continuous = continuous;
         if let Some(window) = self.window.upgrade() {
             window.set_continuous(continuous);
         }
@@ -284,9 +301,15 @@ impl Viewer {
         }
         self.reapply_scale();
         self.update_status();
+        self.update_current_page();
     }
 
-    /// Sets the spread mode (0 = none, 1 = odd, 2 = even) and rebuilds rows.
+    pub fn toggle_continuous(&self) {
+        let continuous = self.inner.borrow().continuous;
+        self.set_continuous(!continuous);
+    }
+
+    /// Sets the spread mode (0 = single, 1 = odd, 2 = even) and rebuilds rows.
     pub fn set_spread(&self, mode: i32) {
         let spread = match mode {
             1 => Spread::Odd,
@@ -294,9 +317,32 @@ impl Viewer {
             _ => Spread::None,
         };
         self.inner.borrow_mut().spread = spread;
+        if let Some(window) = self.window.upgrade() {
+            window.set_spread_mode(spread_index(spread));
+        }
         self.build_layout();
         self.reapply_scale();
         self.update_status();
+        self.update_current_page();
+    }
+
+    /// Reports the continuous scroll offset (logical pixels from the top) so the
+    /// current page can be tracked. Rows are uniform height, so the top row is an
+    /// exact division.
+    pub fn scrolled(&self, offset: f32) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            if inner.specs.is_empty() {
+                return;
+            }
+            let row_height = inner.ref_h_pt * BASE_DENSITY * inner.zoom + ROW_GAP;
+            if row_height <= 0.0 {
+                return;
+            }
+            let row = (offset / row_height).round().max(0.0) as usize;
+            inner.current_row = row.min(inner.specs.len() - 1);
+        }
+        self.update_current_page();
     }
 
     pub fn next_row(&self) {
@@ -382,6 +428,7 @@ impl Viewer {
         }
         self.refresh_current_row();
         self.request_current_row_if_paged();
+        self.update_current_page();
     }
 
     fn build_model_rows(&self) -> Vec<PageRow> {
@@ -462,6 +509,7 @@ impl Viewer {
             self.refresh_current_row();
             self.request_current_row();
             self.update_status();
+            self.update_current_page();
         }
     }
 
@@ -530,6 +578,20 @@ impl Viewer {
         };
         if let Some(window) = self.window.upgrade() {
             window.set_status(status.into());
+        }
+    }
+
+    /// Publishes the 1-based page number at the top of the view for the toolbar.
+    fn update_current_page(&self) {
+        let page = {
+            let inner = self.inner.borrow();
+            inner
+                .specs
+                .get(inner.current_row)
+                .map_or(0, |spec| spec.left as i32 + 1)
+        };
+        if let Some(window) = self.window.upgrade() {
+            window.set_current_page(page);
         }
     }
 }

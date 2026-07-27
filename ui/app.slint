@@ -68,45 +68,134 @@ component PageRowView inherits Rectangle {
     }
 }
 
-// Top-level window: a status line above the document, shown either as a
-// continuous scrollable column of rows or one row at a time.
+// A thin vertical divider between toolbar groups.
+component ToolbarSeparator inherits Rectangle {
+    width: 1px;
+    background: #555555;
+}
+
+// One segment of a fused segmented control. The active segment is recessed
+// (darker) so it reads as pressed in.
+component Segment inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> divider;
+    callback clicked <=> touch.clicked;
+
+    min-width: 56px;
+    background: root.active ? #252525 : (touch.has-hover ? #505050 : #454545);
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.text;
+            color: root.active ? #ffffff : #b8b8b8;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // Divider between segments (drawn on the left edge of all but the first).
+    if root.divider: Rectangle {
+        x: 0;
+        width: 1px;
+        background: #5a5a5a;
+    }
+
+    touch := TouchArea { }
+}
+
+// A plain action button, styled to match the segmented control (same fill,
+// border, radius, and height) so the toolbar reads as one set of controls.
+component ToolButton inherits Rectangle {
+    in property <string> text;
+    callback clicked <=> touch.clicked;
+
+    height: 28px;
+    border-width: 1px;
+    border-color: #5a5a5a;
+    border-radius: 5px;
+    background: touch.pressed ? #252525 : (touch.has-hover ? #505050 : #454545);
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.text;
+            color: #dddddd;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea { }
+}
+
+// A fused, segmented toggle: the options render as one control with rounded ends
+// and shared borders. Emits `select` with the chosen index.
+component SegmentedControl inherits Rectangle {
+    in property <[string]> options;
+    in property <int> current;
+    callback select(int);
+
+    height: 28px;
+    border-width: 1px;
+    border-color: #5a5a5a;
+    border-radius: 5px;
+    // Clip so the square-cornered segments are rounded off at the ends.
+    clip: true;
+
+    HorizontalLayout {
+        for option[idx] in root.options: Segment {
+            text: option;
+            active: idx == root.current;
+            divider: idx > 0;
+            clicked => {
+                root.select(idx);
+            }
+        }
+    }
+}
+
+// Top-level window: a toolbar above the document, shown either as a continuous
+// scrollable column of rows or one row at a time.
 export component MainWindow inherits Window {
-    // All rows of the document. Only visible delegates are instantiated.
     in property <[PageRow]> rows;
-    // The single row shown in paged (non-continuous) mode.
     in property <PageRow> current-row-content;
-    // Continuous scroll vs. one row per screen.
     in property <bool> continuous: true;
-    // Logical pixels per PDF point at the current zoom.
     in property <float> density: 1.333;
-    // The tallest row's height in points; every row reserves this so the
-    // ListView's uniform-height assumption holds.
     in property <float> row-height-pt: 1.0;
+    // Spread mode for the toolbar radios: 0 = single, 1 = odd, 2 = even.
+    in property <int> spread-mode;
+    // 1-based page currently at the top of the view, and total page count.
+    in property <int> current-page;
+    in property <int> page-count;
+    // Shown in the document area only when there are no pages (errors/usage).
     in property <string> status;
 
-    // A visible row wants its pages rendered; the argument is the row index.
     callback request-render-row(int);
-    // Invoked from Rust when a page has finished rendering (page index, image).
     callback page-rendered(int, image);
-    // The page area was resized (width, height in logical pixels).
     callback viewport-resized(length, length);
+    // Continuous scroll offset changed (logical pixels from the top).
+    callback scrolled(float);
     callback zoom-in();
     callback zoom-out();
     callback zoom-reset();
     callback fit-width();
     callback fit-page();
+    callback set-continuous(bool);
     callback toggle-continuous();
-    // Spread mode: 0 = none, 1 = odd, 2 = even.
+    // Spread mode: 0 = single, 1 = odd, 2 = even.
     callback set-spread(int);
     callback next-row();
     callback prev-row();
 
     title: "melkkipdf";
-    preferred-width: 800px;
+    preferred-width: 1000px;
     preferred-height: 1000px;
     forward-focus: key-handler;
 
-    // Report the page-area geometry so Rust can compute fit-to-width/page zooms.
     property <length> view-w: content.width;
     property <length> view-h: content.height;
     changed view-w => { root.viewport-resized(root.view-w, root.view-h); }
@@ -144,30 +233,101 @@ export component MainWindow inherits Window {
         }
 
         VerticalLayout {
-            HorizontalLayout {
-                padding: 6px;
-                Text {
-                    text: root.status;
-                    wrap: word-wrap;
+            // Toolbar. Fixed height so its contents never reflow the layout.
+            Rectangle {
+                height: 44px;
+                background: #333333;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 6px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        ToolButton { text: "Zoom −"; clicked => { root.zoom-out(); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        ToolButton { text: "Zoom +"; clicked => { root.zoom-in(); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        ToolButton { text: "Fit width"; clicked => { root.fit-width(); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        ToolButton { text: "Fit page"; clicked => { root.fit-page(); } }
+                    }
+
+                    ToolbarSeparator { }
+
+                    // Fused segmented toggles for the two mode groups.
+                    VerticalLayout {
+                        alignment: center;
+                        SegmentedControl {
+                            options: ["Continuous", "Paged"];
+                            current: root.continuous ? 0 : 1;
+                            select(index) => {
+                                root.set-continuous(index == 0);
+                            }
+                        }
+                    }
+
+                    ToolbarSeparator { }
+
+                    VerticalLayout {
+                        alignment: center;
+                        SegmentedControl {
+                            options: ["Single", "Odd", "Even"];
+                            current: root.spread-mode;
+                            select(index) => {
+                                root.set-spread(index);
+                            }
+                        }
+                    }
+
+                    // Spacer pushes the page counter to the right.
+                    Rectangle { horizontal-stretch: 1; }
+
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Page \{root.current-page} / \{root.page-count}";
+                            color: #dddddd;
+                        }
+                    }
                 }
             }
 
             content := Rectangle {
-                if root.continuous: ListView {
+                if root.page-count == 0: VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.status;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if root.page-count > 0 && root.continuous: ListView {
+                    // Track the scroll offset so Rust can report the current page.
+                    changed viewport-y => {
+                        root.scrolled(-self.viewport-y / 1px);
+                    }
                     for entry[idx] in root.rows: PageRowView {
                         page-row: entry;
                         density: root.density;
                         row-height-pt: root.row-height-pt;
                         // Request pixels when this row scrolls into view. Zoom
-                        // re-renders are driven from Rust (see rerender_loaded) to
-                        // keep delegates free of change handlers, which otherwise
-                        // stretch Slint's instantiation settle loop during scroll.
+                        // re-renders are driven from Rust (rerender_loaded).
                         init => {
                             root.request-render-row(idx);
                         }
                     }
                 }
-                if !root.continuous: ScrollView {
+
+                if root.page-count > 0 && !root.continuous: ScrollView {
                     PageRowView {
                         page-row: root.current-row-content;
                         density: root.density;
