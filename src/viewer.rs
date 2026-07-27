@@ -55,8 +55,10 @@ const FIT_GUTTER: f32 = 24.0;
 const ROW_GAP: f32 = 16.0;
 /// How far an arrow key scrolls when the page is taller than the viewport.
 const SCROLL_STEP: f32 = 120.0;
+/// Rows to prefetch on either side of the visible range while idle.
+const PREFETCH_ROWS: usize = 4;
 /// Maximum number of rendered page images retained at once.
-const MAX_RETAINED: usize = 24;
+const MAX_RETAINED: usize = 48;
 
 /// The 0/1/2 index used by the toolbar's spread radios.
 fn spread_index(spread: Spread) -> i32 {
@@ -171,6 +173,9 @@ struct Inner {
     /// Scroll offset within the current page in paged mode (logical pixels).
     paged_scroll_x: f32,
     paged_scroll_y: f32,
+    /// View epoch, bumped whenever the visible set changes, so the render worker
+    /// can drop requests from earlier views.
+    generation: u64,
     specs: Vec<RowSpec>,
     page_loc: Vec<(usize, bool)>,
     ref_w_pt: f32,
@@ -208,6 +213,7 @@ impl Viewer {
                 scroll_px: 0.0,
                 paged_scroll_x: 0.0,
                 paged_scroll_y: 0.0,
+                generation: 0,
                 specs: Vec::new(),
                 page_loc: Vec::new(),
                 ref_w_pt: 0.0,
@@ -236,9 +242,9 @@ impl Viewer {
             return;
         };
         let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
-        self.send(spec.left, scale);
+        self.send(spec.left, scale, false);
         if let Some(right) = spec.right {
-            self.send(right, scale);
+            self.send(right, scale, false);
         }
     }
 
@@ -389,6 +395,75 @@ impl Viewer {
             inner.current_row = row.min(inner.specs.len() - 1);
         }
         self.update_current_page();
+        self.request_visible();
+    }
+
+    /// Requests any visible-but-unrendered rows, top-first. Delegates request on
+    /// first appearance, but eviction can later clear a still-visible page whose
+    /// `init` won't fire again; re-requesting here keeps visible pages filled.
+    fn request_visible(&self) {
+        self.advance_epoch();
+        let (visible, prefetch, scale) = {
+            let inner = self.inner.borrow();
+            if !inner.continuous || inner.specs.is_empty() {
+                return;
+            }
+            let row_height = row_height_px(&inner);
+            let view_height = inner.view.map_or(0.0, |(_, h)| h);
+            if row_height <= 0.0 {
+                return;
+            }
+            let top = (inner.scroll_px / row_height).floor().max(0.0) as usize;
+            let span = (view_height / row_height).ceil() as usize + 1;
+            let last = inner.specs.len() - 1;
+            let visible_end = (top + span).min(last);
+
+            let rendered: std::collections::HashSet<usize> =
+                inner.retained.iter().copied().collect();
+            let needs = |row: usize| {
+                let spec = &inner.specs[row];
+                !rendered.contains(&spec.left)
+                    || spec.right.is_some_and(|right| !rendered.contains(&right))
+            };
+
+            let visible: Vec<i32> =
+                (top..=visible_end).filter(|&r| needs(r)).map(|r| r as i32).collect();
+
+            // Prefetch a few rows on either side of the visible range.
+            let below = (visible_end + PREFETCH_ROWS).min(last);
+            let above = top.saturating_sub(PREFETCH_ROWS);
+            let mut prefetch: Vec<i32> = Vec::new();
+            for row in (visible_end + 1)..=below {
+                if needs(row) {
+                    prefetch.push(row as i32);
+                }
+            }
+            for row in above..top {
+                if needs(row) {
+                    prefetch.push(row as i32);
+                }
+            }
+
+            let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
+            (visible, prefetch, scale)
+        };
+        for row in visible {
+            self.send_row(row, scale, false);
+        }
+        for row in prefetch {
+            self.send_row(row, scale, true);
+        }
+    }
+
+    /// Sends render requests for a row's pages at an explicit scale.
+    fn send_row(&self, row: i32, scale: f32, prefetch: bool) {
+        let inner = self.inner.borrow();
+        if let Some(spec) = inner.specs.get(row.max(0) as usize) {
+            self.send(spec.left, scale, prefetch);
+            if let Some(right) = spec.right {
+                self.send(right, scale, prefetch);
+            }
+        }
     }
 
     /// Jumps to a 1-based page typed into the toolbar field. Invalid input is
@@ -776,9 +851,37 @@ impl Viewer {
         }
     }
 
+    /// Requests the current row (high priority) plus a few neighbors on each
+    /// side as prefetch. Used by paged mode and one-shot navigation.
     fn request_current_row(&self) {
-        let row = self.inner.borrow().current_row as i32;
-        self.request_render_row(row);
+        self.advance_epoch();
+        let (current, neighbors, scale) = {
+            let inner = self.inner.borrow();
+            if inner.specs.is_empty() {
+                return;
+            }
+            let current = inner.current_row;
+            let last = inner.specs.len() - 1;
+            let rendered: std::collections::HashSet<usize> =
+                inner.retained.iter().copied().collect();
+            let needs = |row: usize| {
+                let spec = &inner.specs[row];
+                !rendered.contains(&spec.left)
+                    || spec.right.is_some_and(|right| !rendered.contains(&right))
+            };
+            let start = current.saturating_sub(PREFETCH_ROWS);
+            let end = (current + PREFETCH_ROWS).min(last);
+            let neighbors: Vec<i32> = (start..=end)
+                .filter(|&row| row != current && needs(row))
+                .map(|row| row as i32)
+                .collect();
+            let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
+            (current as i32, neighbors, scale)
+        };
+        self.send_row(current, scale, false);
+        for row in neighbors {
+            self.send_row(row, scale, true);
+        }
     }
 
     fn request_current_row_if_paged(&self) {
@@ -787,8 +890,17 @@ impl Viewer {
         }
     }
 
-    fn send(&self, page: usize, scale: f32) {
-        let _ = self.sender.send(RenderRequest { page: page as i32, scale });
+    fn send(&self, page: usize, scale: f32, prefetch: bool) {
+        let generation = self.inner.borrow().generation;
+        let _ = self
+            .sender
+            .send(RenderRequest { page: page as i32, scale, generation, prefetch });
+    }
+
+    /// Marks a new view: bumped before issuing a fresh set of render requests so
+    /// the worker drops requests from the previous view.
+    fn advance_epoch(&self) {
+        self.inner.borrow_mut().generation += 1;
     }
 
     fn apply_density(&self) {
@@ -804,13 +916,14 @@ impl Viewer {
     /// re-render crisply at the new scale. Driven from Rust (rather than a
     /// per-delegate change handler) to keep the delegates side-effect-free.
     fn rerender_loaded(&self) {
+        self.advance_epoch();
         let (pages, scale) = {
             let inner = self.inner.borrow();
             let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
             (inner.retained.iter().copied().collect::<Vec<_>>(), scale)
         };
         for page in pages {
-            self.send(page, scale);
+            self.send(page, scale, false);
         }
         self.request_current_row_if_paged();
     }

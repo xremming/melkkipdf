@@ -5,7 +5,7 @@
 //! a channel and only ever receives finished, reference-counted RGB buffers,
 //! which it hands to the viewer through the `page-rendered` callback.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
@@ -20,11 +20,18 @@ use crate::MainWindow;
 pub struct RenderRequest {
     pub page: i32,
     pub scale: f32,
+    /// The view "epoch" this request belongs to. The viewer bumps it on every
+    /// scroll/zoom, so the worker can drop requests from earlier views (pages
+    /// that have since scrolled off screen).
+    pub generation: u64,
+    /// A low-priority prefetch (a neighbor of the visible pages). Rendered only
+    /// after every visible page in the same epoch.
+    pub prefetch: bool,
 }
 
 /// Number of rendered pages kept in memory. Sized to comfortably cover a page
 /// plus the neighbors we will prerender in a later step.
-const CACHE_CAPACITY: usize = 16;
+const CACHE_CAPACITY: usize = 48;
 
 /// A page rendered to a shared RGB buffer. Cloning is a cheap refcount bump, so
 /// the cache and the UI can hold the same pixels without copying.
@@ -61,43 +68,52 @@ pub fn spawn(path: String, window: Weak<MainWindow>) -> Sender<RenderRequest> {
 
         let mut cache: LruCache<CacheKey, PageBuffer> = LruCache::new(CACHE_CAPACITY);
 
-        while let Ok(first) = receiver.recv() {
-            // Drain everything already queued and render newest-first: the most
-            // recently requested pages are the ones most likely still on screen,
-            // so a scrollbar jump doesn't wait behind stale requests. Dedupe so a
-            // page requested twice in a burst is only rendered once.
-            let mut batch = vec![first];
-            while let Ok(more) = receiver.try_recv() {
-                batch.push(more);
-            }
-
-            let mut seen: HashSet<CacheKey> = HashSet::new();
-            for request in batch.into_iter().rev() {
-                let key = cache_key(&request);
-                if !seen.insert(key) {
-                    continue;
+        // Requests waiting to be rendered. We render one page at a time and
+        // re-check the channel after each, so a fresh scroll preempts a stale
+        // backlog: only the newest generation (the current view) is ever
+        // rendered, and pages that scrolled off screen are dropped.
+        let mut pending: Vec<RenderRequest> = Vec::new();
+        loop {
+            if pending.is_empty() {
+                match receiver.recv() {
+                    Ok(request) => pending.push(request),
+                    Err(_) => break, // channel closed: shut down
                 }
-
-                let buffer = match cache.get(&key) {
-                    Some(buffer) => buffer,
-                    None => match render_page(&document, request.page, request.scale) {
-                        Ok(buffer) => {
-                            cache.put(key, buffer.clone());
-                            buffer
-                        }
-                        Err(err) => {
-                            let page = request.page + 1;
-                            push_status(&window, format!("Failed to render page {page}: {err}"));
-                            continue;
-                        }
-                    },
-                };
-
-                let page = request.page;
-                let _ = window.upgrade_in_event_loop(move |window| {
-                    window.invoke_page_rendered(page, Image::from_rgb8(buffer));
-                });
             }
+            while let Ok(more) = receiver.try_recv() {
+                pending.push(more);
+            }
+
+            // Keep only the newest view; drop everything older (off screen).
+            let Some(newest) = pending.iter().map(|r| r.generation).max() else {
+                continue;
+            };
+            pending.retain(|request| request.generation == newest);
+            // Visible pages before prefetch, then topmost first; drop duplicates.
+            pending.sort_by_key(|request| (request.prefetch, request.page));
+            pending.dedup_by_key(|request| cache_key(request));
+
+            let request = pending.remove(0);
+            let key = cache_key(&request);
+            let buffer = match cache.get(&key) {
+                Some(buffer) => buffer,
+                None => match render_page(&document, request.page, request.scale) {
+                    Ok(buffer) => {
+                        cache.put(key, buffer.clone());
+                        buffer
+                    }
+                    Err(err) => {
+                        let page = request.page + 1;
+                        push_status(&window, format!("Failed to render page {page}: {err}"));
+                        continue;
+                    }
+                },
+            };
+
+            let page = request.page;
+            let _ = window.upgrade_in_event_loop(move |window| {
+                window.invoke_page_rendered(page, Image::from_rgb8(buffer));
+            });
         }
     });
 

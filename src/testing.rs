@@ -18,8 +18,9 @@ use crate::{MainWindow, Viewer};
 pub struct Harness {
     pub window: MainWindow,
     pub viewer: Rc<Viewer>,
-    // Kept so render requests the viewer sends have a live receiver.
-    _requests: Receiver<RenderRequest>,
+    // Kept so render requests the viewer sends have a live receiver; tests can
+    // drain it to see which pages were requested and in what order.
+    requests: Receiver<RenderRequest>,
 }
 
 impl Harness {
@@ -34,7 +35,23 @@ impl Harness {
         let window = MainWindow::new().ok()?;
         let (sender, requests) = mpsc::channel();
         let viewer = Viewer::new(&window, pages, 1.0, sender);
-        Some(Self { window, viewer, _requests: requests })
+        Some(Self { window, viewer, requests })
+    }
+
+    /// Drains and returns the 0-based page indices the viewer has requested for
+    /// rendering, in the order they were queued.
+    pub fn take_render_requests(&self) -> Vec<i32> {
+        self.take_render_requests_full().into_iter().map(|(page, ..)| page).collect()
+    }
+
+    /// Like [`take_render_requests`], but also returns each request's view epoch
+    /// and whether it is a low-priority prefetch.
+    pub fn take_render_requests_full(&self) -> Vec<(i32, u64, bool)> {
+        let mut requests = Vec::new();
+        while let Ok(request) = self.requests.try_recv() {
+            requests.push((request.page, request.generation, request.prefetch));
+        }
+        requests
     }
 
     /// Sets the viewport size, as a window resize would. Returns `&self` so it
