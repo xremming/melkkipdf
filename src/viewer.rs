@@ -82,7 +82,7 @@ fn max_scroll_px(inner: &Inner) -> f32 {
 
 /// Horizontal gap between the two pages of a spread, in logical pixels. Must
 /// match the `spacing` of the paged content layout in the `.slint` file.
-const SPREAD_SPACING: f32 = 8.0;
+const SPREAD_SPACING: f32 = 4.0;
 
 /// The current paged row's rendered content size (width, height) in logical
 /// pixels: one page, or two side by side for a spread.
@@ -215,7 +215,7 @@ impl Viewer {
                 zoom: 1.0,
                 scale_factor,
                 view: None,
-                fit: FitMode::Width,
+                fit: FitMode::Page,
                 retained: VecDeque::new(),
                 spread: Spread::None,
                 continuous: true,
