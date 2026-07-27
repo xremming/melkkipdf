@@ -1,0 +1,51 @@
+import { ScrollView } from "std-widgets.slint";
+
+// Top-level window for the viewer. It shows one rendered page inside a scrollable
+// area with a status line, and forwards page navigation keys to Rust.
+export component MainWindow inherits Window {
+    // The rendered page, handed over from the render worker as an RGBA image.
+    in property <image> page-image;
+    // Human-readable status: page counter, or an error/usage message.
+    in property <string> status;
+    // Emitted on page navigation; the argument is a signed page delta.
+    callback navigate(int);
+
+    title: "melkkipdf";
+    preferred-width: 800px;
+    preferred-height: 1000px;
+    forward-focus: key-handler;
+
+    key-handler := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.RightArrow || event.text == Key.PageDown) {
+                root.navigate(1);
+                accept
+            } else if (event.text == Key.LeftArrow || event.text == Key.PageUp) {
+                root.navigate(-1);
+                accept
+            } else {
+                reject
+            }
+        }
+
+        VerticalLayout {
+            HorizontalLayout {
+                padding: 6px;
+                Text {
+                    text: root.status;
+                    wrap: word-wrap;
+                }
+            }
+
+            ScrollView {
+                // Render the page at its native pixel size so scrolling exposes the
+                // full page rather than shrinking it to fit.
+                Image {
+                    source: root.page-image;
+                    width: root.page-image.width * 1px;
+                    height: root.page-image.height * 1px;
+                }
+            }
+        }
+    }
+}

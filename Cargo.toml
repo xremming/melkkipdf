@@ -1,0 +1,17 @@
+[package]
+name = "melkkipdf"
+version = "0.1.0"
+edition = "2024"
+description = "A fast, minimal PDF viewer for Linux, inspired by SumatraPDF."
+
+[dependencies]
+slint = "1.17"
+mupdf = "0.8"
+
+[build-dependencies]
+slint-build = "1.17"
+
+# MuPDF is heavy to compile; optimize it even in debug builds so rendering
+# is usable while iterating on the viewer itself.
+[profile.dev.package.mupdf-sys]
+opt-level = 3
