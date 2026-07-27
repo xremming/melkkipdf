@@ -13,7 +13,7 @@ use std::sync::mpsc::Sender;
 
 use slint::{ComponentHandle, Image, Model, ModelRc, VecModel, Weak};
 
-use crate::render::RenderRequest;
+use crate::render::{RenderControl, RenderRequest};
 use crate::{MainWindow, PageEntry, PageRow};
 
 /// How pages are grouped into rows.
@@ -187,6 +187,7 @@ pub struct Viewer {
     model: Rc<VecModel<PageRow>>,
     window: Weak<MainWindow>,
     sender: Sender<RenderRequest>,
+    control: RenderControl,
 }
 
 impl Viewer {
@@ -195,6 +196,7 @@ impl Viewer {
         pages_pt: Vec<(f32, f32)>,
         scale_factor: f32,
         sender: Sender<RenderRequest>,
+        control: RenderControl,
     ) -> Rc<Self> {
         let model = Rc::new(VecModel::<PageRow>::default());
         window.set_rows(ModelRc::from(model.clone()));
@@ -222,6 +224,7 @@ impl Viewer {
             model,
             window: window.as_weak(),
             sender,
+            control,
         });
 
         let page_count = viewer.inner.borrow().pages_pt.len() as i32;
@@ -306,7 +309,7 @@ impl Viewer {
         if fit_active {
             self.apply_fit();
         } else if density_changed {
-            self.rerender_loaded();
+            self.rerender_view();
         }
         // Viewport size affects paged centering and scroll limits.
         self.push_paged_offsets();
@@ -395,13 +398,14 @@ impl Viewer {
             inner.current_row = row.min(inner.specs.len() - 1);
         }
         self.update_current_page();
-        self.request_visible();
+        self.request_visible(false);
     }
 
-    /// Requests any visible-but-unrendered rows, top-first. Delegates request on
-    /// first appearance, but eviction can later clear a still-visible page whose
-    /// `init` won't fire again; re-requesting here keeps visible pages filled.
-    fn request_visible(&self) {
+    /// Requests the visible rows (and a prefetch margin), top-first. On scroll,
+    /// pass `force = false` to skip rows already rendered; on zoom (a new scale),
+    /// pass `force = true` to re-render everything visible. Also covers eviction:
+    /// a delegate's `init` fires once and can't re-request a page cleared later.
+    fn request_visible(&self, force: bool) {
         self.advance_epoch();
         let (visible, prefetch, scale) = {
             let inner = self.inner.borrow();
@@ -421,6 +425,9 @@ impl Viewer {
             let rendered: std::collections::HashSet<usize> =
                 inner.retained.iter().copied().collect();
             let needs = |row: usize| {
+                if force {
+                    return true;
+                }
                 let spec = &inner.specs[row];
                 !rendered.contains(&spec.left)
                     || spec.right.is_some_and(|right| !rendered.contains(&right))
@@ -715,7 +722,7 @@ impl Viewer {
             inner.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         }
         self.apply_density();
-        self.rerender_loaded();
+        self.rerender_view();
         self.update_status();
     }
 
@@ -741,7 +748,7 @@ impl Viewer {
 
         self.inner.borrow_mut().zoom = recomputed;
         self.apply_density();
-        self.rerender_loaded();
+        self.rerender_view();
         self.update_status();
     }
 
@@ -898,9 +905,14 @@ impl Viewer {
     }
 
     /// Marks a new view: bumped before issuing a fresh set of render requests so
-    /// the worker drops requests from the previous view.
+    /// the worker drops (and aborts in-progress) renders from the previous view.
     fn advance_epoch(&self) {
-        self.inner.borrow_mut().generation += 1;
+        let epoch = {
+            let mut inner = self.inner.borrow_mut();
+            inner.generation += 1;
+            inner.generation
+        };
+        self.control.advance(epoch);
     }
 
     fn apply_density(&self) {
@@ -912,20 +924,17 @@ impl Viewer {
         self.push_paged_offsets();
     }
 
-    /// Re-requests every page that currently holds an image, so displayed pages
-    /// re-render crisply at the new scale. Driven from Rust (rather than a
-    /// per-delegate change handler) to keep the delegates side-effect-free.
-    fn rerender_loaded(&self) {
-        self.advance_epoch();
-        let (pages, scale) = {
-            let inner = self.inner.borrow();
-            let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
-            (inner.retained.iter().copied().collect::<Vec<_>>(), scale)
-        };
-        for page in pages {
-            self.send(page, scale, false);
+    /// Re-renders the current view at a new scale (after zoom/fit) or the initial
+    /// view on load. Driven from Rust (rather than a per-delegate change handler)
+    /// to keep the delegates side-effect-free. Requesting the visible range here
+    /// — not just already-rendered pages — is also what renders the first page on
+    /// startup, when nothing has been rendered yet.
+    fn rerender_view(&self) {
+        if self.inner.borrow().continuous {
+            self.request_visible(true);
+        } else {
+            self.request_current_row();
         }
-        self.request_current_row_if_paged();
     }
 
     fn update_status(&self) {
@@ -999,7 +1008,7 @@ mod tests {
         };
         let (sender, _receiver) = std::sync::mpsc::channel();
         let pages = vec![(600.0, 800.0); 5];
-        let viewer = Viewer::new(&window, pages, 1.0, sender);
+        let viewer = Viewer::new(&window, pages, 1.0, sender, crate::render::RenderControl::inert());
 
         // Switch to paged mode, then deliver renders — including enough to force
         // the eviction path, which also calls back into the viewer.
@@ -1018,7 +1027,7 @@ mod tests {
             return;
         };
         let (sender, _receiver) = std::sync::mpsc::channel();
-        let viewer = Viewer::new(&window, vec![(600.0, 800.0); 10], 1.0, sender);
+        let viewer = Viewer::new(&window, vec![(600.0, 800.0); 10], 1.0, sender, crate::render::RenderControl::inert());
         // Paged mode avoids touching the scroll offset property.
         viewer.set_continuous(false);
 

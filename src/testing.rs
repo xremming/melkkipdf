@@ -11,7 +11,7 @@ use std::sync::mpsc::{self, Receiver};
 
 use slint::Model;
 
-use crate::render::RenderRequest;
+use crate::render::{RenderControl, RenderRequest};
 use crate::{MainWindow, Viewer};
 
 /// A window + viewer pair for tests, plus convenience accessors.
@@ -34,7 +34,7 @@ impl Harness {
     pub fn with_pages(pages: Vec<(f32, f32)>) -> Option<Self> {
         let window = MainWindow::new().ok()?;
         let (sender, requests) = mpsc::channel();
-        let viewer = Viewer::new(&window, pages, 1.0, sender);
+        let viewer = Viewer::new(&window, pages, 1.0, sender, RenderControl::inert());
         Some(Self { window, viewer, requests })
     }
 

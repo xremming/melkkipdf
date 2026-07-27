@@ -56,8 +56,8 @@ pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
     };
 
     let scale_factor = window.window().scale_factor();
-    let sender = render::spawn(path, window.as_weak());
-    let viewer = Viewer::new(&window, pages_pt, scale_factor, sender);
+    let (sender, control) = render::spawn(path, window.as_weak());
+    let viewer = Viewer::new(&window, pages_pt, scale_factor, sender, control);
     wire_callbacks(&window, &viewer);
 
     window.run()?;

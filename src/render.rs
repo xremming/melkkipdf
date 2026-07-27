@@ -8,12 +8,56 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use mupdf::{Colorspace, Document, Error, Matrix};
+use mupdf::{Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap};
 use slint::{Image, Rgb8Pixel, SharedPixelBuffer, Weak};
 
 use crate::MainWindow;
+
+/// Points to the cookie of the render currently in progress, so the UI thread
+/// can abort it. The address is valid only while `active`, which the worker sets
+/// and clears under the mutex around each render.
+#[derive(Default)]
+struct AbortSlot {
+    cookie: usize,
+    epoch: u64,
+    active: bool,
+    /// Set when `advance` actually aborted the in-progress render, so the worker
+    /// knows to discard its half-drawn result (rather than discarding merely
+    /// because the epoch moved on).
+    aborted: bool,
+}
+
+/// Lets the viewer cancel a render whose page has scrolled off screen.
+#[derive(Clone)]
+pub struct RenderControl {
+    abort: Arc<Mutex<AbortSlot>>,
+}
+
+impl RenderControl {
+    /// Aborts an in-progress render from an epoch older than `epoch` (its page
+    /// has scrolled off screen).
+    pub fn advance(&self, epoch: u64) {
+        let mut slot = self.abort.lock().unwrap();
+        if slot.active && slot.epoch < epoch {
+            // SAFETY: while `active`, the worker keeps the cookie alive and will
+            // not drop it until it re-takes this lock, so the address is valid.
+            // Setting the abort flag while the worker reads it mid-render is the
+            // unsynchronized signaling MuPDF's cookie is explicitly designed for.
+            unsafe {
+                (*(slot.cookie as *mut Cookie)).abort();
+            }
+            slot.aborted = true;
+        }
+    }
+
+    /// A control not attached to a worker, for tests.
+    pub fn inert() -> Self {
+        Self { abort: Arc::new(Mutex::new(AbortSlot::default())) }
+    }
+}
 
 /// A request to render a specific page at a given scale.
 #[derive(Clone, Copy)]
@@ -54,8 +98,10 @@ fn cache_key(request: &RenderRequest) -> CacheKey {
 /// The worker opens its own `Document` (the UI thread reads page sizes from a
 /// separate handle), renders on demand, and delivers each finished page back to
 /// the viewer via the window's `page-rendered` callback.
-pub fn spawn(path: String, window: Weak<MainWindow>) -> Sender<RenderRequest> {
+pub fn spawn(path: String, window: Weak<MainWindow>) -> (Sender<RenderRequest>, RenderControl) {
     let (sender, receiver) = mpsc::channel::<RenderRequest>();
+    let abort = Arc::new(Mutex::new(AbortSlot::default()));
+    let control = RenderControl { abort: abort.clone() };
 
     thread::spawn(move || {
         let document = match Document::open(&path) {
@@ -71,7 +117,7 @@ pub fn spawn(path: String, window: Weak<MainWindow>) -> Sender<RenderRequest> {
         // Requests waiting to be rendered. We render one page at a time and
         // re-check the channel after each, so a fresh scroll preempts a stale
         // backlog: only the newest generation (the current view) is ever
-        // rendered, and pages that scrolled off screen are dropped.
+        // rendered, and pages that scrolled off screen are dropped or aborted.
         let mut pending: Vec<RenderRequest> = Vec::new();
         loop {
             if pending.is_empty() {
@@ -95,43 +141,99 @@ pub fn spawn(path: String, window: Weak<MainWindow>) -> Sender<RenderRequest> {
 
             let request = pending.remove(0);
             let key = cache_key(&request);
-            let buffer = match cache.get(&key) {
-                Some(buffer) => buffer,
-                None => match render_page(&document, request.page, request.scale) {
-                    Ok(buffer) => {
-                        cache.put(key, buffer.clone());
-                        buffer
-                    }
-                    Err(err) => {
-                        let page = request.page + 1;
-                        push_status(&window, format!("Failed to render page {page}: {err}"));
-                        continue;
-                    }
-                },
-            };
 
-            let page = request.page;
-            let _ = window.upgrade_in_event_loop(move |window| {
-                window.invoke_page_rendered(page, Image::from_rgb8(buffer));
-            });
+            if let Some(buffer) = cache.get(&key) {
+                push_page(&window, request.page, buffer);
+                continue;
+            }
+
+            let (outcome, aborted) = render_abortable(&document, &request, &abort);
+
+            // An aborted render is half-drawn: drop it (it will be re-requested
+            // if the page is still wanted). A completed render is kept even if
+            // the view has since moved on.
+            if aborted {
+                continue;
+            }
+            match outcome {
+                Ok(buffer) => {
+                    cache.put(key, buffer.clone());
+                    push_page(&window, request.page, buffer);
+                }
+                Err(err) => {
+                    let page = request.page + 1;
+                    push_status(&window, format!("Failed to render page {page}: {err}"));
+                }
+            }
         }
     });
 
-    sender
+    (sender, control)
 }
 
-/// Renders one page to a tightly-packed RGB buffer.
-///
-/// MuPDF rows can be padded, so we copy row by row using the pixmap stride rather
-/// than assuming the samples are contiguous.
-fn render_page(document: &Document, page: i32, scale: f32) -> Result<PageBuffer, Error> {
-    let page = document.load_page(page)?;
-    let matrix = Matrix::new_scale(scale, scale);
-    // `alpha = false` makes MuPDF clear the page to white before drawing, giving
-    // opaque paper; with alpha the background would be transparent and show the
-    // window surface through it.
-    let pixmap = page.to_pixmap(&matrix, &Colorspace::device_rgb(), false, true)?;
+/// Hands a finished page to the UI thread.
+fn push_page(window: &Weak<MainWindow>, page: i32, buffer: PageBuffer) {
+    let _ = window.upgrade_in_event_loop(move |window| {
+        window.invoke_page_rendered(page, Image::from_rgb8(buffer));
+    });
+}
 
+/// Renders a page under an abort cookie, registering the cookie so the UI thread
+/// can cancel the render if the page scrolls off screen.
+fn render_abortable(
+    document: &Document,
+    request: &RenderRequest,
+    abort: &Arc<Mutex<AbortSlot>>,
+) -> (Result<PageBuffer, Error>, bool) {
+    // A fresh cookie starts un-aborted (mupdf-rs exposes no way to reset one).
+    let mut cookie = match Cookie::new() {
+        Ok(cookie) => cookie,
+        Err(err) => return (Err(err), false),
+    };
+    {
+        let mut slot = abort.lock().unwrap();
+        slot.cookie = &mut cookie as *mut Cookie as usize;
+        slot.epoch = request.generation;
+        slot.active = true;
+        slot.aborted = false;
+    }
+    let result = render_page(document, request.page, request.scale, &cookie);
+    let aborted = {
+        let mut slot = abort.lock().unwrap();
+        slot.active = false;
+        slot.aborted
+    };
+    (result, aborted)
+}
+
+/// Renders one page to a tightly-packed RGB buffer, honoring the abort cookie.
+///
+/// `alpha = false` (a white background) is emulated by clearing the pixmap to
+/// white before running the page, matching `to_pixmap(..., alpha=false)`.
+fn render_page(
+    document: &Document,
+    page: i32,
+    scale: f32,
+    cookie: &Cookie,
+) -> Result<PageBuffer, Error> {
+    let page = document.load_page(page)?;
+    let ctm = Matrix::new_scale(scale, scale);
+    let bbox = page.bounds()?.transform(&ctm).round();
+
+    let mut pixmap = Pixmap::new_with_rect(&Colorspace::device_rgb(), bbox, false)?;
+    pixmap.clear_with(0xff)?; // white paper
+    {
+        let device = Device::from_pixmap(&pixmap)?;
+        page.run_with_cookie(&device, &ctm, cookie)?;
+        // Dropping the device flushes the drawing into the pixmap.
+    }
+
+    Ok(pixmap_to_buffer(&pixmap))
+}
+
+/// Copies a pixmap's RGB samples into a tightly-packed shared buffer. MuPDF rows
+/// can be padded, so we copy row by row using the pixmap stride.
+fn pixmap_to_buffer(pixmap: &Pixmap) -> PageBuffer {
     let width = pixmap.width();
     let height = pixmap.height();
     let stride = pixmap.stride() as usize;
@@ -145,8 +247,7 @@ fn render_page(document: &Document, page: i32, scale: f32) -> Result<PageBuffer,
         let destination_row = &mut destination[y * row_bytes..y * row_bytes + row_bytes];
         destination_row.copy_from_slice(source_row);
     }
-
-    Ok(buffer)
+    buffer
 }
 
 /// Pushes a status message to the UI thread, ignoring the error that arises only
