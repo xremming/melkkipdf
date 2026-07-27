@@ -78,6 +78,28 @@ fn max_scroll_px(inner: &Inner) -> f32 {
     (inner.specs.len() as f32 * row_height_px(inner) - view_height).max(0.0)
 }
 
+/// Horizontal gap between the two pages of a spread, in logical pixels. Must
+/// match the `spacing` of the paged content layout in the `.slint` file.
+const SPREAD_SPACING: f32 = 8.0;
+
+/// The current paged row's rendered content size (width, height) in logical
+/// pixels: one page, or two side by side for a spread.
+fn paged_content_size(inner: &Inner) -> (f32, f32) {
+    let Some(spec) = inner.specs.get(inner.current_row) else {
+        return (0.0, 0.0);
+    };
+    let density = BASE_DENSITY * inner.zoom;
+    let (left_w, left_h) = inner.pages_pt[spec.left];
+    let (right_w, right_h, spacing) = match spec.right {
+        Some(right) => {
+            let (w, h) = inner.pages_pt[right];
+            (w, h, SPREAD_SPACING)
+        }
+        None => (0.0, 0.0, 0.0),
+    };
+    ((left_w + right_w) * density + spacing, left_h.max(right_h) * density)
+}
+
 /// Groups `page_count` pages into rows according to the spread mode.
 fn build_row_specs(page_count: usize, spread: Spread) -> Vec<RowSpec> {
     let pair_from = |start: usize, rows: &mut Vec<RowSpec>| {
@@ -146,6 +168,9 @@ struct Inner {
     current_row: usize,
     /// Current continuous scroll offset from the top, in logical pixels.
     scroll_px: f32,
+    /// Scroll offset within the current page in paged mode (logical pixels).
+    paged_scroll_x: f32,
+    paged_scroll_y: f32,
     specs: Vec<RowSpec>,
     page_loc: Vec<(usize, bool)>,
     ref_w_pt: f32,
@@ -181,6 +206,8 @@ impl Viewer {
                 continuous: true,
                 current_row: 0,
                 scroll_px: 0.0,
+                paged_scroll_x: 0.0,
+                paged_scroll_y: 0.0,
                 specs: Vec::new(),
                 page_loc: Vec::new(),
                 ref_w_pt: 0.0,
@@ -275,6 +302,8 @@ impl Viewer {
         } else if density_changed {
             self.rerender_loaded();
         }
+        // Viewport size affects paged centering and scroll limits.
+        self.push_paged_offsets();
     }
 
     pub fn zoom_in(&self) {
@@ -379,13 +408,14 @@ impl Viewer {
         self.scroll_to_row(row);
     }
 
-    /// Arrow up/down (dir -1/+1). Continuous mode always scrolls (never jumps);
-    /// paged mode moves between pages.
+    /// Arrow up/down (dir -1/+1). Continuous mode always scrolls; paged mode
+    /// scrolls within a tall page and moves to the next page at the edge.
     pub fn nav_line(&self, dir: i32) {
         if self.inner.borrow().continuous {
             self.scroll_by(dir as f32 * SCROLL_STEP);
         } else {
-            self.page_jump(dir);
+            // A downward step (dir +1) carries a negative wheel delta.
+            self.paged_scroll(0.0, -(dir as f32) * SCROLL_STEP, false);
         }
     }
 
@@ -419,18 +449,113 @@ impl Viewer {
             }
             self.request_current_row();
         } else {
+            {
+                let mut inner = self.inner.borrow_mut();
+                inner.paged_scroll_x = 0.0;
+                inner.paged_scroll_y = 0.0;
+            }
             self.refresh_current_row();
             self.request_current_row();
+            self.push_paged_offsets();
         }
         self.update_current_page();
     }
 
-    /// Mouse-wheel navigation, invoked only when a page fits (continuous) or the
-    /// paged view is at an edge — both cases move between pages.
-    pub fn wheel_nav(&self, delta_y: f32) {
-        // A downward wheel (content moves up) carries a negative delta.
-        let dir = if delta_y < 0.0 { 1 } else { -1 };
-        self.page_jump(dir);
+    /// Paged-mode wheel handling: scroll within the current page, and move to the
+    /// previous/next page only once the top/bottom edge is reached. Shift makes a
+    /// vertical wheel scroll horizontally.
+    pub fn paged_scroll(&self, delta_x: f32, delta_y: f32, shift: bool) {
+        // A downward/rightward wheel carries a negative delta; scrolling in that
+        // direction increases the offset.
+        let (horizontal, vertical) = if shift {
+            (-delta_y, 0.0)
+        } else {
+            (-delta_x, -delta_y)
+        };
+
+        let jump = {
+            let mut inner = self.inner.borrow_mut();
+            let (content_w, content_h) = paged_content_size(&inner);
+            let (view_w, view_h) = inner.view.unwrap_or((0.0, 0.0));
+            let max_x = (content_w - view_w).max(0.0);
+            let max_y = (content_h - view_h).max(0.0);
+
+            inner.paged_scroll_x = (inner.paged_scroll_x + horizontal).clamp(0.0, max_x);
+
+            if vertical > 0.0 && inner.paged_scroll_y >= max_y - 0.5 {
+                1 // at the bottom, scrolling down: next page
+            } else if vertical < 0.0 && inner.paged_scroll_y <= 0.5 {
+                -1 // at the top, scrolling up: previous page
+            } else {
+                inner.paged_scroll_y = (inner.paged_scroll_y + vertical).clamp(0.0, max_y);
+                0
+            }
+        };
+
+        if jump != 0 {
+            self.paged_step_page(jump);
+        } else {
+            self.push_paged_offsets();
+        }
+    }
+
+    /// Moves to the adjacent page in paged mode, landing at the top when moving
+    /// forward and at the bottom when moving back, so scrolling reads as one
+    /// continuous flow across the page boundary.
+    fn paged_step_page(&self, dir: i32) {
+        let changed = {
+            let mut inner = self.inner.borrow_mut();
+            let last = inner.specs.len().saturating_sub(1) as i32;
+            let target = (inner.current_row as i32 + dir).clamp(0, last) as usize;
+            if target == inner.current_row {
+                return; // at the first/last page already
+            }
+            inner.current_row = target;
+            inner.paged_scroll_x = 0.0;
+            let (_, content_h) = paged_content_size(&inner);
+            let view_h = inner.view.map_or(0.0, |(_, h)| h);
+            inner.paged_scroll_y = if dir < 0 { (content_h - view_h).max(0.0) } else { 0.0 };
+            true
+        };
+        if changed {
+            self.refresh_current_row();
+            self.request_current_row();
+            self.push_paged_offsets();
+            self.update_current_page();
+        }
+    }
+
+    /// Clamps the paged scroll offset to the current page and content size and
+    /// publishes the resulting content geometry to the window.
+    fn push_paged_offsets(&self) {
+        let (offset_x, offset_y, content_w, content_h) = {
+            let mut inner = self.inner.borrow_mut();
+            let (content_w, content_h) = paged_content_size(&inner);
+            let (view_w, view_h) = inner.view.unwrap_or((0.0, 0.0));
+            let max_x = (content_w - view_w).max(0.0);
+            let max_y = (content_h - view_h).max(0.0);
+            inner.paged_scroll_x = inner.paged_scroll_x.clamp(0.0, max_x);
+            inner.paged_scroll_y = inner.paged_scroll_y.clamp(0.0, max_y);
+            // Center each axis when the content is smaller than the viewport,
+            // otherwise offset by the scroll position.
+            let offset_x = if content_w <= view_w {
+                (view_w - content_w) / 2.0
+            } else {
+                -inner.paged_scroll_x
+            };
+            let offset_y = if content_h <= view_h {
+                (view_h - content_h) / 2.0
+            } else {
+                -inner.paged_scroll_y
+            };
+            (offset_x, offset_y, content_w, content_h)
+        };
+        if let Some(window) = self.window.upgrade() {
+            window.set_paged_offset_x(offset_x);
+            window.set_paged_offset_y(offset_y);
+            window.set_paged_content_w(content_w);
+            window.set_paged_content_h(content_h);
+        }
     }
 
     /// Moves to the previous/next page boundary from the current position.
@@ -495,8 +620,15 @@ impl Viewer {
             }
             self.request_current_row();
         } else {
+            // A new page starts scrolled to the top.
+            {
+                let mut inner = self.inner.borrow_mut();
+                inner.paged_scroll_x = 0.0;
+                inner.paged_scroll_y = 0.0;
+            }
             self.refresh_current_row();
             self.request_current_row();
+            self.push_paged_offsets();
         }
         self.update_current_page();
     }
@@ -571,6 +703,7 @@ impl Viewer {
         self.refresh_current_row();
         self.request_current_row_if_paged();
         self.update_current_page();
+        self.push_paged_offsets();
     }
 
     fn build_model_rows(&self) -> Vec<PageRow> {
@@ -663,6 +796,8 @@ impl Viewer {
         if let Some(window) = self.window.upgrade() {
             window.set_density(density);
         }
+        // Zoom changes the paged content size; keep its offsets in range.
+        self.push_paged_offsets();
     }
 
     /// Re-requests every page that currently holds an image, so displayed pages

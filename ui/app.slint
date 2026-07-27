@@ -199,8 +199,16 @@ export component MainWindow inherits Window {
     callback nav-page(int);
     callback nav-home();
     callback nav-end();
-    // Mouse-wheel navigation between pages; argument is the wheel delta-y.
-    callback wheel-nav(float);
+    // Paged-mode wheel: (delta-x, delta-y, shift). Rust scrolls within the page
+    // and pages at the edges.
+    callback paged-scroll(float, float, bool);
+
+    // Paged view geometry, computed by Rust: where to place the current page's
+    // content within the viewport, and the content's size.
+    in property <length> paged-offset-x;
+    in property <length> paged-offset-y;
+    in property <length> paged-content-w;
+    in property <length> paged-content-h;
 
     title: "melkkipdf";
     preferred-width: 1000px;
@@ -363,18 +371,34 @@ export component MainWindow inherits Window {
                     }
                 }
 
+                // Paged view: a Rust-controlled scroll surface. The wheel scrolls
+                // within the page and pages at the edges; content is positioned
+                // and sized by Rust so centering, scrolling, and shift-to-scroll-
+                // horizontally are all deterministic.
                 if root.page-count > 0 && !root.continuous: TouchArea {
-                    // Only receives the wheel when the inner ScrollView rejects it
-                    // (at an edge, or when the page fits), which is when we page.
                     scroll-event(event) => {
-                        root.wheel-nav(event.delta-y / 1px);
+                        root.paged-scroll(event.delta-x / 1px, event.delta-y / 1px, event.modifiers.shift);
                         return accept;
                     }
-                    ScrollView {
-                        PageRowView {
-                            page-row: root.current-row-content;
-                            density: root.density;
-                            row-height-pt: root.row-height-pt;
+                    Rectangle {
+                        clip: true;
+                        Rectangle {
+                            x: root.paged-offset-x;
+                            y: root.paged-offset-y;
+                            width: root.paged-content-w;
+                            height: root.paged-content-h;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                PageImageView {
+                                    entry: root.current-row-content.left;
+                                    density: root.density;
+                                }
+                                if root.current-row-content.has-right: PageImageView {
+                                    entry: root.current-row-content.right;
+                                    density: root.density;
+                                }
+                            }
                         }
                     }
                 }

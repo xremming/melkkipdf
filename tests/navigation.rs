@@ -117,30 +117,18 @@ fn continuous_arrow_scroll_steps_are_uniform() {
 }
 
 #[test]
-fn paged_arrows_change_pages() {
-    let Some(h) = setup(20) else {
+fn paged_arrows_change_pages_when_the_page_fits() {
+    let Some(h) = Harness::uniform(20, 600.0, 800.0) else {
         return;
     };
+    h.viewport(1000.0, 1400.0); // tall viewport: the whole page fits
     h.viewer.set_continuous(false);
-    assert!(!h.continuous());
+    h.viewer.fit_page();
     h.viewer.nav_home();
     assert_eq!(h.current_page(), 1);
     h.viewer.nav_line(1);
     assert_eq!(h.current_page(), 2, "paged arrow down moves to the next page");
     h.viewer.nav_line(-1);
-    assert_eq!(h.current_page(), 1);
-}
-
-#[test]
-fn paged_wheel_changes_pages() {
-    let Some(h) = setup(20) else {
-        return;
-    };
-    h.viewer.set_continuous(false);
-    h.viewer.nav_home();
-    h.viewer.wheel_nav(-80.0); // downward wheel
-    assert_eq!(h.current_page(), 2);
-    h.viewer.wheel_nav(80.0); // upward wheel
     assert_eq!(h.current_page(), 1);
 }
 

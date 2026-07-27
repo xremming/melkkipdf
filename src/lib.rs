@@ -134,9 +134,9 @@ fn wire_callbacks(window: &MainWindow, viewer: &Rc<Viewer>) {
         let viewer = viewer.clone();
         move || viewer.nav_end()
     });
-    window.on_wheel_nav({
+    window.on_paged_scroll({
         let viewer = viewer.clone();
-        move |delta| viewer.wheel_nav(delta)
+        move |delta_x, delta_y, shift| viewer.paged_scroll(delta_x, delta_y, shift)
     });
 }
 
