@@ -53,6 +53,8 @@ const FIT_GUTTER: f32 = 24.0;
 /// Vertical gap added to each row's height. Must match the `+ 16px` in the
 /// `PageRowView` delegate so scroll-offset math matches the on-screen layout.
 const ROW_GAP: f32 = 16.0;
+/// How far an arrow key scrolls when the page is taller than the viewport.
+const SCROLL_STEP: f32 = 120.0;
 /// Maximum number of rendered page images retained at once.
 const MAX_RETAINED: usize = 24;
 
@@ -63,6 +65,17 @@ fn spread_index(spread: Spread) -> i32 {
         Spread::Odd => 1,
         Spread::Even => 2,
     }
+}
+
+/// The on-screen height of one row (all rows are uniform) in logical pixels.
+fn row_height_px(inner: &Inner) -> f32 {
+    inner.ref_h_pt * BASE_DENSITY * inner.zoom + ROW_GAP
+}
+
+/// The largest valid continuous scroll offset in logical pixels.
+fn max_scroll_px(inner: &Inner) -> f32 {
+    let view_height = inner.view.map_or(0.0, |(_, h)| h);
+    (inner.specs.len() as f32 * row_height_px(inner) - view_height).max(0.0)
 }
 
 /// Groups `page_count` pages into rows according to the spread mode.
@@ -131,6 +144,8 @@ struct Inner {
     spread: Spread,
     continuous: bool,
     current_row: usize,
+    /// Current continuous scroll offset from the top, in logical pixels.
+    scroll_px: f32,
     specs: Vec<RowSpec>,
     page_loc: Vec<(usize, bool)>,
     ref_w_pt: f32,
@@ -165,6 +180,7 @@ impl Viewer {
                 spread: Spread::None,
                 continuous: true,
                 current_row: 0,
+                scroll_px: 0.0,
                 specs: Vec::new(),
                 page_loc: Vec::new(),
                 ref_w_pt: 0.0,
@@ -335,7 +351,8 @@ impl Viewer {
             if inner.specs.is_empty() {
                 return;
             }
-            let row_height = inner.ref_h_pt * BASE_DENSITY * inner.zoom + ROW_GAP;
+            inner.scroll_px = offset.max(0.0);
+            let row_height = row_height_px(&inner);
             if row_height <= 0.0 {
                 return;
             }
@@ -346,30 +363,61 @@ impl Viewer {
     }
 
     /// Jumps to a 1-based page typed into the toolbar field. Invalid input is
-    /// ignored. In continuous mode this scrolls the ListView (rows are uniform
-    /// height, so the target offset is exact); in paged mode it swaps the row.
+    /// ignored.
     pub fn go_to_page(&self, text: &str) {
         let Ok(requested) = text.trim().parse::<i32>() else {
             return;
         };
-
-        let (row, continuous, scroll_target) = {
-            let mut inner = self.inner.borrow_mut();
+        let row = {
+            let inner = self.inner.borrow();
             if inner.page_loc.is_empty() {
                 return;
             }
             let page = (requested - 1).clamp(0, inner.page_loc.len() as i32 - 1) as usize;
-            let row = inner.page_loc[page].0;
-            inner.current_row = row;
-            let row_height = inner.ref_h_pt * BASE_DENSITY * inner.zoom + ROW_GAP;
-            (row, inner.continuous, -(row as f32) * row_height)
+            inner.page_loc[page].0
         };
+        self.scroll_to_row(row);
+    }
 
+    /// Arrow up/down (dir -1/+1). Continuous mode always scrolls (never jumps);
+    /// paged mode moves between pages.
+    pub fn nav_line(&self, dir: i32) {
+        if self.inner.borrow().continuous {
+            self.scroll_by(dir as f32 * SCROLL_STEP);
+        } else {
+            self.page_jump(dir);
+        }
+    }
+
+    /// Page up/down (dir -1/+1): always to the start of the previous/next page.
+    pub fn nav_page(&self, dir: i32) {
+        self.page_jump(dir);
+    }
+
+    /// Home: start of the first page.
+    pub fn nav_home(&self) {
+        self.scroll_to_row(0);
+    }
+
+    /// End: the very bottom of the document, so the last page is fully visible.
+    pub fn nav_end(&self) {
+        let (continuous, target_px) = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.specs.is_empty() {
+                return;
+            }
+            inner.current_row = inner.specs.len() - 1;
+            // Continuous scrolls to the maximum offset (document bottom); paged
+            // just shows the last row.
+            let target = if inner.continuous { max_scroll_px(&inner) } else { 0.0 };
+            inner.scroll_px = target;
+            (inner.continuous, target)
+        };
         if continuous {
             if let Some(window) = self.window.upgrade() {
-                window.set_scroll_y(scroll_target);
+                window.set_scroll_y(-target_px);
             }
-            self.request_render_row(row as i32);
+            self.request_current_row();
         } else {
             self.refresh_current_row();
             self.request_current_row();
@@ -377,18 +425,80 @@ impl Viewer {
         self.update_current_page();
     }
 
-    pub fn next_row(&self) {
-        if !self.inner.borrow().continuous {
-            let current = self.inner.borrow().current_row as i32;
-            self.go_to_row(current + 1);
-        }
+    /// Mouse-wheel navigation, invoked only when a page fits (continuous) or the
+    /// paged view is at an edge — both cases move between pages.
+    pub fn wheel_nav(&self, delta_y: f32) {
+        // A downward wheel (content moves up) carries a negative delta.
+        let dir = if delta_y < 0.0 { 1 } else { -1 };
+        self.page_jump(dir);
     }
 
-    pub fn prev_row(&self) {
-        if !self.inner.borrow().continuous {
-            let current = self.inner.borrow().current_row as i32;
-            self.go_to_row(current - 1);
+    /// Moves to the previous/next page boundary from the current position.
+    fn page_jump(&self, dir: i32) {
+        let target = {
+            let inner = self.inner.borrow();
+            if inner.specs.is_empty() {
+                return;
+            }
+            let last = inner.specs.len() as i32 - 1;
+            let row = if inner.continuous {
+                let row_height = row_height_px(&inner);
+                let ratio = if row_height > 0.0 { inner.scroll_px / row_height } else { 0.0 };
+                let floor = ratio.floor();
+                if dir > 0 {
+                    floor as i32 + 1
+                } else if ratio - floor > 0.01 {
+                    // Scrolled partway into a page: snap to that page's start.
+                    floor as i32
+                } else {
+                    floor as i32 - 1
+                }
+            } else {
+                inner.current_row as i32 + dir
+            };
+            row.clamp(0, last)
+        };
+        self.scroll_to_row(target as usize);
+    }
+
+    /// Adjusts the continuous scroll offset by a delta, clamped to the document.
+    fn scroll_by(&self, delta_px: f32) {
+        let target = {
+            let mut inner = self.inner.borrow_mut();
+            let target = (inner.scroll_px + delta_px).clamp(0.0, max_scroll_px(&inner));
+            inner.scroll_px = target;
+            target
+        };
+        if let Some(window) = self.window.upgrade() {
+            window.set_scroll_y(-target);
         }
+        self.update_current_page();
+    }
+
+    /// Moves so the given row is at the top: scrolls the ListView in continuous
+    /// mode, or swaps the shown row in paged mode.
+    fn scroll_to_row(&self, row: usize) {
+        let (continuous, target_px) = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.specs.is_empty() {
+                return;
+            }
+            let row = row.min(inner.specs.len() - 1);
+            inner.current_row = row;
+            let target_px = row as f32 * row_height_px(&inner);
+            inner.scroll_px = target_px;
+            (inner.continuous, target_px)
+        };
+        if continuous {
+            if let Some(window) = self.window.upgrade() {
+                window.set_scroll_y(-target_px);
+            }
+            self.request_current_row();
+        } else {
+            self.refresh_current_row();
+            self.request_current_row();
+        }
+        self.update_current_page();
     }
 
     fn set_zoom(&self, zoom: f32) {
@@ -525,26 +635,6 @@ impl Viewer {
         }
     }
 
-    fn go_to_row(&self, target: i32) {
-        let changed = {
-            let mut inner = self.inner.borrow_mut();
-            let count = inner.specs.len() as i32;
-            if count == 0 {
-                return;
-            }
-            let clamped = target.clamp(0, count - 1) as usize;
-            let changed = clamped != inner.current_row;
-            inner.current_row = clamped;
-            changed
-        };
-        if changed {
-            self.refresh_current_row();
-            self.request_current_row();
-            self.update_status();
-            self.update_current_page();
-        }
-    }
-
     /// Pushes the current row's data to the paged view.
     fn refresh_current_row(&self) {
         let index = self.inner.borrow().current_row;
@@ -613,14 +703,28 @@ impl Viewer {
         }
     }
 
-    /// Publishes the 1-based page number at the top of the view for the toolbar.
+    /// Publishes the page number shown by the toolbar. Normally the page at the
+    /// top of the view; at the very bottom of the document it reports the last
+    /// page, so "End" reads as the last page even in spread mode (where the top
+    /// row's left page would otherwise be one short).
     fn update_current_page(&self) {
         let page = {
             let inner = self.inner.borrow();
-            inner
-                .specs
-                .get(inner.current_row)
-                .map_or(0, |spec| spec.left as i32 + 1)
+            let last_row = inner.specs.len().saturating_sub(1);
+            let at_end = if inner.continuous {
+                let max = max_scroll_px(&inner);
+                max > 0.0 && inner.scroll_px >= max - 1.0
+            } else {
+                inner.current_row == last_row
+            };
+            if at_end {
+                inner.pages_pt.len() as i32
+            } else {
+                inner
+                    .specs
+                    .get(inner.current_row)
+                    .map_or(0, |spec| spec.left as i32 + 1)
+            }
         };
         if let Some(window) = self.window.upgrade() {
             window.set_current_page(page);
@@ -656,7 +760,7 @@ mod tests {
         for page in 0..5 {
             viewer.on_page_rendered(page, slint::Image::default());
         }
-        viewer.next_row();
+        viewer.nav_page(1);
         viewer.on_page_rendered(2, slint::Image::default());
     }
 

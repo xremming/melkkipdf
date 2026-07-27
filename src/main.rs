@@ -101,13 +101,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         let viewer = viewer.clone();
         move |mode| viewer.set_spread(mode)
     });
-    window.on_next_row({
+    window.on_nav_line({
         let viewer = viewer.clone();
-        move || viewer.next_row()
+        move |dir| viewer.nav_line(dir)
     });
-    window.on_prev_row({
+    window.on_nav_page({
         let viewer = viewer.clone();
-        move || viewer.prev_row()
+        move |dir| viewer.nav_page(dir)
+    });
+    window.on_nav_home({
+        let viewer = viewer.clone();
+        move || viewer.nav_home()
+    });
+    window.on_nav_end({
+        let viewer = viewer.clone();
+        move || viewer.nav_end()
+    });
+    window.on_wheel_nav({
+        let viewer = viewer.clone();
+        move |delta| viewer.wheel_nav(delta)
     });
 
     window.run()?;

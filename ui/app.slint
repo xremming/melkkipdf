@@ -223,8 +223,13 @@ export component MainWindow inherits Window {
     callback go-to-page(string);
     // Spread mode: 0 = single, 1 = odd, 2 = even.
     callback set-spread(int);
-    callback next-row();
-    callback prev-row();
+    // Navigation (dir -1 = up/back, +1 = down/forward).
+    callback nav-line(int);
+    callback nav-page(int);
+    callback nav-home();
+    callback nav-end();
+    // Mouse-wheel navigation between pages; argument is the wheel delta-y.
+    callback wheel-nav(float);
 
     title: "melkkipdf";
     preferred-width: 1000px;
@@ -256,14 +261,14 @@ export component MainWindow inherits Window {
             if (event.text == "1") { root.set-spread(0); return accept; }
             if (event.text == "2") { root.set-spread(1); return accept; }
             if (event.text == "3") { root.set-spread(2); return accept; }
-            if (event.text == Key.PageDown || event.text == Key.RightArrow || event.text == " ") {
-                root.next-row();
-                return accept;
-            }
-            if (event.text == Key.PageUp || event.text == Key.LeftArrow) {
-                root.prev-row();
-                return accept;
-            }
+            if (event.text == Key.UpArrow) { root.nav-line(-1); return accept; }
+            if (event.text == Key.DownArrow) { root.nav-line(1); return accept; }
+            if (event.text == Key.LeftArrow) { root.nav-page(-1); return accept; }
+            if (event.text == Key.RightArrow) { root.nav-page(1); return accept; }
+            if (event.text == Key.PageUp) { root.nav-page(-1); return accept; }
+            if (event.text == Key.PageDown || event.text == " ") { root.nav-page(1); return accept; }
+            if (event.text == Key.Home) { root.nav-home(); return accept; }
+            if (event.text == Key.End) { root.nav-end(); return accept; }
             return reject;
         }
 
@@ -376,11 +381,19 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if root.page-count > 0 && !root.continuous: ScrollView {
-                    PageRowView {
-                        page-row: root.current-row-content;
-                        density: root.density;
-                        row-height-pt: root.row-height-pt;
+                if root.page-count > 0 && !root.continuous: TouchArea {
+                    // Only receives the wheel when the inner ScrollView rejects it
+                    // (at an edge, or when the page fits), which is when we page.
+                    scroll-event(event) => {
+                        root.wheel-nav(event.delta-y / 1px);
+                        return accept;
+                    }
+                    ScrollView {
+                        PageRowView {
+                            page-row: root.current-row-content;
+                            density: root.density;
+                            row-height-pt: root.row-height-pt;
+                        }
                     }
                 }
             }
