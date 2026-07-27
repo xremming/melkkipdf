@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "A fast, minimal PDF viewer for Linux, inspired by SumatraPDF."
 
+[features]
+# Exposes the headless `testing::Harness` used by the integration tests.
+# Enable with `cargo test --features testing`.
+testing = []
+
 [dependencies]
 slint = "1.17"
 mupdf = "0.8"

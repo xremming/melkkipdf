@@ -736,7 +736,6 @@ impl Viewer {
 mod tests {
     use super::{Spread, Viewer, build_row_specs, page_locations};
     use crate::MainWindow;
-    use slint::ComponentHandle;
 
     fn as_pairs(specs: &[super::RowSpec]) -> Vec<(usize, Option<usize>)> {
         specs.iter().map(|s| (s.left, s.right)).collect()
