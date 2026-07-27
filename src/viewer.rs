@@ -180,13 +180,17 @@ struct Inner {
     page_loc: Vec<(usize, bool)>,
     ref_w_pt: f32,
     ref_h_pt: f32,
+    /// Rendered sidebar thumbnails, indexed by page (empty until rendered).
+    thumb_images: Vec<Image>,
 }
 
 pub struct Viewer {
     inner: RefCell<Inner>,
     model: Rc<VecModel<PageRow>>,
+    thumb_model: Rc<VecModel<PageRow>>,
     window: Weak<MainWindow>,
     sender: Sender<RenderRequest>,
+    thumb_sender: Sender<i32>,
     control: RenderControl,
 }
 
@@ -196,10 +200,14 @@ impl Viewer {
         pages_pt: Vec<(f32, f32)>,
         scale_factor: f32,
         sender: Sender<RenderRequest>,
+        thumb_sender: Sender<i32>,
         control: RenderControl,
     ) -> Rc<Self> {
+        let page_count = pages_pt.len();
         let model = Rc::new(VecModel::<PageRow>::default());
         window.set_rows(ModelRc::from(model.clone()));
+        let thumb_model = Rc::new(VecModel::<PageRow>::default());
+        window.set_thumb_rows(ModelRc::from(thumb_model.clone()));
 
         let viewer = Rc::new(Self {
             inner: RefCell::new(Inner {
@@ -220,15 +228,17 @@ impl Viewer {
                 page_loc: Vec::new(),
                 ref_w_pt: 0.0,
                 ref_h_pt: 0.0,
+                thumb_images: vec![Image::default(); page_count],
             }),
             model,
+            thumb_model,
             window: window.as_weak(),
             sender,
+            thumb_sender,
             control,
         });
 
-        let page_count = viewer.inner.borrow().pages_pt.len() as i32;
-        window.set_page_count(page_count);
+        window.set_page_count(page_count as i32);
         window.set_spread_mode(spread_index(Spread::None));
 
         viewer.build_layout();
@@ -476,18 +486,89 @@ impl Viewer {
     /// Jumps to a 1-based page typed into the toolbar field. Invalid input is
     /// ignored.
     pub fn go_to_page(&self, text: &str) {
-        let Ok(requested) = text.trim().parse::<i32>() else {
-            return;
-        };
+        if let Ok(requested) = text.trim().parse::<i32>() {
+            self.nav_to_page(requested - 1);
+        }
+    }
+
+    /// Navigates to a 0-based page (from the outline or a thumbnail click).
+    pub fn nav_to_page(&self, page: i32) {
         let row = {
             let inner = self.inner.borrow();
             if inner.page_loc.is_empty() {
                 return;
             }
-            let page = (requested - 1).clamp(0, inner.page_loc.len() as i32 - 1) as usize;
+            let page = page.clamp(0, inner.page_loc.len() as i32 - 1) as usize;
             inner.page_loc[page].0
         };
         self.scroll_to_row(row);
+    }
+
+    /// Installs a rendered thumbnail into the sidebar's thumbnail model.
+    pub fn on_thumbnail_rendered(&self, page: i32, image: Image) {
+        let index = page as usize;
+        let (row, is_right, width_pt, height_pt) = {
+            let mut inner = self.inner.borrow_mut();
+            let Some(&(row, is_right)) = inner.page_loc.get(index) else {
+                return;
+            };
+            if index < inner.thumb_images.len() {
+                inner.thumb_images[index] = image.clone();
+            }
+            let (width_pt, height_pt) = inner.pages_pt[index];
+            (row, is_right, width_pt, height_pt)
+        };
+        if let Some(mut page_row) = self.thumb_model.row_data(row) {
+            let entry = PageEntry { page, width_pt, height_pt, image };
+            if is_right {
+                page_row.right = entry;
+            } else {
+                page_row.left = entry;
+            }
+            self.thumb_model.set_row_data(row, page_row);
+        }
+    }
+
+    /// Requests thumbnails for a visible thumbnail row's pages. The thumbnail
+    /// worker renders each page at most once, so re-requests are cheap.
+    pub fn request_thumbnail_row(&self, row: i32) {
+        let inner = self.inner.borrow();
+        if let Some(spec) = inner.specs.get(row.max(0) as usize) {
+            let _ = self.thumb_sender.send(spec.left as i32);
+            if let Some(right) = spec.right {
+                let _ = self.thumb_sender.send(right as i32);
+            }
+        }
+    }
+
+    /// Rebuilds the thumbnail model from the current spread specs, reusing any
+    /// already-rendered thumbnails.
+    fn build_thumb_model(&self) {
+        let rows: Vec<PageRow> = {
+            let inner = self.inner.borrow();
+            inner
+                .specs
+                .iter()
+                .map(|spec| {
+                    let left = Self::thumb_entry(&inner, spec.left);
+                    match spec.right {
+                        Some(right) => PageRow {
+                            left,
+                            right: Self::thumb_entry(&inner, right),
+                            has_right: true,
+                        },
+                        None => PageRow { left, right: Self::placeholder(), has_right: false },
+                    }
+                })
+                .collect()
+        };
+        self.thumb_model.set_vec(rows);
+    }
+
+    /// A thumbnail slot carrying the page's size and (possibly empty) thumbnail.
+    fn thumb_entry(inner: &Inner, page: usize) -> PageEntry {
+        let (width_pt, height_pt) = inner.pages_pt[page];
+        PageEntry { page: page as i32, width_pt, height_pt, image: inner.thumb_images[page].clone() }
     }
 
     /// Arrow up/down (dir -1/+1). Continuous mode always scrolls; paged mode
@@ -786,6 +867,7 @@ impl Viewer {
         self.request_current_row_if_paged();
         self.update_current_page();
         self.push_paged_offsets();
+        self.build_thumb_model();
     }
 
     fn build_model_rows(&self) -> Vec<PageRow> {
@@ -1008,7 +1090,7 @@ mod tests {
         };
         let (sender, _receiver) = std::sync::mpsc::channel();
         let pages = vec![(600.0, 800.0); 5];
-        let viewer = Viewer::new(&window, pages, 1.0, sender, crate::render::RenderControl::inert());
+        let viewer = Viewer::new(&window, pages, 1.0, sender, std::sync::mpsc::channel().0, crate::render::RenderControl::inert());
 
         // Switch to paged mode, then deliver renders — including enough to force
         // the eviction path, which also calls back into the viewer.
@@ -1027,7 +1109,7 @@ mod tests {
             return;
         };
         let (sender, _receiver) = std::sync::mpsc::channel();
-        let viewer = Viewer::new(&window, vec![(600.0, 800.0); 10], 1.0, sender, crate::render::RenderControl::inert());
+        let viewer = Viewer::new(&window, vec![(600.0, 800.0); 10], 1.0, sender, std::sync::mpsc::channel().0, crate::render::RenderControl::inert());
         // Paged mode avoids touching the scroll offset property.
         viewer.set_continuous(false);
 

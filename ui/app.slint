@@ -17,6 +17,13 @@ export struct PageRow {
     has-right: bool,
 }
 
+// One entry in the document outline (table of contents).
+export struct OutlineItem {
+    title: string,
+    page: int,
+    depth: int,
+}
+
 // A single page: white paper with the rendered image on top. Sized from the
 // page's points times the shared density.
 component PageImageView inherits Rectangle {
@@ -36,6 +43,33 @@ component PageImageView inherits Rectangle {
     if entry.image.width == 0: Spinner {
         width: min(36px, parent.width / 4);
         height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        indeterminate: true;
+    }
+}
+
+// A single fixed-size page thumbnail for the sidebar. The image is letterboxed
+// into a uniform box so every thumbnail row is the same height (which the
+// sidebar ListView needs for stable scrolling).
+component ThumbView inherits Rectangle {
+    in property <PageEntry> entry;
+    width: 96px;
+    height: 128px;
+    background: white;
+    border-width: 1px;
+    border-color: #555555;
+
+    Image {
+        source: entry.image;
+        width: 100%;
+        height: 100%;
+        image-fit: contain;
+    }
+
+    if entry.image.width == 0: Spinner {
+        width: 24px;
+        height: 24px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         indeterminate: true;
@@ -188,6 +222,20 @@ export component MainWindow inherits Window {
     // Shown in the document area only when there are no pages (errors/usage).
     in property <string> status;
 
+    // Sidebar: the document outline, thumbnail rows (grouped like the current
+    // spread mode), and which tab is showing (0 = outline, 1 = pages).
+    in property <[OutlineItem]> outline;
+    in property <[PageRow]> thumb-rows;
+    in-out property <bool> sidebar-open: true;
+    in-out property <int> sidebar-tab;
+
+    callback toggle-sidebar();
+    // Jump to a 0-based page (from the outline or a thumbnail).
+    callback go-to-page-index(int);
+    // A visible thumbnail row wants its pages rendered (row index).
+    callback request-thumbnail-row(int);
+    // Invoked from Rust when a page thumbnail has rendered (page index, image).
+    callback thumbnail-rendered(int, image);
     callback request-render-row(int);
     callback page-rendered(int, image);
     callback viewport-resized(length, length);
@@ -272,6 +320,32 @@ export component MainWindow inherits Window {
                     padding-right: 8px;
                     spacing: 6px;
 
+                    // Sidebar toggle (recessed while the sidebar is open).
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 34px;
+                            height: 28px;
+                            border-width: 1px;
+                            border-color: #5a5a5a;
+                            border-radius: 5px;
+                            background: (root.sidebar-open || sidebar-toggle.pressed)
+                                ? #252525
+                                : (sidebar-toggle.has-hover ? #505050 : #454545);
+                            Text {
+                                text: "☰";
+                                color: #dddddd;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            sidebar-toggle := TouchArea {
+                                clicked => {
+                                    root.toggle-sidebar();
+                                }
+                            }
+                        }
+                    }
+
                     // Action groups: `current: -1` so no segment stays selected;
                     // they just fire on click (with press feedback).
                     VerticalLayout {
@@ -352,8 +426,113 @@ export component MainWindow inherits Window {
                 }
             }
 
-            content := Rectangle {
-                if root.page-count == 0: VerticalLayout {
+            HorizontalLayout {
+                if root.sidebar-open: Rectangle {
+                    width: 260px;
+                    background: #2a2a2a;
+
+                    VerticalLayout {
+                        // Tab bar.
+                        HorizontalLayout {
+                            height: 34px;
+                            Rectangle {
+                                background: root.sidebar-tab == 0 ? #3a3a3a : #2a2a2a;
+                                Text {
+                                    text: "Outline";
+                                    color: #dddddd;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => {
+                                        root.sidebar-tab = 0;
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                background: root.sidebar-tab == 1 ? #3a3a3a : #2a2a2a;
+                                Text {
+                                    text: "Pages";
+                                    color: #dddddd;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => {
+                                        root.sidebar-tab = 1;
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            height: 1px;
+                            background: #444444;
+                        }
+
+                        // Outline entries, indented by depth.
+                        if root.sidebar-tab == 0: ListView {
+                            for item in root.outline: Rectangle {
+                                height: 26px;
+                                background: outline-touch.has-hover ? #383838 : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px + item.depth * 14px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: item.title;
+                                        color: #cccccc;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                                outline-touch := TouchArea {
+                                    clicked => {
+                                        root.go-to-page-index(item.page);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Page thumbnails, grouped like the current spread mode.
+                        if root.sidebar-tab == 1: ListView {
+                            for entry[idx] in root.thumb-rows: Rectangle {
+                                height: 160px;
+                                background: thumb-touch.has-hover ? #333333 : transparent;
+                                VerticalLayout {
+                                    padding-top: 6px;
+                                    spacing: 2px;
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 4px;
+                                        ThumbView {
+                                            entry: entry.left;
+                                        }
+                                        if entry.has-right: ThumbView {
+                                            entry: entry.right;
+                                        }
+                                    }
+                                    Text {
+                                        text: entry.has-right
+                                            ? "\{entry.left.page + 1}–\{entry.right.page + 1}"
+                                            : "\{entry.left.page + 1}";
+                                        color: #999999;
+                                        horizontal-alignment: center;
+                                    }
+                                }
+                                thumb-touch := TouchArea {
+                                    clicked => {
+                                        root.go-to-page-index(entry.left.page);
+                                    }
+                                }
+                                init => {
+                                    root.request-thumbnail-row(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                content := Rectangle {
+                    if root.page-count == 0: VerticalLayout {
                     alignment: center;
                     Text {
                         text: root.status;
@@ -415,4 +594,5 @@ export component MainWindow inherits Window {
             }
         }
     }
+}
 }

@@ -231,6 +231,45 @@ fn render_page(
     Ok(pixmap_to_buffer(&pixmap))
 }
 
+/// Target width, in pixels, for sidebar page thumbnails.
+const THUMB_WIDTH: f32 = 150.0;
+
+/// Spawns a separate worker that renders small page thumbnails on demand. It is
+/// deliberately independent of the main render pipeline: thumbnails are cheap,
+/// persistent (never aborted or epoch-dropped), and each page is rendered at
+/// most once. Send it 0-based page indices; results arrive via the window's
+/// `thumbnail-rendered` callback.
+pub fn spawn_thumbnails(path: String, window: Weak<MainWindow>) -> Sender<i32> {
+    let (sender, receiver) = mpsc::channel::<i32>();
+    thread::spawn(move || {
+        let Ok(document) = Document::open(&path) else {
+            return;
+        };
+        let mut done: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        while let Ok(page) = receiver.recv() {
+            if !done.insert(page) {
+                continue;
+            }
+            if let Ok(buffer) = render_thumbnail(&document, page) {
+                let _ = window.upgrade_in_event_loop(move |window| {
+                    window.invoke_thumbnail_rendered(page, Image::from_rgb8(buffer));
+                });
+            }
+        }
+    });
+    sender
+}
+
+/// Renders one page at thumbnail size.
+fn render_thumbnail(document: &Document, page: i32) -> Result<PageBuffer, Error> {
+    let page = document.load_page(page)?;
+    let width = page.bounds()?.width().max(1.0);
+    let scale = THUMB_WIDTH / width;
+    let matrix = Matrix::new_scale(scale, scale);
+    let pixmap = page.to_pixmap(&matrix, &Colorspace::device_rgb(), false, true)?;
+    Ok(pixmap_to_buffer(&pixmap))
+}
+
 /// Copies a pixmap's RGB samples into a tightly-packed shared buffer. MuPDF rows
 /// can be padded, so we copy row by row using the pixmap stride.
 fn pixmap_to_buffer(pixmap: &Pixmap) -> PageBuffer {

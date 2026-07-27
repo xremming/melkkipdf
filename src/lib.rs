@@ -30,6 +30,28 @@ pub fn read_page_sizes(path: &str) -> Result<Vec<(f32, f32)>, mupdf::Error> {
     Ok(sizes)
 }
 
+/// Reads the document outline (bookmarks) as a flat list of
+/// `(title, 0-based page, depth)`, depth-first. Returns empty on any error or
+/// when the document has no outline.
+pub fn read_outline(path: &str) -> Vec<(String, i32, i32)> {
+    fn flatten(outlines: &[mupdf::Outline], depth: i32, out: &mut Vec<(String, i32, i32)>) {
+        for outline in outlines {
+            let page = outline.dest.as_ref().map_or(-1, |dest| dest.loc.page_number as i32);
+            out.push((outline.title.clone(), page, depth));
+            flatten(&outline.down, depth + 1, out);
+        }
+    }
+    let Ok(document) = Document::open(path) else {
+        return Vec::new();
+    };
+    let Ok(outlines) = document.outlines() else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    flatten(&outlines, 0, &mut items);
+    items
+}
+
 /// Opens the window for `path` (or a usage message when `None`) and runs the
 /// event loop until the window closes.
 pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
@@ -55,9 +77,17 @@ pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
         }
     };
 
+    // Populate the outline (bookmarks) sidebar.
+    let outline: Vec<OutlineItem> = read_outline(&path)
+        .into_iter()
+        .map(|(title, page, depth)| OutlineItem { title: title.into(), page, depth })
+        .collect();
+    window.set_outline(slint::ModelRc::new(slint::VecModel::from(outline)));
+
     let scale_factor = window.window().scale_factor();
-    let (sender, control) = render::spawn(path, window.as_weak());
-    let viewer = Viewer::new(&window, pages_pt, scale_factor, sender, control);
+    let (sender, control) = render::spawn(path.clone(), window.as_weak());
+    let thumb_sender = render::spawn_thumbnails(path, window.as_weak());
+    let viewer = Viewer::new(&window, pages_pt, scale_factor, sender, thumb_sender, control);
     wire_callbacks(&window, &viewer);
 
     window.run()?;
@@ -137,6 +167,26 @@ fn wire_callbacks(window: &MainWindow, viewer: &Rc<Viewer>) {
     window.on_paged_scroll({
         let viewer = viewer.clone();
         move |delta_x, delta_y, shift| viewer.paged_scroll(delta_x, delta_y, shift)
+    });
+    window.on_go_to_page_index({
+        let viewer = viewer.clone();
+        move |page| viewer.nav_to_page(page)
+    });
+    window.on_request_thumbnail_row({
+        let viewer = viewer.clone();
+        move |row| viewer.request_thumbnail_row(row)
+    });
+    window.on_thumbnail_rendered({
+        let viewer = viewer.clone();
+        move |page, image| viewer.on_thumbnail_rendered(page, image)
+    });
+    window.on_toggle_sidebar({
+        let window = window.as_weak();
+        move || {
+            if let Some(window) = window.upgrade() {
+                window.set_sidebar_open(!window.get_sidebar_open());
+            }
+        }
     });
 }
 

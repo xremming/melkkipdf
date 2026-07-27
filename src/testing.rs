@@ -21,6 +21,8 @@ pub struct Harness {
     // Kept so render requests the viewer sends have a live receiver; tests can
     // drain it to see which pages were requested and in what order.
     requests: Receiver<RenderRequest>,
+    // Kept alive so thumbnail requests have a receiver.
+    _thumb_requests: Receiver<i32>,
 }
 
 impl Harness {
@@ -34,8 +36,10 @@ impl Harness {
     pub fn with_pages(pages: Vec<(f32, f32)>) -> Option<Self> {
         let window = MainWindow::new().ok()?;
         let (sender, requests) = mpsc::channel();
-        let viewer = Viewer::new(&window, pages, 1.0, sender, RenderControl::inert());
-        Some(Self { window, viewer, requests })
+        let (thumb_sender, _thumb_requests) = mpsc::channel();
+        let viewer =
+            Viewer::new(&window, pages, 1.0, sender, thumb_sender, RenderControl::inert());
+        Some(Self { window, viewer, requests, _thumb_requests })
     }
 
     /// Drains and returns the 0-based page indices the viewer has requested for
