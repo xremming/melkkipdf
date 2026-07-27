@@ -3,6 +3,7 @@ name = "melkkipdf"
 version = "0.1.0"
 edition = "2024"
 description = "A fast, minimal PDF viewer for Linux, inspired by SumatraPDF."
+license = "AGPL-3.0-or-later"
 
 [features]
 # Exposes the headless `testing::Harness` used by the integration tests.
