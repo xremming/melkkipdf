@@ -71,6 +71,21 @@ fn switching_to_paged_keeps_the_position() {
 }
 
 #[test]
+fn switching_to_continuous_keeps_the_position() {
+    let Some(h) = setup(50) else {
+        return;
+    };
+    h.viewer.fit_width();
+    h.viewer.set_continuous(false);
+    h.viewer.go_to_page("30");
+    assert_eq!(h.current_page(), 30);
+    h.viewer.set_continuous(true);
+    assert_eq!(h.current_page(), 30, "continuous mode should keep the reading position");
+    // The list is scrolled down to that row, not reset to the top.
+    assert!(h.scroll_y() < 0.0, "scroll offset should follow the page, not reset to 0");
+}
+
+#[test]
 fn zoom_in_then_out_returns_to_the_start() {
     let Some(h) = setup(20) else {
         return;

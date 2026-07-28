@@ -349,8 +349,9 @@ impl Viewer {
         self.apply_fit();
     }
 
-    /// Selects continuous scroll or one-row-per-screen. Paged mode starts at the
-    /// row the continuous view was scrolled to, so switching keeps the position.
+    /// Selects continuous scroll or one-row-per-screen. Either direction keeps
+    /// the reading position: paged mode tracks `current_row` (set on scroll), and
+    /// returning to continuous scrolls the list back to that same row.
     pub fn set_continuous(&self, continuous: bool) {
         if self.inner.borrow().continuous == continuous {
             return;
@@ -359,7 +360,26 @@ impl Viewer {
         if let Some(window) = self.window.upgrade() {
             window.set_continuous(continuous);
         }
-        if !continuous {
+        if continuous {
+            // Align the continuous scroll offset to the row paged mode left off
+            // on, otherwise the list snaps back to its previous position.
+            let target_px = {
+                let mut inner = self.inner.borrow_mut();
+                let target = (inner.current_row as f32 * row_height_px(&inner))
+                    .clamp(0.0, max_scroll_px(&inner));
+                inner.scroll_px = target;
+                target
+            };
+            if let Some(window) = self.window.upgrade() {
+                window.set_scroll_y(-target_px);
+            }
+        } else {
+            // A freshly shown page starts at its top.
+            {
+                let mut inner = self.inner.borrow_mut();
+                inner.paged_scroll_x = 0.0;
+                inner.paged_scroll_y = 0.0;
+            }
             self.refresh_current_row();
             self.request_current_row();
         }
