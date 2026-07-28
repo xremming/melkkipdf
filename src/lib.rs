@@ -7,11 +7,13 @@
 mod render;
 mod viewer;
 
+use std::cell::{Cell, RefCell};
 use std::error::Error;
+use std::path::Path;
 use std::rc::Rc;
 
 use mupdf::Document;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Weak};
 
 pub use viewer::Viewer;
 
@@ -52,133 +54,204 @@ pub fn read_outline(path: &str) -> Vec<(String, i32, i32)> {
     items
 }
 
-/// Opens the window for `path` (or a usage message when `None`) and runs the
-/// event loop until the window closes.
+/// Holds the live window and the viewer for the document currently open. The
+/// viewer is swapped out (not the window) when a new PDF is opened, so all the
+/// UI callbacks dispatch through here rather than capturing a fixed viewer.
+struct App {
+    window: Weak<MainWindow>,
+    viewer: RefCell<Option<Rc<Viewer>>>,
+    /// Last viewport size reported by the window. A viewer created after the
+    /// window is already shown never sees a `viewport-resized` event (the size
+    /// did not change), so we replay the last one into it.
+    viewport: Cell<(f32, f32)>,
+}
+
+impl App {
+    /// Runs `action` on the current viewer, if a document is open.
+    fn with_viewer(&self, action: impl FnOnce(&Viewer)) {
+        if let Some(viewer) = self.viewer.borrow().as_ref() {
+            action(viewer);
+        }
+    }
+
+    /// Loads `path` into the window, replacing any document already open. On a
+    /// read error the message is shown and the current document (if any) is
+    /// kept. Dropping the previous viewer closes its render channels, so the old
+    /// worker threads shut themselves down.
+    fn open(&self, path: String) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+
+        let pages_pt = match read_page_sizes(&path) {
+            Ok(sizes) if !sizes.is_empty() => sizes,
+            Ok(_) => {
+                window.set_status("Document has no pages.".into());
+                return;
+            }
+            Err(err) => {
+                window.set_status(format!("Failed to open {path}: {err}").into());
+                return;
+            }
+        };
+
+        // Populate the outline (bookmarks) sidebar.
+        let outline: Vec<OutlineItem> = read_outline(&path)
+            .into_iter()
+            .map(|(title, page, depth)| OutlineItem { title: title.into(), page, depth })
+            .collect();
+        window.set_outline(slint::ModelRc::new(slint::VecModel::from(outline)));
+
+        let scale_factor = window.window().scale_factor();
+        let (sender, control) = render::spawn(path.clone(), window.as_weak());
+        let thumb_sender = render::spawn_thumbnails(path.clone(), window.as_weak());
+        let viewer = Viewer::new(&window, pages_pt, scale_factor, sender, thumb_sender, control);
+
+        // Replay the current viewport so the fresh viewer lays out immediately
+        // instead of waiting for a resize.
+        let (view_w, view_h) = self.viewport.get();
+        if view_w > 0.0 && view_h > 0.0 {
+            viewer.set_viewport(view_w, view_h);
+        }
+
+        let name = Path::new(&path).file_name().map_or(path.as_str(), |n| n.to_str().unwrap_or(&path));
+        window.set_doc_title(name.into());
+
+        // Dropping the previous viewer here shuts down its render workers.
+        *self.viewer.borrow_mut() = Some(viewer);
+    }
+
+    /// Prompts for a PDF with a native file dialog and opens the chosen one. The
+    /// picker runs as a future on Slint's event loop so the UI stays responsive.
+    fn pick_and_open(self: &Rc<Self>) {
+        let app = self.clone();
+        let _ = slint::spawn_local(async move {
+            let file = rfd::AsyncFileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .set_title("Open PDF")
+                .pick_file()
+                .await;
+            if let Some(file) = file {
+                app.open(file.path().to_string_lossy().into_owned());
+            }
+        });
+    }
+}
+
+/// Opens the window for `path` (or an empty window with the open button when
+/// `None`) and runs the event loop until the window closes.
 pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
     let window = MainWindow::new()?;
+    let app = Rc::new(App {
+        window: window.as_weak(),
+        viewer: RefCell::new(None),
+        viewport: Cell::new((0.0, 0.0)),
+    });
+    wire_callbacks(&window, &app);
 
-    let Some(path) = path else {
-        window.set_status("Usage: melkkipdf <file.pdf>".into());
-        window.run()?;
-        return Ok(());
-    };
-
-    let pages_pt = match read_page_sizes(&path) {
-        Ok(sizes) if !sizes.is_empty() => sizes,
-        Ok(_) => {
-            window.set_status("Document has no pages.".into());
-            window.run()?;
-            return Ok(());
-        }
-        Err(err) => {
-            window.set_status(format!("Failed to open {path}: {err}").into());
-            window.run()?;
-            return Ok(());
-        }
-    };
-
-    // Populate the outline (bookmarks) sidebar.
-    let outline: Vec<OutlineItem> = read_outline(&path)
-        .into_iter()
-        .map(|(title, page, depth)| OutlineItem { title: title.into(), page, depth })
-        .collect();
-    window.set_outline(slint::ModelRc::new(slint::VecModel::from(outline)));
-
-    let scale_factor = window.window().scale_factor();
-    let (sender, control) = render::spawn(path.clone(), window.as_weak());
-    let thumb_sender = render::spawn_thumbnails(path, window.as_weak());
-    let viewer = Viewer::new(&window, pages_pt, scale_factor, sender, thumb_sender, control);
-    wire_callbacks(&window, &viewer);
+    if let Some(path) = path {
+        app.open(path);
+    } else {
+        window.set_status("Open a PDF to get started.".into());
+    }
 
     window.run()?;
     Ok(())
 }
 
-/// Connects the window's callbacks to the viewer.
-fn wire_callbacks(window: &MainWindow, viewer: &Rc<Viewer>) {
+/// Connects the window's callbacks to the app, dispatching each to the viewer of
+/// the document currently open.
+fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
+    window.on_open_document({
+        let app = app.clone();
+        move || app.pick_and_open()
+    });
     window.on_request_render_row({
-        let viewer = viewer.clone();
-        move |row| viewer.request_render_row(row)
+        let app = app.clone();
+        move |row| app.with_viewer(|v| v.request_render_row(row))
     });
     window.on_page_rendered({
-        let viewer = viewer.clone();
-        move |page, image| viewer.on_page_rendered(page, image)
+        let app = app.clone();
+        move |page, image| app.with_viewer(|v| v.on_page_rendered(page, image.clone()))
     });
     window.on_viewport_resized({
-        let viewer = viewer.clone();
-        move |width, height| viewer.set_viewport(width, height)
+        let app = app.clone();
+        move |width, height| {
+            app.viewport.set((width, height));
+            app.with_viewer(|v| v.set_viewport(width, height));
+        }
     });
     window.on_zoom_in({
-        let viewer = viewer.clone();
-        move || viewer.zoom_in()
+        let app = app.clone();
+        move || app.with_viewer(|v| v.zoom_in())
     });
     window.on_zoom_out({
-        let viewer = viewer.clone();
-        move || viewer.zoom_out()
+        let app = app.clone();
+        move || app.with_viewer(|v| v.zoom_out())
     });
     window.on_zoom_reset({
-        let viewer = viewer.clone();
-        move || viewer.zoom_reset()
+        let app = app.clone();
+        move || app.with_viewer(|v| v.zoom_reset())
     });
     window.on_fit_width({
-        let viewer = viewer.clone();
-        move || viewer.fit_width()
+        let app = app.clone();
+        move || app.with_viewer(|v| v.fit_width())
     });
     window.on_fit_page({
-        let viewer = viewer.clone();
-        move || viewer.fit_page()
+        let app = app.clone();
+        move || app.with_viewer(|v| v.fit_page())
     });
     window.on_toggle_continuous({
-        let viewer = viewer.clone();
-        move || viewer.toggle_continuous()
+        let app = app.clone();
+        move || app.with_viewer(|v| v.toggle_continuous())
     });
     window.on_set_continuous({
-        let viewer = viewer.clone();
-        move |continuous| viewer.set_continuous(continuous)
+        let app = app.clone();
+        move |continuous| app.with_viewer(|v| v.set_continuous(continuous))
     });
     window.on_scrolled({
-        let viewer = viewer.clone();
-        move |offset| viewer.scrolled(offset)
+        let app = app.clone();
+        move |offset| app.with_viewer(|v| v.scrolled(offset))
     });
     window.on_go_to_page({
-        let viewer = viewer.clone();
-        move |text| viewer.go_to_page(text.as_str())
+        let app = app.clone();
+        move |text| app.with_viewer(|v| v.go_to_page(text.as_str()))
     });
     window.on_set_spread({
-        let viewer = viewer.clone();
-        move |mode| viewer.set_spread(mode)
+        let app = app.clone();
+        move |mode| app.with_viewer(|v| v.set_spread(mode))
     });
     window.on_nav_line({
-        let viewer = viewer.clone();
-        move |dir| viewer.nav_line(dir)
+        let app = app.clone();
+        move |dir| app.with_viewer(|v| v.nav_line(dir))
     });
     window.on_nav_page({
-        let viewer = viewer.clone();
-        move |dir| viewer.nav_page(dir)
+        let app = app.clone();
+        move |dir| app.with_viewer(|v| v.nav_page(dir))
     });
     window.on_nav_home({
-        let viewer = viewer.clone();
-        move || viewer.nav_home()
+        let app = app.clone();
+        move || app.with_viewer(|v| v.nav_home())
     });
     window.on_nav_end({
-        let viewer = viewer.clone();
-        move || viewer.nav_end()
+        let app = app.clone();
+        move || app.with_viewer(|v| v.nav_end())
     });
     window.on_paged_scroll({
-        let viewer = viewer.clone();
-        move |delta_x, delta_y, shift| viewer.paged_scroll(delta_x, delta_y, shift)
+        let app = app.clone();
+        move |delta_x, delta_y, shift| app.with_viewer(|v| v.paged_scroll(delta_x, delta_y, shift))
     });
     window.on_go_to_page_index({
-        let viewer = viewer.clone();
-        move |page| viewer.nav_to_page(page)
+        let app = app.clone();
+        move |page| app.with_viewer(|v| v.nav_to_page(page))
     });
     window.on_request_thumbnail_row({
-        let viewer = viewer.clone();
-        move |row| viewer.request_thumbnail_row(row)
+        let app = app.clone();
+        move |row| app.with_viewer(|v| v.request_thumbnail_row(row))
     });
     window.on_thumbnail_rendered({
-        let viewer = viewer.clone();
-        move |page, image| viewer.on_thumbnail_rendered(page, image)
+        let app = app.clone();
+        move |page, image| app.with_viewer(|v| v.on_thumbnail_rendered(page, image.clone()))
     });
     window.on_toggle_sidebar({
         let window = window.as_weak();

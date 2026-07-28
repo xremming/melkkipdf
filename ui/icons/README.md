@@ -8,6 +8,7 @@ the Apache License 2.0, and are used here under those terms.
 | ------------------ | ------------------------------------------ |
 | `continuous.svg`   | `secondaryToolbarButton-scrollVertical.svg` |
 | `menu.svg`         | `toolbarButton-viewsManagerToggle.svg`      |
+| `open.svg`         | `toolbarButton-openFile.svg`                |
 | `paged.svg`        | `secondaryToolbarButton-scrollPage.svg`     |
 | `spread-even.svg`  | `secondaryToolbarButton-spreadEven.svg`     |
 | `spread-odd.svg`   | `secondaryToolbarButton-spreadOdd.svg`      |

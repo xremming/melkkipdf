@@ -249,6 +249,11 @@ export component MainWindow inherits Window {
     in-out property <bool> sidebar-open: true;
     in-out property <int> sidebar-tab;
 
+    // The name of the open document, shown in the window title bar.
+    in property <string> doc-title;
+
+    // Open a new PDF (prompts for a file with a native picker).
+    callback open-document();
     callback toggle-sidebar();
     // Jump to a 0-based page (from the outline or a thumbnail).
     callback go-to-page-index(int);
@@ -288,7 +293,7 @@ export component MainWindow inherits Window {
     in property <length> paged-content-w;
     in property <length> paged-content-h;
 
-    title: "melkkipdf";
+    title: root.doc-title == "" ? "melkkipdf" : root.doc-title + " — melkkipdf";
     preferred-width: 1000px;
     preferred-height: 1000px;
     forward-focus: key-handler;
@@ -339,6 +344,32 @@ export component MainWindow inherits Window {
                     padding-left: 8px;
                     padding-right: 8px;
                     spacing: 6px;
+
+                    // Open a different PDF.
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 34px;
+                            height: 28px;
+                            border-width: 1px;
+                            border-color: #5a5a5a;
+                            border-radius: 5px;
+                            background: open-button.pressed
+                                ? #252525
+                                : (open-button.has-hover ? #505050 : #454545);
+                            Image {
+                                source: @image-url("icons/open.svg");
+                                width: 18px;
+                                height: 18px;
+                                colorize: open-button.pressed ? #ffffff : #dddddd;
+                            }
+                            open-button := TouchArea {
+                                clicked => {
+                                    root.open-document();
+                                }
+                            }
+                        }
+                    }
 
                     // Sidebar toggle (recessed while the sidebar is open).
                     VerticalLayout {
