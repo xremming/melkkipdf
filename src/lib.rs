@@ -114,7 +114,8 @@ impl App {
             viewer.set_viewport(view_w, view_h);
         }
 
-        let name = Path::new(&path).file_name().map_or(path.as_str(), |n| n.to_str().unwrap_or(&path));
+        let name =
+            Path::new(&path).file_name().map_or(path.as_str(), |n| n.to_str().unwrap_or(&path));
         window.set_doc_title(name.into());
 
         // Dropping the previous viewer here shuts down its render workers.

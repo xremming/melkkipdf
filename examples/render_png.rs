@@ -17,12 +17,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let document = Document::open(&input)?;
     let page = document.load_page(page_no)?;
     // Match the viewer: render opaque on white (no alpha).
-    let pixmap = page.to_pixmap(
-        &Matrix::new_scale(1.5, 1.5),
-        &Colorspace::device_rgb(),
-        false,
-        true,
-    )?;
+    let pixmap =
+        page.to_pixmap(&Matrix::new_scale(1.5, 1.5), &Colorspace::device_rgb(), false, true)?;
     pixmap.save_as(&output, mupdf::pixmap::ImageFormat::PNG)?;
 
     println!(

@@ -37,8 +37,7 @@ impl Harness {
         let window = MainWindow::new().ok()?;
         let (sender, requests) = mpsc::channel();
         let (thumb_sender, _thumb_requests) = mpsc::channel();
-        let viewer =
-            Viewer::new(&window, pages, 1.0, sender, thumb_sender, RenderControl::inert());
+        let viewer = Viewer::new(&window, pages, 1.0, sender, thumb_sender, RenderControl::inert());
         Some(Self { window, viewer, requests, _thumb_requests })
     }
 

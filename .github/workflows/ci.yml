@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the running checks irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup component add rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # mupdf-sys generates its bindings with bindgen, which needs libclang,
+      # and the viewer links fontconfig for font discovery.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang libclang-dev libfontconfig1-dev
+
+      - name: Restore the cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-clippy-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-clippy-
+
+      - run: rustup component add clippy
+      - run: cargo clippy --all-targets --features testing -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang libclang-dev libfontconfig1-dev
+
+      - name: Restore the cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-test-
+
+      # The integration tests drive the real layout through
+      # i-slint-backend-testing, so they need no display.
+      - run: cargo test --features testing
+
+  # Independent of the Rust checks: proves the manifest still builds and that
+  # what it produces is a usable app, without publishing anything.
+  flatpak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes flatpak flatpak-builder appstream desktop-file-utils
+          flatpak remote-add --if-not-exists --user \
+            flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Restore the flatpak-builder cache
+        uses: actions/cache@v4
+        with:
+          path: .flatpak-builder
+          key: flatpak-builder-${{ hashFiles('packaging/cargo-sources.json') }}
+          restore-keys: flatpak-builder-
+
+      - name: Install the runtime and SDK
+        run: |
+          flatpak install --user --assumeyes flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+            org.freedesktop.Sdk.Extension.llvm21//25.08
+
+      # The same script a release runs, so the publish path itself is covered.
+      # No signing key in the environment, so the repo comes out unsigned.
+      - name: Build the flatpak
+        run: bash packaging/publish.sh
+
+      - name: Install what was built
+        run: |
+          flatpak build-bundle packaging/repo MelkkiPDF.flatpak \
+            io.github.xremming.MelkkiPDF stable
+          flatpak install --user --assumeyes --bundle MelkkiPDF.flatpak
+
+      - name: Check the installed app
+        run: |
+          app="$HOME/.local/share/flatpak/app/io.github.xremming.MelkkiPDF/current/active"
+
+          # A binary that builds can still be missing a library the runtime
+          # does not carry, which only shows up when someone runs it.
+          if flatpak run --command=ldd io.github.xremming.MelkkiPDF \
+              /app/bin/melkkipdf | grep 'not found'; then
+            echo "::error::the viewer has unresolved libraries inside the runtime"
+            exit 1
+          fi
+
+          desktop-file-validate \
+            "$app/export/share/applications/io.github.xremming.MelkkiPDF.desktop"
+          appstreamcli validate --no-net \
+            "$app/files/share/metainfo/io.github.xremming.MelkkiPDF.metainfo.xml" \
+            || echo "::warning::appstreamcli reported metadata issues"

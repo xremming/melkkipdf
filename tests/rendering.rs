@@ -20,11 +20,8 @@ fn scrolling_requests_visible_rows_top_first() {
     assert!(!requests.is_empty(), "scrolling should request visible pages");
 
     // The visible (non-prefetch) pages...
-    let visible: Vec<i32> = requests
-        .iter()
-        .filter(|(_, _, prefetch)| !prefetch)
-        .map(|(page, ..)| *page)
-        .collect();
+    let visible: Vec<i32> =
+        requests.iter().filter(|(_, _, prefetch)| !prefetch).map(|(page, ..)| *page).collect();
     // ...start at the topmost page (index 49 == page 50)...
     assert_eq!(visible[0], 49, "lowest-numbered visible page requested first");
     // ...and are in ascending (top-to-bottom) order.
@@ -45,11 +42,8 @@ fn idle_prefetches_neighbors_at_lower_priority() {
     h.viewer.scrolled(offset);
 
     let requests = h.take_render_requests_full();
-    let prefetched: Vec<i32> = requests
-        .iter()
-        .filter(|(_, _, prefetch)| *prefetch)
-        .map(|(page, ..)| *page)
-        .collect();
+    let prefetched: Vec<i32> =
+        requests.iter().filter(|(_, _, prefetch)| *prefetch).map(|(page, ..)| *page).collect();
 
     // Neighbors on both sides are prefetched (previous ~4 and next few pages).
     assert!(prefetched.contains(&45), "previous pages prefetched, got {prefetched:?}");
@@ -70,16 +64,10 @@ fn paged_mode_prefetches_neighbors() {
     h.viewer.go_to_page("50"); // page/row index 49
     let requests = h.take_render_requests_full();
 
-    let visible: Vec<i32> = requests
-        .iter()
-        .filter(|(_, _, prefetch)| !prefetch)
-        .map(|(page, ..)| *page)
-        .collect();
-    let prefetched: Vec<i32> = requests
-        .iter()
-        .filter(|(_, _, prefetch)| *prefetch)
-        .map(|(page, ..)| *page)
-        .collect();
+    let visible: Vec<i32> =
+        requests.iter().filter(|(_, _, prefetch)| !prefetch).map(|(page, ..)| *page).collect();
+    let prefetched: Vec<i32> =
+        requests.iter().filter(|(_, _, prefetch)| *prefetch).map(|(page, ..)| *page).collect();
 
     assert!(visible.contains(&49), "current page requested at high priority");
     assert!(

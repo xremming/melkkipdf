@@ -90,10 +90,7 @@ fn text_group_is_its_labels_plus_padding() {
     assert_eq!(labels.len(), 2, "expected two text segments, got {labels:?}");
     let content: f32 = labels.iter().sum();
     assert!(content > 0.0, "labels measured zero: {labels:?}");
-    assert_eq!(
-        width_of(&window, "MainWindow::fit-group"),
-        content + 4.0 * PADDING
-    );
+    assert_eq!(width_of(&window, "MainWindow::fit-group"), content + 4.0 * PADDING);
 }
 
 #[test]

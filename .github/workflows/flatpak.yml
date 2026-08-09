@@ -1,9 +1,10 @@
 name: Flatpak
 
+# Only releases run here. CI builds the flatpak on every push, so there is no
+# reason to build it a second time for a branch or a pull request.
 on:
   push:
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
 
 permissions:

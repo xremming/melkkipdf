@@ -280,10 +280,11 @@ impl Viewer {
             inner.retained.push_back(index);
             let mut evicted = Vec::new();
             while inner.retained.len() > MAX_RETAINED {
-                if let Some(candidate) = inner.retained.pop_front() {
-                    if candidate != index && !inner.retained.contains(&candidate) {
-                        evicted.push(candidate);
-                    }
+                if let Some(candidate) = inner.retained.pop_front()
+                    && candidate != index
+                    && !inner.retained.contains(&candidate)
+                {
+                    evicted.push(candidate);
                 }
             }
             (row_index, is_right, width_pt, height_pt, is_current_paged, evicted)
@@ -302,11 +303,8 @@ impl Viewer {
     /// Updates the remembered viewport size and refreshes the HiDPI scale factor,
     /// re-fitting or re-rendering as needed.
     pub fn set_viewport(&self, width: f32, height: f32) {
-        let scale_factor = self
-            .window
-            .upgrade()
-            .map(|window| window.window().scale_factor())
-            .unwrap_or(1.0);
+        let scale_factor =
+            self.window.upgrade().map(|window| window.window().scale_factor()).unwrap_or(1.0);
 
         let (fit_active, density_changed) = {
             let mut inner = self.inner.borrow_mut();
@@ -588,7 +586,12 @@ impl Viewer {
     /// A thumbnail slot carrying the page's size and (possibly empty) thumbnail.
     fn thumb_entry(inner: &Inner, page: usize) -> PageEntry {
         let (width_pt, height_pt) = inner.pages_pt[page];
-        PageEntry { page: page as i32, width_pt, height_pt, image: inner.thumb_images[page].clone() }
+        PageEntry {
+            page: page as i32,
+            width_pt,
+            height_pt,
+            image: inner.thumb_images[page].clone(),
+        }
     }
 
     /// Arrow up/down (dir -1/+1). Continuous mode always scrolls; paged mode
@@ -650,11 +653,7 @@ impl Viewer {
     pub fn paged_scroll(&self, delta_x: f32, delta_y: f32, shift: bool) {
         // A downward/rightward wheel carries a negative delta; scrolling in that
         // direction increases the offset.
-        let (horizontal, vertical) = if shift {
-            (-delta_y, 0.0)
-        } else {
-            (-delta_x, -delta_y)
-        };
+        let (horizontal, vertical) = if shift { (-delta_y, 0.0) } else { (-delta_x, -delta_y) };
 
         let jump = {
             let mut inner = self.inner.borrow_mut();
@@ -898,11 +897,9 @@ impl Viewer {
             .map(|spec| {
                 let left = Self::empty_page(&inner, spec.left);
                 match spec.right {
-                    Some(right) => PageRow {
-                        left,
-                        right: Self::empty_page(&inner, right),
-                        has_right: true,
-                    },
+                    Some(right) => {
+                        PageRow { left, right: Self::empty_page(&inner, right), has_right: true }
+                    }
                     None => PageRow { left, right: Self::placeholder(), has_right: false },
                 }
             })
@@ -1001,9 +998,7 @@ impl Viewer {
 
     fn send(&self, page: usize, scale: f32, prefetch: bool) {
         let generation = self.inner.borrow().generation;
-        let _ = self
-            .sender
-            .send(RenderRequest { page: page as i32, scale, generation, prefetch });
+        let _ = self.sender.send(RenderRequest { page: page as i32, scale, generation, prefetch });
     }
 
     /// Marks a new view: bumped before issuing a fresh set of render requests so
@@ -1079,10 +1074,7 @@ impl Viewer {
             if at_end {
                 inner.pages_pt.len() as i32
             } else {
-                inner
-                    .specs
-                    .get(inner.current_row)
-                    .map_or(0, |spec| spec.left as i32 + 1)
+                inner.specs.get(inner.current_row).map_or(0, |spec| spec.left as i32 + 1)
             }
         };
         if let Some(window) = self.window.upgrade() {
@@ -1110,7 +1102,14 @@ mod tests {
         };
         let (sender, _receiver) = std::sync::mpsc::channel();
         let pages = vec![(600.0, 800.0); 5];
-        let viewer = Viewer::new(&window, pages, 1.0, sender, std::sync::mpsc::channel().0, crate::render::RenderControl::inert());
+        let viewer = Viewer::new(
+            &window,
+            pages,
+            1.0,
+            sender,
+            std::sync::mpsc::channel().0,
+            crate::render::RenderControl::inert(),
+        );
 
         // Switch to paged mode, then deliver renders — including enough to force
         // the eviction path, which also calls back into the viewer.
@@ -1129,7 +1128,14 @@ mod tests {
             return;
         };
         let (sender, _receiver) = std::sync::mpsc::channel();
-        let viewer = Viewer::new(&window, vec![(600.0, 800.0); 10], 1.0, sender, std::sync::mpsc::channel().0, crate::render::RenderControl::inert());
+        let viewer = Viewer::new(
+            &window,
+            vec![(600.0, 800.0); 10],
+            1.0,
+            sender,
+            std::sync::mpsc::channel().0,
+            crate::render::RenderControl::inert(),
+        );
         // Paged mode avoids touching the scroll offset property.
         viewer.set_continuous(false);
 

@@ -57,9 +57,9 @@ git add packaging/cargo-sources.json
 
 ## Releasing
 
-A `v*` tag is the only thing that publishes. Pushes to `main` do not build, and
-pull requests build without deploying, so nothing reaches the repository until
-a version is tagged.
+A `v*` tag is the only thing that publishes. CI builds the flatpak on every
+push and throws the result away, so the manifest is known to work before a
+release; nothing reaches the repository until a version is tagged.
 
 1. Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` picks
    up the new number.

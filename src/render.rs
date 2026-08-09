@@ -323,15 +323,11 @@ impl<K: Eq + Hash + Clone, V: Clone> LruCache<K, V> {
         self.tick += 1;
         let tick = self.tick;
         self.entries.insert(key, (value, tick));
-        if self.entries.len() > self.capacity {
-            if let Some(oldest) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, (_, tick))| *tick)
-                .map(|(key, _)| key.clone())
-            {
-                self.entries.remove(&oldest);
-            }
+        if self.entries.len() > self.capacity
+            && let Some(oldest) =
+                self.entries.iter().min_by_key(|(_, (_, tick))| *tick).map(|(key, _)| key.clone())
+        {
+            self.entries.remove(&oldest);
         }
     }
 }

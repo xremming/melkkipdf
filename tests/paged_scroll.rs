@@ -54,10 +54,7 @@ fn scrolling_up_at_the_top_lands_at_the_bottom_of_the_previous_page() {
     h.viewer.paged_scroll(0.0, 120.0, false);
     assert_eq!(h.current_page(), 1);
     // ...landing at the bottom of page 1, not its top.
-    assert!(
-        h.window.get_paged_offset_y() < -0.5,
-        "should land at the bottom of the previous page"
-    );
+    assert!(h.window.get_paged_offset_y() < -0.5, "should land at the bottom of the previous page");
 }
 
 #[test]
