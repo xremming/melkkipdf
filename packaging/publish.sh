@@ -48,6 +48,9 @@ echo "Laying out the site in $site."
 rm -rf "$site"
 mkdir -p "$site"
 cp -a "$repo" "$site/repo"
+# ostree takes this lock locally; no client ever fetches it, and Pages artifacts
+# exclude dotfiles anyway, so drop it rather than depend on that.
+rm -f "$site/repo/.lock"
 cp "data/icons/hicolor/scalable/apps/$APP_ID.svg" "$site/icon.svg"
 
 # Both ref files carry the public key inline so a user only needs the one URL.
