@@ -57,8 +57,9 @@ git add packaging/cargo-sources.json
 
 ## Releasing
 
-Any push to `main` rebuilds and redeploys, so a release is a version bump that
-lands on `main`; the `v*` tag only records which commit it was.
+A `v*` tag is the only thing that publishes. Pushes to `main` do not build, and
+pull requests build without deploying, so nothing reaches the repository until
+a version is tagged.
 
 1. Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` picks
    up the new number.
@@ -88,7 +89,8 @@ lands on `main`; the `v*` tag only records which commit it was.
    A bare version bump does not need this. The generator emits sources for
    crates fetched from a registry, and the viewer's own package is not one.
 
-4. Commit the bump, tag it, and push both:
+4. Commit the bump, tag it, and push both. The tag is what triggers the
+   build, but push `main` too so the published commit is on the branch:
 
    ```sh
    git tag -a v0.2.0 -m "MelkkiPDF 0.2.0"
