@@ -1,5 +1,12 @@
 import { ListView, ScrollView, Spinner } from "std-widgets.slint";
 
+// Shared toolbar metrics, so the standalone buttons and the segmented controls
+// give their icons the same breathing room.
+global Toolbar {
+    out property <length> icon-size: 18px;
+    out property <length> h-padding: 16px;
+}
+
 // One page's fixed size (in PDF points) and its rendered image. The image is
 // empty until the page has been rendered.
 export struct PageEntry {
@@ -120,27 +127,43 @@ component Segment inherits Rectangle {
     in property <string> label;
     in property <bool> active;
     in property <bool> divider;
+    // Slint has no minimum-padding property, but an inner layout is the same
+    // thing: its padding is part of the segment's minimum width, so this is the
+    // narrowest gap the content can ever get, and a wider segment just centers
+    // the content in the extra space.
+    in property <length> h-padding;
     callback clicked <=> touch.clicked;
 
-    min-width: 44px;
     // Recessed while selected (radio use) or held down (action use).
     background: (root.active || touch.pressed)
         ? #252525
         : (touch.has-hover ? #505050 : #454545);
     property <brush> tint: (root.active || touch.pressed) ? #ffffff : #b8b8b8;
 
-    if root.label == "": Image {
-        source: root.icon;
-        width: 18px;
-        height: 18px;
-        // The source icons are solid black, so colorize carries the whole tint.
-        colorize: root.tint;
-    }
+    HorizontalLayout {
+        alignment: center;
+        padding-left: root.h-padding;
+        padding-right: root.h-padding;
 
-    if root.label != "": Text {
-        text: root.label;
-        color: root.tint;
-        font-size: 13px;
+        // The icon is a fixed size, which a HorizontalLayout would otherwise pin
+        // to the top of the segment, so center it on the cross axis by hand.
+        if root.label == "": VerticalLayout {
+            alignment: center;
+            icon-image := Image {
+                source: root.icon;
+                width: Toolbar.icon-size;
+                height: self.width;
+                // The source icons are solid black, so colorize carries the tint.
+                colorize: root.tint;
+            }
+        }
+
+        if root.label != "": label-text := Text {
+            text: root.label;
+            color: root.tint;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
     }
 
     // Divider between segments (drawn on the left edge of all but the first).
@@ -160,11 +183,15 @@ component SegmentedControl inherits Rectangle {
     in property <[image]> options;
     in property <[string]> labels;
     in property <int> current;
-    // Widened for text segments, which need more room than an 18px icon.
-    in property <length> segment-width: 44px;
+    // Guaranteed gap on each side of every segment's icon or label, which is
+    // what sizes the control now that it hugs its content.
+    in property <length> segment-padding: Toolbar.h-padding;
     callback select(int);
 
     height: 28px;
+    // A Rectangle has no natural width, so without this the control would
+    // stretch to fill the toolbar instead of hugging its segments.
+    horizontal-stretch: 0;
     border-width: 1px;
     border-color: #5a5a5a;
     border-radius: 5px;
@@ -176,7 +203,7 @@ component SegmentedControl inherits Rectangle {
             icon: option;
             active: idx == root.current;
             divider: idx > 0;
-            min-width: root.segment-width;
+            h-padding: root.segment-padding;
             clicked => {
                 root.select(idx);
             }
@@ -185,7 +212,7 @@ component SegmentedControl inherits Rectangle {
             label: text;
             active: idx == root.current;
             divider: idx > 0;
-            min-width: root.segment-width;
+            h-padding: root.segment-padding;
             clicked => {
                 root.select(idx);
             }
@@ -348,8 +375,8 @@ export component MainWindow inherits Window {
                     // Open a different PDF.
                     VerticalLayout {
                         alignment: center;
-                        Rectangle {
-                            width: 34px;
+                        open-frame := Rectangle {
+                            width: Toolbar.icon-size + 2 * Toolbar.h-padding;
                             height: 28px;
                             border-width: 1px;
                             border-color: #5a5a5a;
@@ -359,8 +386,8 @@ export component MainWindow inherits Window {
                                 : (open-button.has-hover ? #505050 : #454545);
                             Image {
                                 source: @image-url("icons/open.svg");
-                                width: 18px;
-                                height: 18px;
+                                width: Toolbar.icon-size;
+                                height: self.width;
                                 colorize: open-button.pressed ? #ffffff : #dddddd;
                             }
                             open-button := TouchArea {
@@ -375,7 +402,7 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         alignment: center;
                         Rectangle {
-                            width: 34px;
+                            width: Toolbar.icon-size + 2 * Toolbar.h-padding;
                             height: 28px;
                             border-width: 1px;
                             border-color: #5a5a5a;
@@ -385,8 +412,8 @@ export component MainWindow inherits Window {
                                 : (sidebar-toggle.has-hover ? #505050 : #454545);
                             Image {
                                 source: @image-url("icons/menu.svg");
-                                width: 18px;
-                                height: 18px;
+                                width: Toolbar.icon-size;
+                                height: self.width;
                                 colorize: (root.sidebar-open || sidebar-toggle.pressed) ? #ffffff : #dddddd;
                             }
                             sidebar-toggle := TouchArea {
@@ -401,7 +428,7 @@ export component MainWindow inherits Window {
                     // they just fire on click (with press feedback).
                     VerticalLayout {
                         alignment: center;
-                        SegmentedControl {
+                        zoom-group := SegmentedControl {
                             options: [@image-url("icons/zoom-out.svg"), @image-url("icons/zoom-in.svg")];
                             current: -1;
                             select(index) => {
@@ -416,9 +443,8 @@ export component MainWindow inherits Window {
 
                     VerticalLayout {
                         alignment: center;
-                        SegmentedControl {
+                        fit-group := SegmentedControl {
                             labels: ["Page Fit", "Page Width"];
-                            segment-width: 84px;
                             current: -1;
                             select(index) => {
                                 if (index == 0) {
@@ -444,7 +470,7 @@ export component MainWindow inherits Window {
 
                     VerticalLayout {
                         alignment: center;
-                        SegmentedControl {
+                        spread-group := SegmentedControl {
                             options: [@image-url("icons/spread-single.svg"), @image-url("icons/spread-odd.svg"), @image-url("icons/spread-even.svg")];
                             current: root.spread-mode;
                             select(index) => {
@@ -460,7 +486,7 @@ export component MainWindow inherits Window {
                         alignment: center;
                         HorizontalLayout {
                             spacing: 5px;
-                            PageField {
+                            page-field := PageField {
                                 page: root.current-page;
                                 go-to(value) => {
                                     root.go-to-page(value);

@@ -22,3 +22,6 @@ slint-build = "1.17"
 # is usable while iterating on the viewer itself.
 [profile.dev.package.mupdf-sys]
 opt-level = 3
+
+[dev-dependencies]
+i-slint-backend-testing = "1.17"

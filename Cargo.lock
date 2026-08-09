@@ -2864,6 +2864,7 @@ dependencies = [
 name = "melkkipdf"
 version = "0.1.0"
 dependencies = [
+ "i-slint-backend-testing",
  "mupdf",
  "rfd",
  "slint",
