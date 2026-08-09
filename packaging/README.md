@@ -11,6 +11,7 @@ to host it, and users get automatic updates through `flatpak update`.
 | `io.github.xremming.MelkkiPDF.metainfo.xml` | AppStream metadata for software centres  |
 | `cargo-sources.json`                     | Every crate as a flatpak source (generated) |
 | `generate-cargo-sources.sh`              | Regenerates the above from `Cargo.lock`     |
+| `index.html`                             | Landing page; `@BASE_URL@` and `@APP_ID@` are filled in at publish time |
 | `publish.sh`                             | Builds the repo and lays out the Pages site |
 
 ## Installing

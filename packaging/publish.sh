@@ -84,35 +84,9 @@ SuggestRemoteName=melkkipdf
 $gpg_key_line
 EOF
 
-cat >"$site/index.html" <<EOF
-<!doctype html>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MelkkiPDF</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { max-width: 42rem; margin: 4rem auto; padding: 0 1.5rem;
-         font: 16px/1.6 system-ui, sans-serif; }
-  pre { background: color-mix(in srgb, currentColor 8%, transparent);
-        padding: 1rem; border-radius: .5rem; overflow-x: auto; }
-  code { font-family: ui-monospace, monospace; }
-  img { width: 96px; height: 96px; }
-</style>
-<img src="icon.svg" alt="">
-<h1>MelkkiPDF</h1>
-<p>A fast, minimal PDF viewer for Linux, inspired by SumatraPDF.</p>
-
-<h2>Install</h2>
-<p>Requires <a href="https://flathub.org/setup">flatpak</a>.</p>
-<pre><code>flatpak install $BASE_URL/melkkipdf.flatpakref</code></pre>
-<p>Then run it from your application menu, or with
-   <code>flatpak run $APP_ID</code>.</p>
-
-<h2>Updates</h2>
-<pre><code>flatpak update $APP_ID</code></pre>
-
-<h2>Source</h2>
-<p><a href="https://github.com/xremming/melkkipdf">github.com/xremming/melkkipdf</a></p>
-EOF
+# The landing page is a real HTML file so it can be edited and opened as one;
+# only the two values that follow the deployment are filled in here.
+sed -e "s|@BASE_URL@|$BASE_URL|g" -e "s|@APP_ID@|$APP_ID|g" \
+    packaging/index.html >"$site/index.html"
 
 echo "Site ready: $site"

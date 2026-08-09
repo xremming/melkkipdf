@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MelkkiPDF</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 42rem; margin: 4rem auto; padding: 0 1.5rem;
+         font: 16px/1.6 system-ui, sans-serif; }
+  pre { background: color-mix(in srgb, currentColor 8%, transparent);
+        padding: 1rem; border-radius: .5rem; overflow-x: auto; }
+  code { font-family: ui-monospace, monospace; }
+  img { width: 96px; height: 96px; }
+</style>
+<img src="icon.svg" alt="">
+<h1>MelkkiPDF</h1>
+<p>A fast, minimal PDF viewer for Linux, inspired by
+   <a href="https://www.sumatrapdfreader.org/">SumatraPDF</a>. Built with
+   <a href="https://slint.dev/">Slint</a> and
+   <a href="https://mupdf.com/">MuPDF</a>.</p>
+
+<h2>Install</h2>
+<pre><code>flatpak install @BASE_URL@/melkkipdf.flatpakref</code></pre>
+<p>Requires <a href="https://flathub.org/setup">flatpak</a>. This adds the
+   MelkkiPDF repository and installs the viewer; <code>flatpak update</code>
+   picks up new versions. The repository is signed and the public key travels
+   with the ref, so flatpak verifies each build.</p>
+<p>Launch it from your application menu, or with
+   <code>flatpak run @APP_ID@ document.pdf</code>.</p>
+
+<h2>Features</h2>
+<ul>
+  <li>Continuous and single-page reading modes</li>
+  <li>Single, odd, and even page spreads</li>
+  <li>Zoom, fit-width, and fit-page</li>
+  <li>Bookmark sidebar with page thumbnails</li>
+  <li>Keyboard-driven navigation</li>
+</ul>
+
+<h2>Source</h2>
+<p><a href="https://github.com/xremming/melkkipdf">github.com/xremming/melkkipdf</a>,
+   AGPL-3.0-or-later.</p>
