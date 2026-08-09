@@ -1,0 +1,57 @@
+id: io.github.xremming.MelkkiPDF
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  # mupdf-sys generates its bindings with bindgen, which needs libclang; the
+  # base SDK does not ship one.
+  - org.freedesktop.Sdk.Extension.llvm21
+command: melkkipdf
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
+  env:
+    # The vendored crates from cargo-sources.json are unpacked here.
+    CARGO_HOME: /run/build/melkkipdf/cargo
+    LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # Slint renders through OpenGL, which needs the GPU device nodes.
+  - --device=dri
+  # PDFs opened from a file manager or the portal arrive through the document
+  # portal, but a path passed on the command line does not, so the viewer needs
+  # to be able to read the host filesystem.
+  - --filesystem=host:ro
+
+modules:
+  - name: melkkipdf
+    buildsystem: simple
+    build-options:
+      env:
+        # Everything must already be vendored; fail loudly rather than reaching
+        # for the network, which is unavailable during the build anyway.
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release
+      - install -Dm755 target/release/melkkipdf /app/bin/melkkipdf
+      - install -Dm644 packaging/$FLATPAK_ID.desktop
+        /app/share/applications/$FLATPAK_ID.desktop
+      - install -Dm644 packaging/$FLATPAK_ID.metainfo.xml
+        /app/share/metainfo/$FLATPAK_ID.metainfo.xml
+      - install -Dm644 data/icons/hicolor/scalable/apps/$FLATPAK_ID.svg
+        /app/share/icons/hicolor/scalable/apps/$FLATPAK_ID.svg
+      - install -Dm644 LICENSE /app/share/licenses/$FLATPAK_ID/LICENSE
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .git
+          - target
+          - packaging/build-dir
+          - packaging/repo
+          - packaging/site
+      - cargo-sources.json

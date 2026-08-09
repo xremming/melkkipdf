@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=MelkkiPDF
+GenericName=PDF Viewer
+Comment=A fast, minimal PDF viewer
+Exec=melkkipdf %f
+Icon=io.github.xremming.MelkkiPDF
+Terminal=false
+Categories=Office;Viewer;
+MimeType=application/pdf;
+StartupNotify=true
+StartupWMClass=io.github.xremming.MelkkiPDF
+Keywords=pdf;document;viewer;reader;

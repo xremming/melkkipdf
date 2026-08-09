@@ -142,6 +142,13 @@ impl App {
 /// `None`) and runs the event loop until the window closes.
 pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
     let window = MainWindow::new()?;
+
+    // Without an app ID matching the desktop entry, compositors cannot tie the
+    // window back to it and show a generic icon and title instead. Creating the
+    // window above initialises the platform this needs, and the ID is only read
+    // when the window is actually shown, so setting it here is in time.
+    slint::set_xdg_app_id("io.github.xremming.MelkkiPDF")?;
+
     let app = Rc::new(App {
         window: window.as_weak(),
         viewer: RefCell::new(None),

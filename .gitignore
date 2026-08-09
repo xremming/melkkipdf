@@ -1,2 +1,9 @@
 # Build artifacts.
 /target
+
+# Flatpak build artifacts.
+/.flatpak-builder
+/packaging/build-dir
+/packaging/repo
+/packaging/site
+/packaging/*.flatpak

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.xremming.MelkkiPDF</id>
+
+  <name>MelkkiPDF</name>
+  <summary>A fast, minimal PDF viewer</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+
+  <developer id="io.github.xremming">
+    <name>Maximilian Remming</name>
+  </developer>
+
+  <description>
+    <p>
+      MelkkiPDF is a small PDF viewer for Linux, inspired by SumatraPDF. It aims
+      to open documents instantly and stay out of the way: no tabs to manage, no
+      background indexing, just the page you are reading.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Continuous and single-page reading modes</li>
+      <li>Single, odd, and even page spreads</li>
+      <li>Zoom, fit-width, and fit-page</li>
+      <li>Bookmark sidebar with page thumbnails</li>
+      <li>Keyboard-driven navigation</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.xremming.MelkkiPDF.desktop</launchable>
+
+  <url type="homepage">https://github.com/xremming/melkkipdf</url>
+  <url type="bugtracker">https://github.com/xremming/melkkipdf/issues</url>
+
+  <categories>
+    <category>Office</category>
+    <category>Viewer</category>
+  </categories>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.1.0" date="2026-08-09">
+      <description>
+        <p>First packaged release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
