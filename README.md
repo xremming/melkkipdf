@@ -1,20 +1,23 @@
 # MelkkiPDF
 
-A fast, minimal PDF viewer for Linux, inspired by [SumatraPDF][sumatra]. It
-opens documents instantly and stays out of the way: no tabs to manage, no
-background indexing, just the page you are reading.
-
-Built with [Slint][slint] and [MuPDF][mupdf].
-
-## Install
+A fast, minimal PDF viewer for Linux, inspired by [SumatraPDF][sumatra].
 
 ```sh
 flatpak install https://xremming.github.io/melkkipdf/melkkipdf.flatpakref
 ```
 
-This adds the MelkkiPDF repository and installs the app; `flatpak update` picks
-up new versions from then on. If you do not have flatpak yet, see
-[flathub.org/setup](https://flathub.org/setup).
+This adds the MelkkiPDF repository and installs the viewer; `flatpak update`
+picks up new versions. The repository is signed and the public key travels with
+the ref, so flatpak verifies each build. Requires
+[flatpak](https://flathub.org/setup).
+
+Launch it from your application menu, or:
+
+```sh
+flatpak run io.github.xremming.MelkkiPDF document.pdf
+```
+
+Built with [Slint][slint] and [MuPDF][mupdf].
 
 ## Build from source
 

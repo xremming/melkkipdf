@@ -14,9 +14,7 @@
 
   <description>
     <p>
-      MelkkiPDF is a small PDF viewer for Linux, inspired by SumatraPDF. It aims
-      to open documents instantly and stay out of the way: no tabs to manage, no
-      background indexing, just the page you are reading.
+      MelkkiPDF is a small PDF viewer for Linux, inspired by SumatraPDF.
     </p>
     <p>Features:</p>
     <ul>

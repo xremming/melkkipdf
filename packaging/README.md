@@ -56,9 +56,55 @@ git add packaging/cargo-sources.json
 
 ## Releasing
 
-Pushing to `main` or a `v*` tag builds and deploys. Add the new version to the
-`<releases>` list in the metainfo file first — software centres show it as the
-changelog.
+Any push to `main` rebuilds and redeploys, so a release is a version bump that
+lands on `main`; the `v*` tag only records which commit it was.
+
+1. Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` picks
+   up the new number.
+
+2. Add a `<release>` entry at the top of `<releases>` in
+   `io.github.xremming.MelkkiPDF.metainfo.xml`:
+
+   ```xml
+   <release version="0.2.0" date="2026-08-16">
+     <description>
+       <p>What changed, in a sentence or two.</p>
+     </description>
+   </release>
+   ```
+
+   The manifest declares no version of its own, so this entry is what
+   `flatpak list` and the software centres report, and the description is the
+   changelog they show. Keep it equal to the `Cargo.toml` version so the two
+   cannot drift. Dates are `YYYY-MM-DD`.
+
+3. Only if dependencies changed, regenerate the vendored crate list:
+
+   ```sh
+   ./packaging/generate-cargo-sources.sh
+   ```
+
+   A bare version bump does not need this. The generator emits sources for
+   crates fetched from a registry, and the viewer's own package is not one.
+
+4. Commit the bump, tag it, and push both:
+
+   ```sh
+   git tag -a v0.2.0 -m "MelkkiPDF 0.2.0"
+   git push origin main v0.2.0
+   ```
+
+5. Confirm the deployment:
+
+   ```sh
+   gh run watch --exit-status
+   curl -s https://xremming.github.io/melkkipdf/melkkipdf.flatpakref | grep -c GPGKey
+   ```
+
+   A `1` means the signed ref published. Existing installs then pick the build
+   up with `flatpak update`; nothing about the remote changes. Only replacing
+   the signing key would force users to act, by removing and re-adding the
+   remote.
 
 ## One-time repository setup
 
