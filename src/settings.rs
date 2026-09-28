@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::ViewSettings;
 
 /// Bumped whenever the file's layout changes incompatibly, so an old build
-/// never misreads a newer file as its own.
+/// never misreads a newer file as its own, nor overwrites it.
 const VERSION: u32 = 1;
 /// How many documents are remembered. The least recently opened are dropped
 /// first, so the file cannot grow without bound.
@@ -83,8 +83,12 @@ impl Store {
     }
 
     /// Loads the store from `file`. A missing file is simply an empty store. An
-    /// unreadable one is moved aside to `<file>.bak`, rather than overwritten by
-    /// the next save, and the store starts empty.
+    /// unreadable one is moved aside to a backup (see [`backup_path`]), rather
+    /// than overwritten by the next save, and the store starts empty.
+    ///
+    /// A file written by a newer version is left where it is and the store
+    /// never writes it, so running an older build does not lose what the
+    /// newer one remembered. That run remembers nothing.
     pub fn load(file: PathBuf) -> Self {
         let mut store = Self { file: Some(file.clone()), ..Self::in_memory() };
         let contents = match fs::read(&file) {
@@ -95,6 +99,24 @@ impl Store {
                 return store;
             }
         };
+
+        // The version alone, so a newer file is recognised even when the rest
+        // of its layout would not parse.
+        #[derive(Deserialize)]
+        struct Versioned {
+            version: u32,
+        }
+        if let Ok(Versioned { version }) = serde_json::from_slice(&contents)
+            && version > VERSION
+        {
+            eprintln!(
+                "Settings in {} come from a newer version, so they are left alone and nothing \
+                 is remembered this run.",
+                file.display()
+            );
+            store.file = None;
+            return store;
+        }
 
         let parsed = serde_json::from_slice::<StateFile>(&contents)
             .map_err(|err| err.to_string())
@@ -109,7 +131,7 @@ impl Store {
                 store.session = state.session;
             }
             Err(err) => {
-                let backup = file.with_extension("json.bak");
+                let backup = backup_path(&file);
                 eprintln!(
                     "Settings in {} are unreadable ({err}), so they were moved to {}.",
                     file.display(),
@@ -187,10 +209,18 @@ impl Store {
             .cloned()
             .collect();
         documents.sort_by(|a, b| a.path.cmp(&b.path));
-        let session = Session {
-            tabs: self.session.tabs.iter().filter(|tab| tab.to_str().is_some()).cloned().collect(),
-            active: self.session.active,
-        };
+        // Dropping a tab moves the ones after it down, so the active index
+        // has to follow its tab, or go if the tab itself was dropped.
+        let mut session = Session::default();
+        for (index, tab) in self.session.tabs.iter().enumerate() {
+            if tab.to_str().is_none() {
+                continue;
+            }
+            if self.session.active == Some(index) {
+                session.active = Some(session.tabs.len());
+            }
+            session.tabs.push(tab.clone());
+        }
         let state = StateFile { version: VERSION, documents, session };
         let contents = serde_json::to_vec_pretty(&state).map_err(io::Error::other)?;
 
@@ -223,6 +253,20 @@ impl Store {
             self.documents.remove(&path);
         }
     }
+}
+
+/// Where to move an unreadable settings `file`: `<file>.bak`, or the first of
+/// `<file>.1.bak`, `<file>.2.bak` and so on that is free, so a second
+/// unreadable file never replaces the backup of the first.
+fn backup_path(file: &Path) -> PathBuf {
+    let first = file.with_extension("json.bak");
+    if !first.exists() {
+        return first;
+    }
+    (1..)
+        .map(|number| file.with_extension(format!("json.{number}.bak")))
+        .find(|path| !path.exists())
+        .expect("ran out of backup names")
 }
 
 #[cfg(test)]
@@ -287,14 +331,48 @@ mod tests {
     }
 
     #[test]
-    fn a_file_from_another_version_is_moved_aside() {
+    fn a_file_from_a_newer_version_is_left_alone() {
         let directory = scratch("version");
         let file = directory.join("documents.json");
-        std::fs::write(&file, r#"{"version": 99, "documents": []}"#).unwrap();
+        let newer = r#"{"version": 99, "documents": {"a new": "layout"}}"#;
+        std::fs::write(&file, newer).unwrap();
 
+        let mut store = Store::load(file.clone());
+        store.update(Path::new("/docs/a.pdf"), custom());
+        store.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), newer);
+        assert!(!directory.join("documents.json.bak").exists());
+    }
+
+    #[test]
+    fn a_second_unreadable_file_keeps_the_first_backup() {
+        let directory = scratch("backups");
+        let file = directory.join("documents.json");
+        std::fs::write(&file, "first").unwrap();
         Store::load(file.clone());
-        assert!(!file.exists());
-        assert!(directory.join("documents.json.bak").exists());
+        std::fs::write(&file, "second").unwrap();
+        Store::load(file.clone());
+
+        let read = |name: &str| std::fs::read_to_string(directory.join(name)).unwrap();
+        assert_eq!(read("documents.json.bak"), "first");
+        assert_eq!(read("documents.json.1.bak"), "second");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_active_tab_follows_it_past_an_unsaveable_path() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let file = scratch("active").join("documents.json");
+        let unsaveable = PathBuf::from(OsStr::from_bytes(b"/docs/\xff.pdf"));
+        let mut store = Store::load(file.clone());
+        store
+            .set_session(Session { tabs: vec![unsaveable, "/docs/a.pdf".into()], active: Some(1) });
+        store.save().unwrap();
+
+        let loaded = Store::load(file);
+        assert_eq!(loaded.session(), Session { tabs: vec!["/docs/a.pdf".into()], active: Some(0) });
     }
 
     #[test]
