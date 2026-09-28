@@ -14,54 +14,18 @@ use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use mupdf::Document;
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
-use render::{RenderControl, WorkerMessage};
+use render::{Loaded, RenderControl, WorkerMessage};
 use settings::{Session, Store};
 
 pub use viewer::{FitMode, Spread, ViewSettings, Viewer};
 
 slint::include_modules!();
-
-/// Reads every page's size in points, used to lay out the scrollable document
-/// before any page is rendered. This is fast even for large documents.
-pub fn read_page_sizes(path: &str) -> Result<Vec<(f32, f32)>, mupdf::Error> {
-    let document = Document::open(path)?;
-    let count = document.page_count()?;
-    let mut sizes = Vec::with_capacity(count.max(0) as usize);
-    for index in 0..count {
-        let bounds = document.load_page(index)?.bounds()?;
-        sizes.push((bounds.width(), bounds.height()));
-    }
-    Ok(sizes)
-}
-
-/// Reads the document outline (bookmarks) as a flat list of
-/// `(title, 0-based page, depth)`, depth-first. Returns empty on any error or
-/// when the document has no outline.
-pub fn read_outline(path: &str) -> Vec<(String, i32, i32)> {
-    fn flatten(outlines: &[mupdf::Outline], depth: i32, out: &mut Vec<(String, i32, i32)>) {
-        for outline in outlines {
-            let page = outline.dest.as_ref().map_or(-1, |dest| dest.loc.page_number as i32);
-            out.push((outline.title.clone(), page, depth));
-            flatten(&outline.down, depth + 1, out);
-        }
-    }
-    let Ok(document) = Document::open(path) else {
-        return Vec::new();
-    };
-    let Ok(outlines) = document.outlines() else {
-        return Vec::new();
-    };
-    let mut items = Vec::new();
-    flatten(&outlines, 0, &mut items);
-    items
-}
 
 /// How often changes are written out between the explicit save points, which
 /// bounds what a crash or a killed process can lose.
@@ -95,6 +59,15 @@ struct Workers {
     control: RenderControl,
 }
 
+/// A document's page worker while it reads the document, before there is a
+/// viewer to take over its channel.
+struct Loading {
+    /// The path as it was asked for, which the messages about it name.
+    path: String,
+    pages: Sender<WorkerMessage>,
+    control: RenderControl,
+}
+
 /// One open document: its viewer, plus what the window shows for it outside
 /// the viewer.
 struct Tab {
@@ -103,8 +76,12 @@ struct Tab {
     /// The canonical path, so opening a document twice finds its tab.
     path: PathBuf,
     title: SharedString,
-    viewer: Rc<Viewer>,
+    /// The document's viewer, or `None` while the document is still being
+    /// read, which takes a while for a long one.
+    viewer: Option<Rc<Viewer>>,
     outline: ModelRc<OutlineItem>,
+    /// The worker reading the document, until it has.
+    loading: Option<Loading>,
 }
 
 /// Holds the live window and a tab per open document. There is one window and
@@ -128,12 +105,16 @@ pub(crate) struct App {
     dropped: RefCell<Vec<PathBuf>>,
     /// Takes the current notice down once it has been up long enough.
     notice_timer: Timer,
+    /// Where each document's worker reports that it has read the document.
+    loads: Receiver<Loaded>,
+    load_sender: Sender<Loaded>,
 }
 
 impl App {
     pub(crate) fn new(window: &MainWindow, store: Store) -> Rc<Self> {
         let titles = Rc::new(VecModel::default());
         window.set_tabs(ModelRc::from(titles.clone()));
+        let (load_sender, loads) = mpsc::channel();
         let app = Rc::new(Self {
             window: window.as_weak(),
             tabs: RefCell::new(Vec::new()),
@@ -144,17 +125,19 @@ impl App {
             store: RefCell::new(store),
             dropped: RefCell::new(Vec::new()),
             notice_timer: Timer::default(),
+            loads,
+            load_sender,
         });
         app.show_empty();
         wire_callbacks(window, &app);
         app
     }
 
-    /// The active tab's viewer. Cloned out so no borrow of `tabs` is held while
-    /// the viewer runs.
+    /// The active tab's viewer, unless its document is still loading. Cloned
+    /// out so no borrow of `tabs` is held while the viewer runs.
     fn active_viewer(&self) -> Option<Rc<Viewer>> {
         let index = self.active.get()?;
-        self.tabs.borrow().get(index).map(|tab| tab.viewer.clone())
+        self.tabs.borrow().get(index).and_then(|tab| tab.viewer.clone())
     }
 
     /// Runs `action` on the active tab's viewer, if a document is open.
@@ -168,7 +151,7 @@ impl App {
     /// is active. Renders for a tab closed since they were requested find none.
     fn with_document(&self, id: i32, action: impl FnOnce(&Viewer)) {
         let viewer =
-            self.tabs.borrow().iter().find(|tab| tab.id == id).map(|tab| tab.viewer.clone());
+            self.tabs.borrow().iter().find(|tab| tab.id == id).and_then(|tab| tab.viewer.clone());
         if let Some(viewer) = viewer {
             action(&viewer);
         }
@@ -176,8 +159,12 @@ impl App {
 
     /// Opens `path` in a new tab and shows it, returning the tab's index. A
     /// document that already has a tab is shown there instead, since a second
-    /// copy would only split the reading position between two tabs. On a read
-    /// error the message is shown and the open tabs are left as they are.
+    /// copy would only split the reading position between two tabs.
+    ///
+    /// The document is read on its worker thread, so a long one does not
+    /// freeze the window, and the tab says it is loading until the worker
+    /// reports back (see [`App::receive_loads`]). A document that cannot be
+    /// read then has its tab closed and the error shown.
     pub(crate) fn open(&self, path: String) -> Option<usize> {
         let window = self.window.upgrade()?;
 
@@ -187,37 +174,73 @@ impl App {
             return Some(index);
         }
 
-        let pages_pt = match read_page_sizes(&path) {
-            Ok(sizes) if !sizes.is_empty() => sizes,
-            Ok(_) => {
-                self.notify(&format!("Failed to open {path}, which has no pages."));
-                return None;
-            }
-            Err(err) => {
-                self.notify(&format!("Failed to open {path}: {err}."));
-                return None;
-            }
-        };
-
-        let outline: Vec<OutlineItem> = read_outline(&path)
-            .into_iter()
-            .map(|(title, page, depth)| OutlineItem { title: title.into(), page, depth })
-            .collect();
         let title = Path::new(&path)
             .file_name()
             .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+        let id = self.allocate_id();
+        let (pages, control) =
+            render::spawn(path.clone(), id, window.as_weak(), self.load_sender.clone());
+        Some(self.add_tab(Tab {
+            id,
+            path: canonical,
+            title: title.into(),
+            viewer: None,
+            outline: ModelRc::default(),
+            loading: Some(Loading { path, pages, control }),
+        }))
+    }
 
-        self.insert(
-            canonical,
-            title.into(),
-            pages_pt,
-            ModelRc::new(VecModel::from(outline)),
-            |id| {
-                let (pages, control) = render::spawn(path.clone(), id, window.as_weak());
-                let thumbnails = render::spawn_thumbnails(path.clone(), id, window.as_weak());
-                Workers { pages, thumbnails, control }
-            },
-        )
+    /// Takes in every document whose worker has finished reading it.
+    pub(crate) fn receive_loads(&self) {
+        while let Ok(loaded) = self.loads.try_recv() {
+            self.finish_load(loaded);
+        }
+    }
+
+    /// Gives a loading tab the viewer for its document, now that it has been
+    /// read, or closes the tab and shows why it could not be. A tab closed
+    /// while its document was loading has nothing left to do.
+    pub(crate) fn finish_load(&self, loaded: Loaded) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let Some(index) = self.tabs.borrow().iter().position(|tab| tab.id == loaded.doc) else {
+            return;
+        };
+        let Some(loading) = self.tabs.borrow_mut()[index].loading.take() else {
+            return;
+        };
+        let info = match loaded.result {
+            Ok(info) if !info.pages_pt.is_empty() => info,
+            Ok(_) => {
+                self.notify(&format!("Failed to open {}, which has no pages.", loading.path));
+                self.close(index);
+                return;
+            }
+            Err(err) => {
+                self.notify(&format!("Failed to open {}: {err}.", loading.path));
+                self.close(index);
+                return;
+            }
+        };
+
+        let outline: Vec<OutlineItem> = info
+            .outline
+            .into_iter()
+            .map(|(title, page, depth)| OutlineItem { title: title.into(), page, depth })
+            .collect();
+        let thumbnails = render::spawn_thumbnails(loading.path, loaded.doc, window.as_weak());
+        let workers = Workers { pages: loading.pages, thumbnails, control: loading.control };
+        let path = self.tabs.borrow()[index].path.clone();
+        let viewer = self.make_viewer(&window, &path, info.pages_pt, workers);
+        {
+            let mut tabs = self.tabs.borrow_mut();
+            tabs[index].viewer = Some(viewer);
+            tabs[index].outline = ModelRc::new(VecModel::from(outline));
+        }
+        if self.active.get() == Some(index) {
+            self.show(index);
+        }
     }
 
     /// The index of the tab showing the document at the canonical `path`.
@@ -225,9 +248,10 @@ impl App {
         self.tabs.borrow().iter().position(|tab| tab.path == path)
     }
 
-    /// Adds a tab for a document whose pages have been read and shows it,
-    /// restoring the view the document was last left in. `spawn` starts the
-    /// document's render workers, tagged with the id it is given.
+    /// Adds a tab for a document whose pages have already been read and shows
+    /// it. `spawn` starts the document's render workers, tagged with the id it
+    /// is given.
+    #[cfg(feature = "testing")]
     fn insert(
         &self,
         path: PathBuf,
@@ -237,25 +261,34 @@ impl App {
         spawn: impl FnOnce(i32) -> Workers,
     ) -> Option<usize> {
         let window = self.window.upgrade()?;
+        let id = self.allocate_id();
+        let viewer = self.make_viewer(&window, &path, pages_pt, spawn(id));
+        Some(self.add_tab(Tab { id, path, title, viewer: Some(viewer), outline, loading: None }))
+    }
+
+    /// A viewer for the document at `path`, in the view it was last left in.
+    fn make_viewer(
+        &self,
+        window: &MainWindow,
+        path: &Path,
+        pages_pt: Vec<(f32, f32)>,
+        workers: Workers,
+    ) -> Rc<Viewer> {
         let settings = {
             let mut store = self.store.borrow_mut();
-            let settings = store.document(&path).unwrap_or_default();
-            store.record_open(&path);
+            let settings = store.document(path).unwrap_or_default();
+            store.record_open(path);
             settings
         };
-
-        let id = self.allocate_id();
-        let workers = spawn(id);
-        let viewer = Viewer::new(
-            &window,
+        Viewer::new(
+            window,
             pages_pt,
             window.window().scale_factor(),
             workers.pages,
             workers.thumbnails,
             workers.control,
             &settings,
-        );
-        Some(self.add_tab(Tab { id, path, title, viewer, outline }))
+        )
     }
 
     /// A fresh id to tag a new document's renders with.
@@ -279,11 +312,16 @@ impl App {
         index
     }
 
-    /// Shows the tab at `index`, handing the window over to its viewer.
+    /// Shows the tab at `index`, unless it is already shown.
     pub(crate) fn select(&self, index: usize) {
-        if self.active.get() == Some(index) {
-            return;
+        if self.active.get() != Some(index) {
+            self.show(index);
         }
+    }
+
+    /// Shows the tab at `index`, handing the window over to its viewer, or
+    /// saying that its document is loading.
+    fn show(&self, index: usize) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
@@ -296,10 +334,8 @@ impl App {
             return;
         };
 
-        // A viewer created for a new tab has already taken over the window, but
-        // the previous one still believes it owns it until told otherwise.
         if let Some(previous) = self.active_viewer()
-            && !Rc::ptr_eq(&previous, &viewer)
+            && viewer.as_ref().is_none_or(|viewer| !Rc::ptr_eq(&previous, viewer))
         {
             previous.deactivate();
         }
@@ -307,7 +343,11 @@ impl App {
 
         window.set_active_tab(index as i32);
         window.set_outline(outline);
-        window.set_doc_title(title);
+        window.set_doc_title(title.clone());
+        let Some(viewer) = viewer else {
+            Self::clear_document(&window, &format!("Loading {title}…"));
+            return;
+        };
         viewer.activate();
         // The window may have been resized while this tab was in the background.
         let (width, height) = self.viewport.get();
@@ -318,8 +358,8 @@ impl App {
 
     /// Closes the tab at `index`. Closing the active tab shows its right-hand
     /// neighbour, or the left-hand one when it was the last, as browsers do.
-    /// Dropping the tab's viewer closes its render channels, so its worker
-    /// threads shut themselves down.
+    /// Dropping the tab's viewer, or its loading worker's channel, closes its
+    /// render channels, so its worker threads shut themselves down.
     pub(crate) fn close(&self, index: usize) {
         let removed = {
             let mut tabs = self.tabs.borrow_mut();
@@ -330,12 +370,17 @@ impl App {
         };
         self.titles.remove(index);
         let remaining = self.tabs.borrow().len();
-        // Taken now, while the viewer is still here to ask.
-        self.store.borrow_mut().update(&removed.path, removed.viewer.settings());
+        // Taken now, while the viewer is still here to ask. A document that
+        // never finished loading has nothing new to remember.
+        if let Some(viewer) = &removed.viewer {
+            self.store.borrow_mut().update(&removed.path, viewer.settings());
+        }
 
         match self.active.get() {
             Some(active) if active == index => {
-                removed.viewer.deactivate();
+                if let Some(viewer) = &removed.viewer {
+                    viewer.deactivate();
+                }
                 self.active.set(None);
                 if remaining == 0 {
                     self.show_empty();
@@ -357,11 +402,11 @@ impl App {
     /// Records every open tab's view and the tabs themselves, then writes them
     /// out if anything changed since the last save.
     pub(crate) fn save(&self) {
-        let open: Vec<(PathBuf, ViewSettings)> = self
+        let open: Vec<(PathBuf, Option<ViewSettings>)> = self
             .tabs
             .borrow()
             .iter()
-            .map(|tab| (tab.path.clone(), tab.viewer.settings()))
+            .map(|tab| (tab.path.clone(), tab.viewer.as_ref().map(|viewer| viewer.settings())))
             .collect();
         let mut store = self.store.borrow_mut();
         let session = Session {
@@ -369,7 +414,9 @@ impl App {
             active: self.active.get(),
         };
         for (path, settings) in open {
-            store.update(&path, settings);
+            if let Some(settings) = settings {
+                store.update(&path, settings);
+            }
         }
         store.set_session(session);
         if let Err(err) = store.save() {
@@ -420,13 +467,18 @@ impl App {
             return;
         };
         window.set_active_tab(-1);
+        window.set_outline(ModelRc::default());
+        window.set_doc_title(SharedString::new());
+        Self::clear_document(&window, "Open a PDF to get started.");
+    }
+
+    /// Shows no pages, only `status` in their place.
+    fn clear_document(window: &MainWindow, status: &str) {
         window.set_rows(ModelRc::default());
         window.set_thumb_rows(ModelRc::default());
-        window.set_outline(ModelRc::default());
         window.set_page_count(0);
         window.set_current_page(0);
-        window.set_doc_title(SharedString::new());
-        window.set_status("Open a PDF to get started.".into());
+        window.set_status(status.into());
     }
 
     /// Highlights the window while files are dragged over it, and opens each
@@ -563,6 +615,10 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_page_rendered({
         let app = app.clone();
         move |doc, page, image| app.with_document(doc, |v| v.on_page_rendered(page, image.clone()))
+    });
+    window.on_document_loaded({
+        let app = app.clone();
+        move || app.receive_loads()
     });
     window.on_page_failed({
         let app = app.clone();

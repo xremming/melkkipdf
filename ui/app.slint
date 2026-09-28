@@ -398,6 +398,9 @@ export component MainWindow inherits Window {
     callback thumbnail-failed(int, int);
     // Invoked from Rust with a problem to show the reader.
     callback notify(string);
+    // Invoked from Rust when a document's worker has finished reading it, so
+    // the app can take in what it read.
+    callback document-loaded();
     callback viewport-resized(length, length);
     // Continuous scroll offset changed (logical pixels from the top).
     callback scrolled(float);

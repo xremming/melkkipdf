@@ -101,6 +101,48 @@ pub struct RenderRequest {
     pub prefetch: bool,
 }
 
+/// What a worker reads from a document before rendering any of it.
+pub struct DocumentInfo {
+    /// Every page's size in points, which lays out the whole document before
+    /// any page is rendered.
+    pub pages_pt: Vec<(f32, f32)>,
+    /// The outline (bookmarks) as `(title, 0-based page, depth)`, depth-first.
+    /// Empty when the document has none, or it cannot be read.
+    pub outline: Vec<(String, i32, i32)>,
+}
+
+/// A document's worker reporting that it has read the document `doc`, or
+/// why it could not.
+pub struct Loaded {
+    pub doc: i32,
+    pub result: Result<DocumentInfo, String>,
+}
+
+/// Reads what the viewer needs to lay out and navigate `document`. Loading
+/// every page takes a while for a long document, which is why it happens on
+/// the worker rather than on the UI thread.
+fn read_info(document: &Document) -> Result<DocumentInfo, Error> {
+    fn flatten(outlines: &[mupdf::Outline], depth: i32, out: &mut Vec<(String, i32, i32)>) {
+        for outline in outlines {
+            let page = outline.dest.as_ref().map_or(-1, |dest| dest.loc.page_number as i32);
+            out.push((outline.title.clone(), page, depth));
+            flatten(&outline.down, depth + 1, out);
+        }
+    }
+
+    let count = document.page_count()?;
+    let mut pages_pt = Vec::with_capacity(count.max(0) as usize);
+    for index in 0..count {
+        let bounds = document.load_page(index)?.bounds()?;
+        pages_pt.push((bounds.width(), bounds.height()));
+    }
+    let mut outline = Vec::new();
+    if let Ok(outlines) = document.outlines() {
+        flatten(&outlines, 0, &mut outline);
+    }
+    Ok(DocumentInfo { pages_pt, outline })
+}
+
 /// A message to a document's render worker.
 pub enum WorkerMessage {
     /// Render a page and deliver it to the viewer.
@@ -164,15 +206,17 @@ pub fn buffer_bytes(width: u32, height: u32) -> usize {
 
 /// Spawns the render worker and returns a channel for sending it requests.
 ///
-/// The worker opens its own `Document` (the UI thread reads page sizes from a
-/// separate handle), renders on demand, and delivers each finished page back to
-/// the viewer via the window's `page-rendered` callback. Every page is tagged
-/// with `doc`, because each open tab has a worker of its own and all of them
-/// report through the one window.
+/// The worker opens the document, reads its page sizes and outline, and sends
+/// them to `loaded`, calling the window's `document-loaded` callback so the
+/// app takes them in. It then renders on demand and delivers each finished
+/// page back to the viewer via the window's `page-rendered` callback. Every
+/// page is tagged with `doc`, because each open tab has a worker of its own
+/// and all of them report through the one window.
 pub fn spawn(
     path: String,
     doc: i32,
     window: Weak<MainWindow>,
+    loaded: Sender<Loaded>,
 ) -> (Sender<WorkerMessage>, RenderControl) {
     let (sender, receiver) = mpsc::channel::<WorkerMessage>();
     let abort = Arc::new(Mutex::new(AbortSlot::default()));
@@ -180,10 +224,19 @@ pub fn spawn(
 
     thread::spawn(move || {
         let name = display_name(&path);
-        let document = match Document::open(&path) {
-            Ok(document) => document,
+        let report = |result: Result<DocumentInfo, String>| {
+            let _ = loaded.send(Loaded { doc, result });
+            let _ = window.upgrade_in_event_loop(|window| window.invoke_document_loaded());
+        };
+        let opened = Document::open(&path)
+            .and_then(|document| read_info(&document).map(|info| (document, info)));
+        let document = match opened {
+            Ok((document, info)) => {
+                report(Ok(info));
+                document
+            }
             Err(err) => {
-                push_notice(&window, format!("Failed to open {name}: {err}."));
+                report(Err(err.to_string()));
                 return;
             }
         };

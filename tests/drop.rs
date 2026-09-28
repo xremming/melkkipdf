@@ -34,9 +34,11 @@ fn write_pdf(path: &Path, pages: usize) {
     document.save(path.to_str().unwrap()).unwrap();
 }
 
-/// Lets the event loop run what the drop scheduled.
-fn run_pending() {
+/// Lets the event loop run what the drop scheduled, and the dropped documents
+/// load.
+fn run_pending(t: &Tabs) {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+    t.finish_loading();
 }
 
 #[test]
@@ -49,7 +51,7 @@ fn a_dropped_pdf_opens_in_a_new_tab() {
     let t = tabs();
     t.open_file(&a);
     t.drop_file(&b);
-    run_pending();
+    run_pending(&t);
 
     assert_eq!(t.titles(), ["a.pdf", "b.pdf"]);
     assert_eq!(t.active_tab(), 1);
@@ -70,7 +72,7 @@ fn several_dropped_files_each_get_a_tab_in_order() {
     for path in &paths {
         t.drop_file(path);
     }
-    run_pending();
+    run_pending(&t);
 
     assert_eq!(t.titles(), ["one.pdf", "two.pdf", "three.pdf"]);
     assert_eq!(t.active_tab(), 2);
@@ -87,7 +89,7 @@ fn dropping_an_open_document_shows_its_tab() {
     t.open_file(&a);
     t.open_file(&b);
     t.drop_file(&a);
-    run_pending();
+    run_pending(&t);
 
     assert_eq!(t.titles(), ["a.pdf", "b.pdf"]);
     assert_eq!(t.active_tab(), 0);
@@ -103,7 +105,7 @@ fn dropping_something_unreadable_leaves_the_tabs_alone() {
     let t = tabs();
     t.open_file(&a);
     t.drop_file(&junk);
-    run_pending();
+    run_pending(&t);
 
     assert_eq!(t.titles(), ["a.pdf"]);
     assert_eq!(t.active_tab(), 0);

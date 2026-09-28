@@ -422,7 +422,7 @@ impl Viewer {
             model,
             thumb_model,
             window: window.as_weak(),
-            active: Cell::new(true),
+            active: Cell::new(false),
             sender,
             thumb_sender,
             control,
@@ -431,9 +431,6 @@ impl Viewer {
 
         viewer.build_layout();
         viewer.restore_page(settings.page);
-        // The window may still show another tab's modes and scroll position, so
-        // publish every property rather than only the ones build_layout sets.
-        viewer.activate();
         viewer
     }
 
@@ -465,7 +462,9 @@ impl Viewer {
     }
 
     /// Makes this the viewer the window shows and publishes its whole state:
-    /// models, modes, zoom, scroll position and page counter.
+    /// models, modes, zoom, scroll position and page counter. A new viewer
+    /// leaves the window alone until this is called, since its document may
+    /// finish loading while another tab is shown.
     pub fn activate(&self) {
         self.active.set(true);
         if let Some(window) = self.window() {
@@ -1545,6 +1544,7 @@ mod tests {
             crate::render::RenderControl::inert(),
             &super::ViewSettings::default(),
         );
+        viewer.activate();
 
         // Switch to paged mode, then deliver renders — including enough to force
         // the eviction path, which also calls back into the viewer.
@@ -1571,6 +1571,7 @@ mod tests {
             crate::render::RenderControl::inert(),
             &super::ViewSettings::default(),
         );
+        viewer.activate();
         // Paged mode avoids touching the scroll offset property.
         viewer.set_continuous(false);
 

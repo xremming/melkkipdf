@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
+use std::time::Duration;
 
 use slint::{Model, ModelRc};
 
@@ -66,6 +67,7 @@ impl Harness {
             RenderControl::inert(),
             &ViewSettings::default(),
         );
+        viewer.activate();
         Self { window, viewer, requests, _thumb_requests }
     }
 
@@ -240,9 +242,31 @@ impl Tabs {
         self.app.tabs.borrow()[index].id
     }
 
-    /// Opens a real file, exactly as the open button or the command line does.
+    /// Opens a real file, exactly as the open button or the command line does,
+    /// and waits for its worker to read it.
     pub fn open_file(&self, path: &Path) {
+        self.start_opening(path);
+        self.finish_loading();
+    }
+
+    /// Starts opening a real file, leaving its tab loading until
+    /// [`Tabs::finish_loading`].
+    pub fn start_opening(&self, path: &Path) {
         self.app.open(path.to_string_lossy().into_owned());
+    }
+
+    /// Waits for every document still loading to be read, and takes each in
+    /// as the event loop would once its worker reports back.
+    pub fn finish_loading(&self) {
+        let loading = || self.app.tabs.borrow().iter().any(|tab| tab.loading.is_some());
+        while loading() {
+            let loaded = self
+                .app
+                .loads
+                .recv_timeout(Duration::from_secs(30))
+                .expect("a document took too long to load");
+            self.app.finish_load(loaded);
+        }
     }
 
     /// Files dragged from another application arrive over the window.
@@ -267,14 +291,21 @@ impl Tabs {
         self.app.save();
     }
 
-    /// Reopens the tabs saved last time, as a real run does on start.
+    /// Reopens the tabs saved last time, as a real run does on start, and
+    /// waits for their documents to load.
     pub fn restore(&self) {
         self.app.restore_session();
+        self.finish_loading();
     }
 
-    /// The viewer of the tab at `index`.
+    /// The status shown in place of the pages, while no document is shown.
+    pub fn status(&self) -> String {
+        self.window.get_status().into()
+    }
+
+    /// The viewer of the tab at `index`. Panics while its document is loading.
     pub fn viewer(&self, index: usize) -> Rc<Viewer> {
-        self.app.tabs.borrow()[index].viewer.clone()
+        self.app.tabs.borrow()[index].viewer.clone().expect("the document is still loading")
     }
 
     /// The titles the tab strip shows, in order.
