@@ -103,7 +103,7 @@ impl Harness {
     /// Delivers a rendered image for the 0-based `page`, as the worker does,
     /// rendered at the scale the viewer asks for now.
     pub fn deliver(&self, page: usize, image: slint::Image) {
-        self.viewer.on_page_rendered(page, self.viewer.render_scale(), image);
+        self.viewer.on_page_rendered(page, self.viewer.page_render_scale(page), image);
     }
 
     /// Sets the viewport size, as a window resize would. Returns `&self` so it
@@ -232,6 +232,11 @@ impl Tabs {
 
     /// Like [`Tabs::open`], with pages of `width`×`height` points.
     pub fn open_sized(&self, title: &str, count: usize, width: f32, height: f32) -> i32 {
+        self.open_pages(title, vec![(width, height); count])
+    }
+
+    /// Like [`Tabs::open`], with each page's width and height in points.
+    pub fn open_pages(&self, title: &str, pages: Vec<(f32, f32)>) -> i32 {
         let path = PathBuf::from(title);
         if let Some(index) = self.app.find(&path) {
             self.app.select(index);
@@ -239,7 +244,7 @@ impl Tabs {
         }
         let index = self
             .app
-            .insert(path, title.into(), vec![(width, height); count], ModelRc::default(), |_| {
+            .insert(path, title.into(), pages, ModelRc::default(), |_| {
                 let (pages, requests) = mpsc::channel();
                 let (thumbnails, thumb_requests) = mpsc::channel();
                 self.receivers.borrow_mut().push((requests, thumb_requests));

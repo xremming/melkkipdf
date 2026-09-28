@@ -28,11 +28,14 @@ export struct PageEntry {
 }
 
 // A row in the document: a single page, or two pages side by side (a spread).
-// When `has-right` is false, `right` is unused.
+// When `has-right` is false, `right` is unused. `scale` shrinks a row far larger
+// than the document's usual one, such as a fold-out map, so it fits the height
+// every row in the continuous view shares; it is 1 for every other row.
 export struct PageRow {
     left: PageEntry,
     right: PageEntry,
     has-right: bool,
+    scale: float,
 }
 
 // One entry in the document outline (table of contents).
@@ -107,11 +110,11 @@ component ThumbView inherits Rectangle {
 // One row, centered horizontally and vertically. A single page centers on its
 // own; a spread centers as a pair so the two pages meet at the middle.
 //
-// Every row reserves the same height (`row-height-pt`, the tallest row in the
-// document). Slint's ListView assumes uniform item heights when estimating the
-// scroll extent; giving it exactly that keeps the viewport anchor stable while
-// scrolling instead of oscillating, which otherwise triggers a long
-// instantiation-chain warning.
+// Every row reserves the same height (`row-height-pt`, the tallest of the
+// document's usual rows, with larger rows scaled down to it). Slint's ListView
+// assumes uniform item heights when estimating the scroll extent; giving it
+// exactly that keeps the viewport anchor stable while scrolling instead of
+// oscillating, which otherwise triggers a long instantiation-chain warning.
 component PageRowView inherits Rectangle {
     in property <PageRow> page-row;
     in property <float> density;
@@ -127,14 +130,14 @@ component PageRowView inherits Rectangle {
             alignment: center;
             PageImageView {
                 entry: page-row.left;
-                density: root.density;
+                density: root.density * page-row.scale;
             }
         }
         if page-row.has-right: VerticalLayout {
             alignment: center;
             PageImageView {
                 entry: page-row.right;
-                density: root.density;
+                density: root.density * page-row.scale;
             }
         }
     }

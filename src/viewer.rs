@@ -139,6 +139,15 @@ const ROW_SNAP: f32 = 1e-3;
 /// How far into a row, as a fraction of the row, the view has to be for
 /// paging back to go to that row's start rather than the row before.
 const PARTWAY: f32 = 0.01;
+/// The share of rows, smallest first, whose largest sets the size of a usual
+/// row. The rest may be larger and still count as usual (see
+/// [`OUTLIER_FACTOR`]).
+const USUAL_SHARE: f32 = 0.9;
+/// How much larger than the usual row, in width or height, a row can be and
+/// still set the size every row is laid out and fitted to. A row past this,
+/// such as a fold-out map in a book of scanned pages, is shrunk to that size
+/// in continuous mode instead of making every other row as large as itself.
+const OUTLIER_FACTOR: f32 = 1.25;
 /// Rows to prefetch on either side of the visible range while idle.
 const PREFETCH_ROWS: usize = 4;
 /// Bytes of rendered page images a viewer keeps at once. A budget in bytes
@@ -180,9 +189,67 @@ impl Spread {
     }
 }
 
-/// Physical pixels per point that pages are rendered at.
+/// Physical pixels per point at the view's zoom, which the pages of a usual
+/// row are rendered at. See [`row_render_scale`] for any one row.
 fn render_scale(inner: &Inner) -> f32 {
     inner.zoom * BASE_DENSITY * inner.scale_factor
+}
+
+/// A row's width and height in points: its pages side by side.
+fn row_dims(pages_pt: &[(f32, f32)], spec: &RowSpec) -> (f32, f32) {
+    let (left_w, left_h) = pages_pt[spec.left];
+    let (right_w, right_h) = spec.right.map_or((0.0, 0.0), |right| pages_pt[right]);
+    (left_w + right_w, left_h.max(right_h))
+}
+
+/// How much smaller than its own size `row` is drawn in continuous mode: 1 for
+/// a row within the reference size, and for a larger one whatever shrinks it
+/// to fit, since every row there shares the reference height.
+fn row_shrink(inner: &Inner, row: usize) -> f32 {
+    let (width, height) = row_dims(&inner.pages_pt, &inner.specs[row]);
+    let fit = |reference: f32, size: f32| if size > reference { reference / size } else { 1.0 };
+    fit(inner.ref_w_pt, width).min(fit(inner.ref_h_pt, height))
+}
+
+/// The zoom the fit mode gives a box of `width_pt`×`height_pt` points in the
+/// current view, or `None` without a fit mode, a viewport or a size. `pair`
+/// says whether the box holds a spread, whose gap is not the pages' own.
+fn fit_zoom(inner: &Inner, width_pt: f32, height_pt: f32, pair: bool) -> Option<f32> {
+    let (view_w, view_h) = inner.view?;
+    if width_pt <= 0.0 || height_pt <= 0.0 {
+        return None;
+    }
+    // A fit should leave no more room than the layout itself needs: nothing
+    // at all in paged mode, which shows one row alone, and in continuous mode
+    // the scrollbar's width and the gap between rows, so a fitted row fills
+    // the view exactly.
+    let (gutter_w, gutter_h) =
+        if inner.continuous { (SCROLLBAR_GUTTER, inner.row_gap) } else { (0.0, 0.0) };
+    let spacing = if pair { inner.spread_spacing } else { 0.0 };
+    let width_zoom = (view_w - gutter_w - spacing).max(1.0) / (width_pt * BASE_DENSITY);
+    let zoom = match inner.fit {
+        FitMode::Width => width_zoom,
+        FitMode::Page => width_zoom.min((view_h - gutter_h).max(1.0) / (height_pt * BASE_DENSITY)),
+        FitMode::Free => return None,
+    };
+    Some(zoom.clamp(MIN_ZOOM, MAX_ZOOM))
+}
+
+/// The zoom `row` is drawn at. In continuous mode that is the view's zoom,
+/// shrunk for a row larger than the usual one. Paged mode shows each row
+/// alone, so with a fit mode on each row gets the zoom that fits it.
+fn row_zoom(inner: &Inner, row: usize) -> f32 {
+    if inner.continuous {
+        return inner.zoom * row_shrink(inner, row);
+    }
+    let spec = &inner.specs[row];
+    let (width, height) = row_dims(&inner.pages_pt, spec);
+    fit_zoom(inner, width, height, spec.right.is_some()).unwrap_or(inner.zoom)
+}
+
+/// Physical pixels per point that the pages of `row` are rendered at.
+fn row_render_scale(inner: &Inner, row: usize) -> f32 {
+    row_zoom(inner, row) * BASE_DENSITY * inner.scale_factor
 }
 
 /// The continuous row at `offset` (logical pixels from the top), and how far
@@ -225,7 +292,7 @@ fn rows_in_view(inner: &Inner) -> RangeInclusive<usize> {
 /// from before a zoom still shows, stretched, but is asked for again.
 fn row_rendered(inner: &Inner, row: usize) -> bool {
     let spec = &inner.specs[row];
-    let current = scale_key(render_scale(inner));
+    let current = scale_key(row_render_scale(inner, row));
     let done = |page: usize| {
         inner.retained.get(&page).is_some_and(|retained| retained.scale == current)
             || inner.failed.contains(&page)
@@ -354,18 +421,28 @@ fn page_locations(specs: &[RowSpec], page_count: usize) -> Vec<(usize, bool)> {
     locations
 }
 
-/// The largest row's width and height in points, used as the fit reference so no
-/// row overflows the viewport.
+/// The width and height in points that continuous mode lays every row out at
+/// and fits to: the largest width and height among the usual rows. A row is
+/// usual when neither its width nor its height is more than
+/// [`OUTLIER_FACTOR`] times the one at the [`USUAL_SHARE`] mark. A few much
+/// larger rows, such as a fold-out map, are left out, so they do not leave
+/// every other page small in a row far too large for it. A document whose
+/// pages simply come in two sizes has more than a few of the larger, which
+/// then count as usual.
 fn reference_dims(specs: &[RowSpec], pages_pt: &[(f32, f32)]) -> (f32, f32) {
-    let mut width = 0.0f32;
-    let mut height = 0.0f32;
-    for spec in specs {
-        let (left_w, left_h) = pages_pt[spec.left];
-        let (right_w, right_h) = spec.right.map_or((0.0, 0.0), |r| pages_pt[r]);
-        width = width.max(left_w + right_w);
-        height = height.max(left_h.max(right_h));
+    fn limit(mut sizes: Vec<f32>) -> f32 {
+        sizes.sort_by(f32::total_cmp);
+        let Some(last) = sizes.len().checked_sub(1) else {
+            return 0.0;
+        };
+        sizes[(last as f32 * USUAL_SHARE) as usize] * OUTLIER_FACTOR
     }
-    (width, height)
+    let dims: Vec<(f32, f32)> = specs.iter().map(|spec| row_dims(pages_pt, spec)).collect();
+    let limit_w = limit(dims.iter().map(|&(width, _)| width).collect());
+    let limit_h = limit(dims.iter().map(|&(_, height)| height).collect());
+    dims.into_iter()
+        .filter(|&(width, height)| width <= limit_w && height <= limit_h)
+        .fold((0.0, 0.0), |(max_w, max_h), (width, height)| (max_w.max(width), max_h.max(height)))
 }
 
 /// The page being read when `spec` is the row at the top: the page last asked
@@ -418,8 +495,9 @@ struct Inner {
     specs: Vec<RowSpec>,
     /// For each page, its row and whether it is the right page of a spread.
     page_loc: Vec<(usize, bool)>,
-    /// The widest row's width and the tallest row's height in points, which
-    /// the fit modes fit and every row's height is sized to.
+    /// The width and height in points of the largest usual row (see
+    /// [`reference_dims`]), which continuous mode fits and sizes every row
+    /// to.
     ref_w_pt: f32,
     ref_h_pt: f32,
     /// Rendered sidebar thumbnails, indexed by page (empty until rendered).
@@ -525,9 +603,10 @@ impl Viewer {
         viewer
     }
 
-    /// Physical pixels per point that pages are rendered at now.
-    pub fn render_scale(&self) -> f32 {
-        render_scale(&self.inner.borrow())
+    /// Physical pixels per point that the 0-based `page` is rendered at now.
+    pub fn page_render_scale(&self, page: usize) -> f32 {
+        let inner = self.inner.borrow();
+        inner.page_loc.get(page).map_or(0.0, |&(row, _)| row_render_scale(&inner, row))
     }
 
     /// The view choices to remember for this document.
@@ -621,7 +700,7 @@ impl Viewer {
         let Some(&spec) = inner.specs.get(row) else {
             return;
         };
-        let scale = render_scale(&inner);
+        let scale = row_render_scale(&inner, row);
         for page in spec.pages() {
             self.send(page, scale, false);
         }
@@ -829,7 +908,7 @@ impl Viewer {
     /// zoom: a delegate's `init` fires once and can't re-request a page cleared
     /// or rendered at an old scale since.
     fn request_visible(&self) {
-        let (visible, prefetch, scale) = {
+        let (visible, prefetch) = {
             let inner = self.inner.borrow();
             if !inner.continuous || inner.specs.is_empty() || row_height_px(&inner) <= 0.0 {
                 return;
@@ -849,20 +928,22 @@ impl Viewer {
             let prefetch: Vec<usize> =
                 ((visible_end + 1)..=below).chain(above..top).filter(|&r| needs(r)).collect();
 
-            (visible, prefetch, scale)
+            (visible, prefetch)
         };
-        self.dispatch(&visible, &prefetch, scale);
+        self.dispatch(&visible, &prefetch);
     }
 
     /// Starts a new view and asks for the pages of the `visible` rows, then
-    /// of the `prefetch` rows at low priority, all at `scale`.
-    fn dispatch(&self, visible: &[usize], prefetch: &[usize], scale: f32) {
-        let requests: Vec<(usize, bool)> = {
+    /// of the `prefetch` rows at low priority, each at its row's scale.
+    fn dispatch(&self, visible: &[usize], prefetch: &[usize]) {
+        let requests: Vec<(usize, f32, bool)> = {
             let inner = self.inner.borrow();
             let pages = |rows: &[usize], prefetch: bool| {
                 rows.iter()
-                    .flat_map(|&row| inner.specs[row].pages())
-                    .map(move |page| (page, prefetch))
+                    .flat_map(|&row| {
+                        let scale = row_render_scale(&inner, row);
+                        inner.specs[row].pages().map(move |page| (page, scale, prefetch))
+                    })
                     .collect::<Vec<_>>()
             };
             let mut requests = pages(visible, false);
@@ -870,9 +951,9 @@ impl Viewer {
             requests
         };
         let wanted: Vec<(i32, f32)> =
-            requests.iter().map(|&(page, _)| (page as i32, scale)).collect();
+            requests.iter().map(|&(page, scale, _)| (page as i32, scale)).collect();
         self.advance_epoch(&wanted);
-        for (page, prefetch) in requests {
+        for (page, scale, prefetch) in requests {
             self.send(page, scale, prefetch);
         }
     }
@@ -989,12 +1070,14 @@ impl Viewer {
         inner
             .specs
             .iter()
-            .map(|spec| {
+            .enumerate()
+            .map(|(row, spec)| {
                 let left = entry(inner, spec.left);
-                match spec.right {
-                    Some(right) => PageRow { left, right: entry(inner, right), has_right: true },
-                    None => PageRow { left, right: Self::placeholder(), has_right: false },
-                }
+                let (right, has_right) = match spec.right {
+                    Some(right) => (entry(inner, right), true),
+                    None => (Self::placeholder(), false),
+                };
+                PageRow { left, right, has_right, scale: row_shrink(inner, row) }
             })
             .collect()
     }
@@ -1086,7 +1169,7 @@ impl Viewer {
     /// forward and at the bottom when moving back, so scrolling reads as one
     /// continuous flow across the page boundary.
     fn paged_step_page(&self, dir: i32) {
-        let changed = {
+        {
             let mut inner = self.inner.borrow_mut();
             let last = inner.specs.len().saturating_sub(1) as i32;
             let target = (inner.current_row as i32 + dir).clamp(0, last) as usize;
@@ -1096,16 +1179,34 @@ impl Viewer {
             inner.current_row = target;
             inner.paged_scroll_x = 0.0;
             inner.overscroll = 0.0;
+        }
+        // The landing offset depends on how large the new row is drawn.
+        self.fit_paged_row();
+        {
+            let mut inner = self.inner.borrow_mut();
             let (_, content_h) = paged_content_size(&inner);
             let view_h = inner.view.map_or(0.0, |(_, h)| h);
             inner.paged_scroll_y = if dir < 0 { (content_h - view_h).max(0.0) } else { 0.0 };
-            true
+        }
+        self.refresh_current_row();
+        self.request_current_row();
+        self.push_paged_offsets();
+        self.update_current_page();
+    }
+
+    /// Gives the view the zoom of the row now shown in paged mode, which with
+    /// a fit mode on is fitted to that row alone (see [`row_zoom`]).
+    fn fit_paged_row(&self) {
+        let zoom = {
+            let inner = self.inner.borrow();
+            if inner.continuous || inner.specs.is_empty() {
+                return;
+            }
+            row_zoom(&inner, inner.current_row)
         };
-        if changed {
-            self.refresh_current_row();
-            self.request_current_row();
-            self.push_paged_offsets();
-            self.update_current_page();
+        if (self.inner.borrow().zoom - zoom).abs() > f32::EPSILON {
+            self.inner.borrow_mut().zoom = zoom;
+            self.apply_density();
         }
     }
 
@@ -1221,6 +1322,7 @@ impl Viewer {
             inner.paged_scroll_x = 0.0;
             inner.paged_scroll_y = 0.0;
         }
+        self.fit_paged_row();
         self.refresh_current_row();
         self.request_current_row();
         self.push_paged_offsets();
@@ -1260,30 +1362,18 @@ impl Viewer {
     fn fit_to_view(&self) {
         let recomputed = {
             let inner = self.inner.borrow();
-            let Some((view_w, view_h)) = inner.view else {
+            let zoom = if inner.continuous {
+                let pair = inner.spread != Spread::None;
+                fit_zoom(&inner, inner.ref_w_pt, inner.ref_h_pt, pair)
+            } else if inner.fit != FitMode::Free && !inner.specs.is_empty() {
+                Some(row_zoom(&inner, inner.current_row))
+            } else {
+                None
+            };
+            let Some(zoom) = zoom else {
                 return;
             };
-            if inner.ref_w_pt <= 0.0 || inner.ref_h_pt <= 0.0 {
-                return;
-            }
-            // A fit should leave no more room than the layout itself needs:
-            // nothing at all in paged mode, which shows one row alone, and in
-            // continuous mode the scrollbar's width and the gap between rows,
-            // so a fitted row fills the view exactly. The gap between the two
-            // pages of a spread is not part of the pages' own width either.
-            let (gutter_w, gutter_h) =
-                if inner.continuous { (SCROLLBAR_GUTTER, inner.row_gap) } else { (0.0, 0.0) };
-            let spacing = if inner.spread == Spread::None { 0.0 } else { inner.spread_spacing };
-            let width_zoom =
-                (view_w - gutter_w - spacing).max(1.0) / (inner.ref_w_pt * BASE_DENSITY);
-            match inner.fit {
-                FitMode::Width => width_zoom,
-                FitMode::Page => {
-                    width_zoom.min((view_h - gutter_h).max(1.0) / (inner.ref_h_pt * BASE_DENSITY))
-                }
-                FitMode::Free => return,
-            }
-            .clamp(MIN_ZOOM, MAX_ZOOM)
+            zoom
         };
 
         let place = self.place();
@@ -1348,6 +1438,7 @@ impl Viewer {
         match scroll {
             Some(target) => self.show_offset(target),
             None => {
+                self.fit_paged_row();
                 self.refresh_current_row();
                 self.push_paged_offsets();
             }
@@ -1460,7 +1551,7 @@ impl Viewer {
     /// side as prefetch, each unless already rendered at the current scale.
     /// Used by paged mode and one-shot navigation.
     fn request_current_row(&self) {
-        let (visible, neighbors, scale) = {
+        let (visible, neighbors) = {
             let inner = self.inner.borrow();
             if inner.specs.is_empty() {
                 return;
@@ -1474,9 +1565,9 @@ impl Viewer {
             let (visible, neighbors): (Vec<usize>, Vec<usize>) = (start..=end)
                 .filter(|&row| !row_rendered(&inner, row))
                 .partition(|&row| row == current);
-            (visible, neighbors, scale)
+            (visible, neighbors)
         };
-        self.dispatch(&visible, &neighbors, scale);
+        self.dispatch(&visible, &neighbors);
     }
 
     fn request_current_row_if_paged(&self) {
@@ -1561,7 +1652,7 @@ impl Viewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Spread, Viewer, build_row_specs, page_locations};
+    use super::{Spread, Viewer, build_row_specs, page_locations, reference_dims};
     use crate::MainWindow;
 
     fn as_pairs(specs: &[super::RowSpec]) -> Vec<(usize, Option<usize>)> {
@@ -1676,6 +1767,43 @@ mod tests {
         assert_eq!(loc[2], (1, true));
         assert_eq!(loc[3], (2, false));
         assert_eq!(loc[4], (2, true));
+    }
+
+    #[test]
+    fn a_few_outsized_pages_do_not_set_the_reference_size() {
+        // A scanned book: pages of slightly different sizes, a larger cover,
+        // and a fold-out map with the page after it.
+        let mut pages: Vec<(f32, f32)> = (0..40)
+            .map(|index| (492.0 + (index % 9) as f32 * 10.0, 686.0 + (index % 7) as f32 * 8.0))
+            .collect();
+        pages[0] = (612.0, 837.0);
+        pages[30] = (1551.0, 1202.0);
+        pages[31] = (773.0, 1055.0);
+        let specs = build_row_specs(pages.len(), Spread::None);
+        assert_eq!(reference_dims(&specs, &pages), (612.0, 837.0));
+
+        // In spreads the map's row is wider still, and is left out the same way.
+        let specs = build_row_specs(pages.len(), Spread::Even);
+        let (width, height) = reference_dims(&specs, &pages);
+        assert!(width < 1300.0, "the map's spread set the width: {width}");
+        assert_eq!(height, 837.0);
+    }
+
+    #[test]
+    fn pages_of_two_common_sizes_both_count() {
+        // Half portrait, half landscape: neither is an outlier.
+        let pages: Vec<(f32, f32)> = (0..20)
+            .map(|index| if index % 2 == 0 { (612.0, 792.0) } else { (792.0, 612.0) })
+            .collect();
+        let specs = build_row_specs(pages.len(), Spread::None);
+        assert_eq!(reference_dims(&specs, &pages), (792.0, 792.0));
+    }
+
+    #[test]
+    fn uniform_pages_are_their_own_reference() {
+        let pages = vec![(600.0, 800.0); 5];
+        let specs = build_row_specs(pages.len(), Spread::Odd);
+        assert_eq!(reference_dims(&specs, &pages), (1200.0, 800.0));
     }
 
     #[test]

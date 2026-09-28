@@ -248,7 +248,7 @@ fn pages_rendered_before_a_zoom_are_asked_for_again_in_view() {
 fn a_render_for_an_old_zoom_shows_but_is_asked_for_again() {
     let h = Harness::uniform(100, 600.0, 800.0);
     h.viewport(1000.0, 900.0);
-    let stale = h.viewer.render_scale() / 2.0;
+    let stale = h.viewer.page_render_scale(0) / 2.0;
     h.viewer.on_page_rendered(0, stale, image(400, 500));
     assert!(h.page_rendered(0), "the old render was not shown in the meantime");
 
