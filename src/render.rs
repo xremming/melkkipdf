@@ -176,7 +176,7 @@ fn cache_key(request: &RenderRequest) -> CacheKey {
 
 /// A scale quantized to whole per-mille steps, so two scales that render the
 /// same pixels compare equal.
-fn scale_key(scale: f32) -> u32 {
+pub fn scale_key(scale: f32) -> u32 {
     (scale * 1000.0).round() as u32
 }
 
@@ -279,7 +279,7 @@ pub fn spawn(
                 continue;
             }
             if let Some(buffer) = cache.get(&key) {
-                push_page(&window, doc, request.page, buffer);
+                push_page(&window, doc, &request, buffer);
                 continue;
             }
 
@@ -295,7 +295,7 @@ pub fn spawn(
                 Ok(buffer) => {
                     let bytes = buffer_bytes(buffer.width(), buffer.height());
                     cache.put(key, buffer.clone(), bytes);
-                    push_page(&window, doc, request.page, buffer);
+                    push_page(&window, doc, &request, buffer);
                 }
                 Err(err) => {
                     failed.insert(key);
@@ -329,10 +329,12 @@ fn accept(
     }
 }
 
-/// Hands a finished page to the UI thread.
-fn push_page(window: &Weak<MainWindow>, doc: i32, page: i32, buffer: PageBuffer) {
+/// Hands a finished page to the UI thread, with the scale it was asked for
+/// at, so the viewer can tell a render for an old zoom from a current one.
+fn push_page(window: &Weak<MainWindow>, doc: i32, request: &RenderRequest, buffer: PageBuffer) {
+    let (page, scale) = (request.page, request.scale);
     let _ = window.upgrade_in_event_loop(move |window| {
-        window.invoke_page_rendered(doc, page, Image::from_rgb8(buffer));
+        window.invoke_page_rendered(doc, page, scale, Image::from_rgb8(buffer));
     });
 }
 

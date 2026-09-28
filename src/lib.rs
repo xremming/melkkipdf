@@ -614,7 +614,9 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_page_rendered({
         let app = app.clone();
-        move |doc, page, image| app.with_document(doc, |v| v.on_page_rendered(page, image.clone()))
+        move |doc, page, scale, image| {
+            app.with_document(doc, |v| v.on_page_rendered(page, scale, image.clone()))
+        }
     });
     window.on_document_loaded({
         let app = app.clone();

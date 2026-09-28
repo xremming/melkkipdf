@@ -99,6 +99,12 @@ impl Harness {
         })
     }
 
+    /// Delivers a rendered image for the 0-based `page`, as the worker does,
+    /// rendered at the scale the viewer asks for now.
+    pub fn deliver(&self, page: i32, image: slint::Image) {
+        self.viewer.on_page_rendered(page, self.viewer.render_scale(), image);
+    }
+
     /// Sets the viewport size, as a window resize would. Returns `&self` so it
     /// can be chained after construction.
     pub fn viewport(&self, width: f32, height: f32) -> &Self {

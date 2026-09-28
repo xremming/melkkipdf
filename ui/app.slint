@@ -390,8 +390,9 @@ export component MainWindow inherits Window {
     // index, image). Every tab's worker reports here, hence the document id.
     callback thumbnail-rendered(int, int, image);
     callback request-render-row(int);
-    // Invoked from Rust when a page has rendered (document id, page, image).
-    callback page-rendered(int, int, image);
+    // Invoked from Rust when a page has rendered (document id, page, the scale
+    // it was asked for at, image).
+    callback page-rendered(int, int, float, image);
     // Invoked from Rust when a page failed to render (document id, page), or
     // its thumbnail failed to.
     callback page-failed(int, int);

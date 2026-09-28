@@ -108,7 +108,7 @@ fn scrolling_does_not_rerequest_already_rendered_pages() {
 
     // Pretend those pages finished rendering.
     for &page in &first {
-        h.viewer.on_page_rendered(page, slint::Image::default());
+        h.deliver(page, slint::Image::default());
     }
 
     // Scrolling to the same spot again should not re-request rendered pages.
@@ -136,7 +136,7 @@ fn large_pages_are_evicted_by_size_keeping_those_in_view() {
     // page past them is dropped again, however recently it arrived.
     let page = image(5000, 5000);
     for index in 0..10 {
-        h.viewer.on_page_rendered(index, page.clone());
+        h.deliver(index, page.clone());
     }
     for index in 0..3 {
         assert!(h.page_rendered(index), "page {} in view was evicted", index + 1);
@@ -152,7 +152,7 @@ fn small_pages_are_all_kept() {
     h.viewport(1000.0, 900.0);
     let page = image(800, 1000);
     for index in 0..60 {
-        h.viewer.on_page_rendered(index, page.clone());
+        h.deliver(index, page.clone());
     }
     assert!((0..60).all(|index| h.page_rendered(index)));
 }
@@ -182,7 +182,7 @@ fn a_background_tab_keeps_only_the_pages_in_view() {
     h.viewport(1000.0, 900.0);
     let page = image(800, 1000);
     for index in 0..8 {
-        h.viewer.on_page_rendered(index, page.clone());
+        h.deliver(index, page.clone());
     }
 
     h.viewer.deactivate();
@@ -213,4 +213,46 @@ fn a_resize_renders_only_once_it_settles() {
     assert!(!requests.is_empty(), "nothing rendered once the size settled");
     let epochs: std::collections::HashSet<u64> = requests.iter().map(|(_, e, _)| *e).collect();
     assert_eq!(epochs.len(), 1, "rendered for more than the final size");
+}
+
+#[test]
+fn pages_rendered_before_a_zoom_are_asked_for_again_in_view() {
+    let h = Harness::uniform(100, 600.0, 800.0);
+    h.viewport(1000.0, 900.0);
+    h.viewer.go_to_page("7");
+    let offset = -h.scroll_y();
+    h.viewer.nav_home();
+    let page = image(800, 1000);
+    for index in 0..10 {
+        h.deliver(index, page.clone());
+    }
+
+    // Zooming asks for the rows in view at the new scale, but the rows below
+    // still hold renders at the old one.
+    h.viewer.zoom_in();
+    h.viewer.go_to_page("7");
+    let offset_after = -h.scroll_y();
+    h.viewer.nav_home();
+    assert_ne!(offset, offset_after, "the zoom did not change the layout");
+    let _ = h.take_render_requests();
+
+    h.scroll_by_user(offset_after);
+    let requests = h.take_render_requests();
+    assert!(
+        requests.contains(&6),
+        "a page rendered at the old zoom was not asked for: {requests:?}"
+    );
+}
+
+#[test]
+fn a_render_for_an_old_zoom_shows_but_is_asked_for_again() {
+    let h = Harness::uniform(100, 600.0, 800.0);
+    h.viewport(1000.0, 900.0);
+    let stale = h.viewer.render_scale() / 2.0;
+    h.viewer.on_page_rendered(0, stale, image(400, 500));
+    assert!(h.page_rendered(0), "the old render was not shown in the meantime");
+
+    let _ = h.take_render_requests();
+    h.scroll_by_user(1.0);
+    assert!(h.take_render_requests().contains(&0), "the old render counted as current");
 }

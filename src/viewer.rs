@@ -20,7 +20,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 
-use crate::render::{RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale};
+use crate::render::{
+    RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale, scale_key,
+};
 use crate::{MainWindow, PageEntry, PageRow};
 
 /// How pages are grouped into rows.
@@ -64,6 +66,15 @@ impl Default for ViewSettings {
     fn default() -> Self {
         Self { continuous: true, spread: Spread::None, fit: FitMode::Page, zoom: 1.0, page: 0 }
     }
+}
+
+/// A page's rendered image, as far as budgeting and re-requesting it go.
+#[derive(Clone, Copy)]
+struct Retained {
+    /// The bytes the image takes.
+    bytes: usize,
+    /// The scale it was rendered at, as a [`scale_key`].
+    scale: u32,
 }
 
 /// The page indices making up one row.
@@ -171,11 +182,16 @@ fn rows_in_view(inner: &Inner) -> RangeInclusive<usize> {
     top..=(top + span).min(last)
 }
 
-/// Whether every page of `row` has a rendered image, or failed to render at
-/// the current scale and so is not worth asking for again.
+/// Whether every page of `row` has an image rendered at the current scale,
+/// or failed to render at it and so is not worth asking for again. An image
+/// from before a zoom still shows, stretched, but is asked for again.
 fn row_rendered(inner: &Inner, row: usize) -> bool {
     let spec = &inner.specs[row];
-    let done = |page: usize| inner.retained.contains_key(&page) || inner.failed.contains(&page);
+    let current = scale_key(render_scale(inner));
+    let done = |page: usize| {
+        inner.retained.get(&page).is_some_and(|retained| retained.scale == current)
+            || inner.failed.contains(&page)
+    };
     done(spec.left) && spec.right.is_none_or(done)
 }
 
@@ -199,7 +215,7 @@ fn prefetch_rows(inner: &Inner, in_view: usize, scale: f32) -> usize {
 /// the budget, since dropping what is on screen would only have it rendered
 /// again straight away.
 fn pages_over_budget(inner: &Inner) -> Vec<usize> {
-    let mut used: usize = inner.retained.values().sum();
+    let mut used: usize = inner.retained.values().map(|retained| retained.bytes).sum();
     if used <= RETAIN_BUDGET {
         return Vec::new();
     }
@@ -223,7 +239,7 @@ fn pages_over_budget(inner: &Inner) -> Vec<usize> {
         if used <= RETAIN_BUDGET {
             break;
         }
-        used -= inner.retained[&page];
+        used -= inner.retained[&page].bytes;
         evicted.push(page);
     }
     evicted
@@ -330,8 +346,8 @@ struct Inner {
     scale_factor: f32,
     view: Option<(f32, f32)>,
     fit: FitMode,
-    /// The pages holding a rendered image, and the bytes each image takes.
-    retained: HashMap<usize, usize>,
+    /// The pages holding a rendered image.
+    retained: HashMap<usize, Retained>,
     /// The pages that failed to render at the current scale.
     failed: HashSet<usize>,
     /// The pages whose thumbnail failed to render.
@@ -450,6 +466,11 @@ impl Viewer {
         viewer
     }
 
+    /// Physical pixels per point that pages are rendered at now.
+    pub fn render_scale(&self) -> f32 {
+        render_scale(&self.inner.borrow())
+    }
+
     /// The view choices to remember for this document.
     pub fn settings(&self) -> ViewSettings {
         let inner = self.inner.borrow();
@@ -550,11 +571,12 @@ impl Viewer {
 
     /// Installs a freshly rendered page image into its row, evicting the
     /// images furthest from the view if that takes the viewer over its budget.
+    /// `scale` is the scale the page was asked for at.
     ///
     /// Borrows of `inner` are kept to short scopes: the model updates and the
     /// self-calls below (which borrow `inner` themselves) must not run while a
     /// borrow is held, or a re-entrant call panics.
-    pub fn on_page_rendered(&self, page: i32, image: Image) {
+    pub fn on_page_rendered(&self, page: i32, scale: f32, image: Image) {
         let index = page as usize;
         let size = image.size();
         let (row_index, is_right, width_pt, height_pt, is_current_paged, evicted) = {
@@ -565,7 +587,8 @@ impl Viewer {
             let (width_pt, height_pt) = inner.pages_pt[index];
             let is_current_paged = !inner.continuous && row_index == inner.current_row;
 
-            inner.retained.insert(index, buffer_bytes(size.width, size.height));
+            let bytes = buffer_bytes(size.width, size.height);
+            inner.retained.insert(index, Retained { bytes, scale: scale_key(scale) });
             inner.failed.remove(&index);
             let evicted = pages_over_budget(&inner);
             for page in &evicted {
@@ -747,7 +770,7 @@ impl Viewer {
             inner.current_row = row.min(inner.specs.len() - 1);
         }
         self.update_current_page();
-        self.request_visible(false);
+        self.request_visible();
     }
 
     /// The reader moved the continuous list (wheel, drag or scrollbar), so
@@ -757,11 +780,11 @@ impl Viewer {
         self.inner.borrow_mut().settling = None;
     }
 
-    /// Requests the visible rows (and a prefetch margin), top-first. On scroll,
-    /// pass `force = false` to skip rows already rendered; on zoom (a new scale),
-    /// pass `force = true` to re-render everything visible. Also covers eviction:
-    /// a delegate's `init` fires once and can't re-request a page cleared later.
-    fn request_visible(&self, force: bool) {
+    /// Requests the visible rows (and a prefetch margin), top-first, skipping
+    /// rows already rendered at the current scale. Also covers eviction and
+    /// zoom: a delegate's `init` fires once and can't re-request a page cleared
+    /// or rendered at an old scale since.
+    fn request_visible(&self) {
         let (visible, prefetch, scale) = {
             let inner = self.inner.borrow();
             if !inner.continuous || inner.specs.is_empty() || row_height_px(&inner) <= 0.0 {
@@ -771,7 +794,7 @@ impl Viewer {
             let (top, visible_end) = (*view.start(), *view.end());
             let last = inner.specs.len() - 1;
             let scale = render_scale(&inner);
-            let needs = |row: usize| force || !row_rendered(&inner, row);
+            let needs = |row: usize| !row_rendered(&inner, row);
 
             let visible: Vec<usize> = (top..=visible_end).filter(|&r| needs(r)).collect();
 
@@ -1444,9 +1467,10 @@ impl Viewer {
     }
 
     /// Requests the current row (high priority) plus a few neighbors on each
-    /// side as prefetch. Used by paged mode and one-shot navigation.
+    /// side as prefetch, each unless already rendered at the current scale.
+    /// Used by paged mode and one-shot navigation.
     fn request_current_row(&self) {
-        let (current, neighbors, scale) = {
+        let (visible, neighbors, scale) = {
             let inner = self.inner.borrow();
             if inner.specs.is_empty() {
                 return;
@@ -1457,11 +1481,12 @@ impl Viewer {
             let margin = prefetch_rows(&inner, 1, scale);
             let start = current.saturating_sub(margin);
             let end = (current + margin).min(last);
-            let neighbors: Vec<usize> =
-                (start..=end).filter(|&row| row != current && !row_rendered(&inner, row)).collect();
-            (current, neighbors, scale)
+            let (visible, neighbors): (Vec<usize>, Vec<usize>) = (start..=end)
+                .filter(|&row| !row_rendered(&inner, row))
+                .partition(|&row| row == current);
+            (visible, neighbors, scale)
         };
-        self.dispatch(&[current], &neighbors, scale);
+        self.dispatch(&visible, &neighbors, scale);
     }
 
     fn request_current_row_if_paged(&self) {
@@ -1508,7 +1533,7 @@ impl Viewer {
         // as one that was too large for memory.
         self.inner.borrow_mut().failed.clear();
         if self.inner.borrow().continuous {
-            self.request_visible(true);
+            self.request_visible();
         } else {
             self.request_current_row();
         }
@@ -1595,10 +1620,10 @@ mod tests {
         viewer.toggle_continuous();
         let image = large_image();
         for page in 0..5 {
-            viewer.on_page_rendered(page, image.clone());
+            viewer.on_page_rendered(page, 1.0, image.clone());
         }
         viewer.nav_page(1);
-        viewer.on_page_rendered(2, image);
+        viewer.on_page_rendered(2, 1.0, image);
     }
 
     /// go_to_page parses, clamps, and reports the resulting page.

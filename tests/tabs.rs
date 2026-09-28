@@ -93,7 +93,7 @@ fn renders_for_a_background_tab_land_in_that_tab() {
 
     // Every worker reports through the one window, so a page finished for a
     // background tab must not show up in the tab on screen.
-    t.window.invoke_page_rendered(a, 0, rendered());
+    t.window.invoke_page_rendered(a, 0, 1.0, rendered());
     assert!(!first_row_rendered(&t));
 
     t.window.invoke_select_tab(0);
@@ -154,7 +154,7 @@ fn closing_every_tab_returns_to_the_empty_window() {
     assert_eq!(t.window.get_status(), "Open a PDF to get started.");
 
     // A render the closed tab's worker finished late has nowhere to go.
-    t.window.invoke_page_rendered(a, 0, rendered());
+    t.window.invoke_page_rendered(a, 0, 1.0, rendered());
     assert_eq!(t.window.get_rows().row_count(), 0);
 }
 
