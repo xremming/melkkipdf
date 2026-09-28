@@ -46,6 +46,18 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.4.0" date="2026-09-29">
+      <description>
+        <p>
+          Documents open without freezing the window, and problems such as a
+          page that fails to render are now shown. A book with an oversized
+          page, like a fold-out map, no longer shrinks every other page, and
+          paged mode fits each page on its own. Rendered pages take far less
+          memory, and the flatpak now reads only your home folder and
+          removable media.
+        </p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-09-28">
       <description>
         <p>
