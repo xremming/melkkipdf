@@ -5,8 +5,9 @@
 //! a channel and only ever receives finished, reference-counted RGB buffers,
 //! which it hands to the viewer through the `page-rendered` callback.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -137,6 +138,11 @@ pub fn capped_scale(width_pt: f32, height_pt: f32, scale: f32) -> f32 {
     if largest > MAX_RENDER_PX { scale * MAX_RENDER_PX / largest } else { scale }
 }
 
+/// The document's file name, which names it in messages to the reader.
+fn display_name(path: &str) -> String {
+    Path::new(path).file_name().map_or_else(|| path.into(), |name| name.to_string_lossy().into())
+}
+
 /// The bytes a rendered page takes in memory.
 pub fn buffer_bytes(width: u32, height: u32) -> usize {
     width as usize * height as usize * 3
@@ -159,15 +165,20 @@ pub fn spawn(
     let control = RenderControl { abort: abort.clone() };
 
     thread::spawn(move || {
+        let name = display_name(&path);
         let document = match Document::open(&path) {
             Ok(document) => document,
             Err(err) => {
-                push_status(&window, format!("Failed to open {path}: {err}"));
+                push_notice(&window, format!("Failed to open {name}: {err}."));
                 return;
             }
         };
 
         let mut cache: LruCache<CacheKey, PageBuffer> = LruCache::new(CACHE_BUDGET);
+        // Renders that failed. A broken page fails the same way every time,
+        // so asking again would only repeat the error, but a render too large
+        // for memory may work at another zoom, hence the scale in the key.
+        let mut failed: HashSet<CacheKey> = HashSet::new();
 
         // Requests waiting to be rendered. We render one page at a time and
         // re-check the channel after each, so a fresh scroll preempts a stale
@@ -197,6 +208,9 @@ pub fn spawn(
             let request = pending.remove(0);
             let key = cache_key(&request);
 
+            if failed.contains(&key) {
+                continue;
+            }
             if let Some(buffer) = cache.get(&key) {
                 push_page(&window, doc, request.page, buffer);
                 continue;
@@ -217,8 +231,16 @@ pub fn spawn(
                     push_page(&window, doc, request.page, buffer);
                 }
                 Err(err) => {
-                    let page = request.page + 1;
-                    push_status(&window, format!("Failed to render page {page}: {err}"));
+                    failed.insert(key);
+                    let (doc, page) = (doc, request.page);
+                    let _ = window.upgrade_in_event_loop(move |window| {
+                        window.invoke_page_failed(doc, page);
+                    });
+                    let number = page + 1;
+                    push_notice(
+                        &window,
+                        format!("Failed to render page {number} of {name}: {err}."),
+                    );
                 }
             }
         }
@@ -317,18 +339,34 @@ const THUMB_WIDTH: f32 = 150.0;
 pub fn spawn_thumbnails(path: String, doc: i32, window: Weak<MainWindow>) -> Sender<i32> {
     let (sender, receiver) = mpsc::channel::<i32>();
     thread::spawn(move || {
-        let Ok(document) = Document::open(&path) else {
-            return;
+        let name = display_name(&path);
+        // The page renderer opens the same file and tells the reader when it
+        // cannot, so a failure here is only logged.
+        let document = match Document::open(&path) {
+            Ok(document) => document,
+            Err(err) => {
+                eprintln!("Failed to open {name} for thumbnails: {err}.");
+                return;
+            }
         };
-        let mut done: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        let mut done: HashSet<i32> = HashSet::new();
         while let Ok(page) = receiver.recv() {
             if !done.insert(page) {
                 continue;
             }
-            if let Ok(buffer) = render_thumbnail(&document, page) {
-                let _ = window.upgrade_in_event_loop(move |window| {
-                    window.invoke_thumbnail_rendered(doc, page, Image::from_rgb8(buffer));
-                });
+            match render_thumbnail(&document, page) {
+                Ok(buffer) => {
+                    let _ = window.upgrade_in_event_loop(move |window| {
+                        window.invoke_thumbnail_rendered(doc, page, Image::from_rgb8(buffer));
+                    });
+                }
+                Err(err) => {
+                    let number = page + 1;
+                    eprintln!("Failed to render the thumbnail of page {number} of {name}: {err}.");
+                    let _ = window.upgrade_in_event_loop(move |window| {
+                        window.invoke_thumbnail_failed(doc, page);
+                    });
+                }
             }
         }
     });
@@ -364,11 +402,11 @@ fn pixmap_to_buffer(pixmap: &Pixmap) -> PageBuffer {
     buffer
 }
 
-/// Pushes a status message to the UI thread, ignoring the error that arises only
-/// once the event loop has shut down.
-fn push_status(window: &Weak<MainWindow>, status: String) {
+/// Tells the reader about a problem, from the UI thread, ignoring the error
+/// that arises only once the event loop has shut down.
+fn push_notice(window: &Weak<MainWindow>, message: String) {
     let _ = window.upgrade_in_event_loop(move |window| {
-        window.set_status(status.into());
+        window.invoke_notify(message.into());
     });
 }
 

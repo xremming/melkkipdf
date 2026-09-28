@@ -107,6 +107,7 @@ fn dropping_something_unreadable_leaves_the_tabs_alone() {
 
     assert_eq!(t.titles(), ["a.pdf"]);
     assert_eq!(t.active_tab(), 0);
+    assert!(t.window.get_notice().contains("notes.pdf"), "the failure was not reported");
 }
 
 fn overlay_shown(t: &Tabs) -> bool {

@@ -66,6 +66,8 @@ pub fn read_outline(path: &str) -> Vec<(String, i32, i32)> {
 /// How often changes are written out between the explicit save points, which
 /// bounds what a crash or a killed process can lose.
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(5);
+/// How long a problem stays on screen, long enough to read a sentence or two.
+const NOTICE_DURATION: Duration = Duration::from_secs(8);
 
 /// A file dragged from another application over the window. Kept apart from
 /// winit's event type so the tests can drive it.
@@ -124,6 +126,8 @@ pub(crate) struct App {
     /// Files dropped onto the window and not yet opened, in the order they
     /// arrived.
     dropped: RefCell<Vec<PathBuf>>,
+    /// Takes the current notice down once it has been up long enough.
+    notice_timer: Timer,
 }
 
 impl App {
@@ -139,6 +143,7 @@ impl App {
             viewport: Cell::new((0.0, 0.0)),
             store: RefCell::new(store),
             dropped: RefCell::new(Vec::new()),
+            notice_timer: Timer::default(),
         });
         app.show_empty();
         wire_callbacks(window, &app);
@@ -185,11 +190,11 @@ impl App {
         let pages_pt = match read_page_sizes(&path) {
             Ok(sizes) if !sizes.is_empty() => sizes,
             Ok(_) => {
-                window.set_status("Document has no pages.".into());
+                self.notify(&format!("Failed to open {path}, which has no pages."));
                 return None;
             }
             Err(err) => {
-                window.set_status(format!("Failed to open {path}: {err}").into());
+                self.notify(&format!("Failed to open {path}: {err}."));
                 return None;
             }
         };
@@ -392,6 +397,23 @@ impl App {
         }
     }
 
+    /// Tells the reader about a problem, such as a document or page that failed
+    /// to open, and logs it. The message goes away by itself after a while, or
+    /// when clicked, and a newer one replaces it.
+    pub(crate) fn notify(&self, message: &str) {
+        eprintln!("{message}");
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        window.set_notice(message.into());
+        let window = self.window.clone();
+        self.notice_timer.start(TimerMode::SingleShot, NOTICE_DURATION, move || {
+            if let Some(window) = window.upgrade() {
+                window.set_notice(SharedString::new());
+            }
+        });
+    }
+
     /// Resets the window to the state it starts in, with no document open.
     fn show_empty(&self) {
         let Some(window) = self.window.upgrade() else {
@@ -542,6 +564,14 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         let app = app.clone();
         move |doc, page, image| app.with_document(doc, |v| v.on_page_rendered(page, image.clone()))
     });
+    window.on_page_failed({
+        let app = app.clone();
+        move |doc, page| app.with_document(doc, |v| v.on_page_failed(page))
+    });
+    window.on_notify({
+        let app = app.clone();
+        move |message| app.notify(message.as_str())
+    });
     window.on_viewport_resized({
         let app = app.clone();
         move |width, height| {
@@ -626,6 +656,10 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         move |doc, page, image| {
             app.with_document(doc, |v| v.on_thumbnail_rendered(page, image.clone()))
         }
+    });
+    window.on_thumbnail_failed({
+        let app = app.clone();
+        move |doc, page| app.with_document(doc, |v| v.on_thumbnail_failed(page))
     });
     window.on_toggle_sidebar({
         let window = window.as_weak();

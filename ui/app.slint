@@ -8,12 +8,13 @@ global Toolbar {
 }
 
 // One page's fixed size (in PDF points) and its rendered image. The image is
-// empty until the page has been rendered.
+// empty until the page has been rendered, and stays empty if rendering failed.
 export struct PageEntry {
     page: int,
     width-pt: float,
     height-pt: float,
     image: image,
+    failed: bool,
 }
 
 // A row in the document: a single page, or two pages side by side (a spread).
@@ -47,12 +48,22 @@ component PageImageView inherits Rectangle {
 
     // A spinner while the page has not been rendered yet (empty image). It
     // disappears as soon as the rendered image arrives.
-    if entry.image.width == 0: Spinner {
+    if entry.image.width == 0 && !entry.failed: Spinner {
         width: min(36px, parent.width / 4);
         height: self.width;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         indeterminate: true;
+    }
+
+    // A page that failed to render says so, rather than spinning forever.
+    if entry.failed: Text {
+        width: parent.width - 16px;
+        text: "This page could not be displayed.";
+        color: #666666;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
     }
 }
 
@@ -74,7 +85,7 @@ component ThumbView inherits Rectangle {
         image-fit: contain;
     }
 
-    if entry.image.width == 0: Spinner {
+    if entry.image.width == 0 && !entry.failed: Spinner {
         width: 24px;
         height: 24px;
         x: (parent.width - self.width) / 2;
@@ -341,8 +352,12 @@ export component MainWindow inherits Window {
     in property <int> page-count;
     // Two-way bound to the ListView's scroll offset so Rust can jump to a page.
     in-out property <length> scroll-y;
-    // Shown in the document area only when there are no pages (errors/usage).
+    // Shown in the document area while no document is open.
     in property <string> status;
+    // A problem to tell the reader about, such as a document or page that
+    // failed to open, shown over the document until dismissed or replaced.
+    // Empty while there is nothing to report.
+    in-out property <string> notice;
 
     // Sidebar: the document outline, thumbnail rows (grouped like the current
     // spread mode), and which tab is showing (0 = outline, 1 = pages).
@@ -377,6 +392,12 @@ export component MainWindow inherits Window {
     callback request-render-row(int);
     // Invoked from Rust when a page has rendered (document id, page, image).
     callback page-rendered(int, int, image);
+    // Invoked from Rust when a page failed to render (document id, page), or
+    // its thumbnail failed to.
+    callback page-failed(int, int);
+    callback thumbnail-failed(int, int);
+    // Invoked from Rust with a problem to show the reader.
+    callback notify(string);
     callback viewport-resized(length, length);
     // Continuous scroll offset changed (logical pixels from the top).
     callback scrolled(float);
@@ -815,6 +836,34 @@ export component MainWindow inherits Window {
         }
     }
 }
+
+    // Problems are reported over the bottom of the window, where they stay in
+    // view whatever the document shows. A click dismisses one early.
+    if root.notice != "": notice-banner := Rectangle {
+        width: min(640px, root.width - 32px);
+        height: notice-layout.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 24px;
+        background: #5c2323;
+        border-width: 1px;
+        border-color: #8a3a3a;
+        border-radius: 6px;
+
+        notice-layout := VerticalLayout {
+            padding: 10px;
+            Text {
+                text: root.notice;
+                color: #ffffff;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+        }
+        TouchArea {
+            clicked => {
+                root.notice = "";
+            }
+        }
+    }
 
     // Shown while files dragged from another application are over the window,
     // so it is clear that letting go opens them.

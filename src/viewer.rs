@@ -11,7 +11,7 @@
 //! models, and [`Viewer::activate`] puts all of it back on screen.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::RangeInclusive;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
@@ -157,11 +157,12 @@ fn rows_in_view(inner: &Inner) -> RangeInclusive<usize> {
     top..=(top + span).min(last)
 }
 
-/// Whether every page of `row` has a rendered image.
+/// Whether every page of `row` has a rendered image, or failed to render at
+/// the current scale and so is not worth asking for again.
 fn row_rendered(inner: &Inner, row: usize) -> bool {
     let spec = &inner.specs[row];
-    inner.retained.contains_key(&spec.left)
-        && spec.right.is_none_or(|right| inner.retained.contains_key(&right))
+    let done = |page: usize| inner.retained.contains_key(&page) || inner.failed.contains(&page);
+    done(spec.left) && spec.right.is_none_or(done)
 }
 
 /// How many rows to prefetch on each side of the `in_view` rows on screen:
@@ -317,6 +318,10 @@ struct Inner {
     fit: FitMode,
     /// The pages holding a rendered image, and the bytes each image takes.
     retained: HashMap<usize, usize>,
+    /// The pages that failed to render at the current scale.
+    failed: HashSet<usize>,
+    /// The pages whose thumbnail failed to render.
+    thumb_failed: HashSet<usize>,
     spread: Spread,
     continuous: bool,
     current_row: usize,
@@ -384,6 +389,8 @@ impl Viewer {
                 view: None,
                 fit: settings.fit,
                 retained: HashMap::new(),
+                failed: HashSet::new(),
+                thumb_failed: HashSet::new(),
                 spread: settings.spread,
                 continuous: settings.continuous,
                 current_row: 0,
@@ -462,7 +469,6 @@ impl Viewer {
         self.show_offset(scroll_px);
         self.apply_density();
         self.refresh_current_row();
-        self.update_status();
         self.update_current_page();
     }
 
@@ -531,6 +537,7 @@ impl Viewer {
             let is_current_paged = !inner.continuous && row_index == inner.current_row;
 
             inner.retained.insert(index, buffer_bytes(size.width, size.height));
+            inner.failed.remove(&index);
             let evicted = pages_over_budget(&inner);
             for page in &evicted {
                 inner.retained.remove(page);
@@ -538,7 +545,7 @@ impl Viewer {
             (row_index, is_right, width_pt, height_pt, is_current_paged, evicted)
         };
 
-        let entry = PageEntry { page, width_pt, height_pt, image };
+        let entry = PageEntry { page, width_pt, height_pt, image, failed: false };
         self.set_row_entry(row_index, is_right, entry);
         if is_current_paged {
             self.refresh_current_row();
@@ -634,7 +641,6 @@ impl Viewer {
             self.request_current_row();
         }
         self.reapply_scale();
-        self.update_status();
         self.update_current_page();
     }
 
@@ -660,7 +666,6 @@ impl Viewer {
         // position that matches the new rows.
         self.restore_place(place);
         self.reapply_scale();
-        self.update_status();
         self.update_current_page();
     }
 
@@ -804,14 +809,53 @@ impl Viewer {
             let (width_pt, height_pt) = inner.pages_pt[index];
             (row, is_right, width_pt, height_pt)
         };
+        let entry = PageEntry { page, width_pt, height_pt, image, failed: false };
+        self.set_thumb_entry(row, is_right, entry);
+    }
+
+    /// Marks a page whose thumbnail failed to render, so its slot in the
+    /// sidebar stops showing a spinner.
+    pub fn on_thumbnail_failed(&self, page: i32) {
+        let index = page as usize;
+        let (row, is_right, entry) = {
+            let mut inner = self.inner.borrow_mut();
+            let Some(&(row, is_right)) = inner.page_loc.get(index) else {
+                return;
+            };
+            inner.thumb_failed.insert(index);
+            (row, is_right, Self::thumb_entry(&inner, index))
+        };
+        self.set_thumb_entry(row, is_right, entry);
+    }
+
+    /// Writes one page's entry into its thumbnail row's left or right slot.
+    fn set_thumb_entry(&self, row: usize, is_right: bool, entry: PageEntry) {
         if let Some(mut page_row) = self.thumb_model.row_data(row) {
-            let entry = PageEntry { page, width_pt, height_pt, image };
             if is_right {
                 page_row.right = entry;
             } else {
                 page_row.left = entry;
             }
             self.thumb_model.set_row_data(row, page_row);
+        }
+    }
+
+    /// Marks a page that failed to render, so it shows as failed rather than
+    /// loading and is not asked for again until the zoom changes.
+    pub fn on_page_failed(&self, page: i32) {
+        let index = page as usize;
+        let (row_index, is_right, entry, is_current_paged) = {
+            let mut inner = self.inner.borrow_mut();
+            let Some(&(row_index, is_right)) = inner.page_loc.get(index) else {
+                return;
+            };
+            inner.failed.insert(index);
+            let is_current_paged = !inner.continuous && row_index == inner.current_row;
+            (row_index, is_right, Self::empty_page(&inner, index), is_current_paged)
+        };
+        self.set_row_entry(row_index, is_right, entry);
+        if is_current_paged {
+            self.refresh_current_row();
         }
     }
 
@@ -859,6 +903,7 @@ impl Viewer {
             width_pt,
             height_pt,
             image: inner.thumb_images[page].clone(),
+            failed: inner.thumb_failed.contains(&page),
         }
     }
 
@@ -1087,7 +1132,6 @@ impl Viewer {
         self.apply_density();
         self.restore_place(place);
         self.rerender_view();
-        self.update_status();
     }
 
     fn apply_fit(&self) {
@@ -1124,7 +1168,6 @@ impl Viewer {
         self.apply_density();
         self.restore_place(place);
         self.rerender_view();
-        self.update_status();
     }
 
     /// Moves the continuous list to `target` (logical pixels from the top) and
@@ -1250,15 +1293,28 @@ impl Viewer {
             .collect()
     }
 
-    /// An unrendered slot carrying only the page's fixed size.
+    /// An unrendered slot carrying only the page's fixed size, and whether it
+    /// failed to render.
     fn empty_page(inner: &Inner, page: usize) -> PageEntry {
         let (width_pt, height_pt) = inner.pages_pt[page];
-        PageEntry { page: page as i32, width_pt, height_pt, image: Image::default() }
+        PageEntry {
+            page: page as i32,
+            width_pt,
+            height_pt,
+            image: Image::default(),
+            failed: inner.failed.contains(&page),
+        }
     }
 
     /// A dummy entry for the unused right half of a single-page row.
     fn placeholder() -> PageEntry {
-        PageEntry { page: -1, width_pt: 0.0, height_pt: 0.0, image: Image::default() }
+        PageEntry {
+            page: -1,
+            width_pt: 0.0,
+            height_pt: 0.0,
+            image: Image::default(),
+            failed: false,
+        }
     }
 
     /// Writes one page's entry into its row's left or right slot.
@@ -1362,33 +1418,13 @@ impl Viewer {
     /// — not just already-rendered pages — is also what renders the first page on
     /// startup, when nothing has been rendered yet.
     fn rerender_view(&self) {
+        // A page that failed at the old scale may render at the new one, such
+        // as one that was too large for memory.
+        self.inner.borrow_mut().failed.clear();
         if self.inner.borrow().continuous {
             self.request_visible(true);
         } else {
             self.request_current_row();
-        }
-    }
-
-    fn update_status(&self) {
-        let inner = self.inner.borrow();
-        let percent = (inner.zoom * 100.0).round() as i32;
-        let spread = match inner.spread {
-            Spread::None => "single",
-            Spread::Odd => "odd spread",
-            Spread::Even => "even spread",
-        };
-        let status = if inner.continuous {
-            format!("{} pages · {percent}% · continuous · {spread}", inner.pages_pt.len())
-        } else {
-            format!(
-                "{} pages · {percent}% · paged {}/{} · {spread}",
-                inner.pages_pt.len(),
-                inner.current_row + 1,
-                inner.specs.len().max(1),
-            )
-        };
-        if let Some(window) = self.window() {
-            window.set_status(status.into());
         }
     }
 
