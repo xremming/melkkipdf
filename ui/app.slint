@@ -380,6 +380,9 @@ export component MainWindow inherits Window {
     callback viewport-resized(length, length);
     // Continuous scroll offset changed (logical pixels from the top).
     callback scrolled(float);
+    // The reader scrolled the continuous list themselves, as opposed to the
+    // offset changing because the viewer set it or the list laid itself out.
+    callback user-scrolled();
     callback zoom-in();
     callback zoom-out();
     callback zoom-reset();
@@ -761,6 +764,9 @@ export component MainWindow inherits Window {
                     content-y <=> root.scroll-y;
                     changed content-y => {
                         root.scrolled(-self.content-y / 1px);
+                    }
+                    scrolled => {
+                        root.user-scrolled();
                     }
                     for entry[idx] in root.rows: PageRowView {
                         page-row: entry;

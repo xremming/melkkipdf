@@ -71,6 +71,31 @@ struct RowSpec {
     right: Option<usize>,
 }
 
+/// An offset the viewer has just given the continuous list, and how often it
+/// has had to give it again.
+///
+/// To reach an offset far from its current one, Slint's ListView divides it
+/// by the row height it measured on its previous layout. When the rows have
+/// just changed height (a new spread or zoom, or another tab's document) that
+/// height is stale, so the list lands on the wrong row and reports that row's
+/// offset back as if the reader had scrolled there. Having laid out the new
+/// rows it knows their height, so setting the same offset again lands.
+#[derive(Clone, Copy)]
+struct Settling {
+    target: f32,
+    retries: u8,
+}
+
+/// Where the reader is, in terms that survive a relayout: the first page of
+/// the row at the top of the view, and how far into that row the view starts,
+/// as a fraction of the row's height. A scroll offset or a row index would not
+/// do, since both mean a different page once the zoom or the spread changes.
+#[derive(Clone, Copy)]
+struct Place {
+    page: usize,
+    into_row: f32,
+}
+
 const ZOOM_STEP: f32 = 1.25;
 const MIN_ZOOM: f32 = 0.1;
 const MAX_ZOOM: f32 = 8.0;
@@ -84,6 +109,14 @@ const FIT_GUTTER: f32 = 24.0;
 const ROW_GAP: f32 = 16.0;
 /// How far an arrow key scrolls when the page is taller than the viewport.
 const SCROLL_STEP: f32 = 120.0;
+/// How many times the viewer puts the list back on an offset it set before
+/// accepting where the list says it is (see [`Settling`]).
+const MAX_SETTLE_RETRIES: u8 = 3;
+/// How close, in logical pixels, a reported offset must be to count as the one
+/// the viewer set.
+const SETTLE_TOLERANCE: f32 = 0.5;
+/// How close to a row's top, as a fraction of the row, counts as on it.
+const ROW_SNAP: f32 = 1e-3;
 /// Rows to prefetch on either side of the visible range while idle.
 const PREFETCH_ROWS: usize = 4;
 /// Maximum number of rendered page images retained at once.
@@ -187,6 +220,12 @@ fn reference_dims(specs: &[RowSpec], pages_pt: &[(f32, f32)]) -> (f32, f32) {
     (width, height)
 }
 
+/// The page being read when `spec` is the row at the top: the page last asked
+/// for if the row holds it, otherwise the row's first page.
+fn reading_page_in(inner: &Inner, spec: &RowSpec) -> usize {
+    if spec.right == Some(inner.reading_page) { inner.reading_page } else { spec.left }
+}
+
 struct Inner {
     pages_pt: Vec<(f32, f32)>,
     zoom: f32,
@@ -211,6 +250,15 @@ struct Inner {
     ref_h_pt: f32,
     /// Rendered sidebar thumbnails, indexed by page (empty until rendered).
     thumb_images: Vec<Image>,
+    /// The page the reader last asked for (the page field, the outline, a
+    /// thumbnail or a restored setting). A spread's row holds two pages, and
+    /// when it is the one at the top this says which of them is being read, so
+    /// going back to single pages lands on it rather than on its neighbour.
+    reading_page: usize,
+    /// The offset the continuous list holds, as last set or reported.
+    shown_px: f32,
+    /// An offset set by the viewer that the list has not yet confirmed.
+    settling: Option<Settling>,
     /// Whether the continuous view still has to scroll to `current_row`. A
     /// restored position can only become a scroll offset once the viewport is
     /// known, because a fit mode's zoom decides how tall each row is.
@@ -265,6 +313,9 @@ impl Viewer {
                 ref_h_pt: 0.0,
                 thumb_images: vec![Image::default(); page_count],
                 position_pending: false,
+                reading_page: 0,
+                shown_px: 0.0,
+                settling: None,
             }),
             model,
             thumb_model,
@@ -291,7 +342,10 @@ impl Viewer {
             spread: inner.spread,
             fit: inner.fit,
             zoom: inner.zoom,
-            page: inner.specs.get(inner.current_row).map_or(0, |spec| spec.left),
+            page: inner
+                .specs
+                .get(inner.current_row)
+                .map_or(0, |spec| reading_page_in(&inner, spec)),
         }
     }
 
@@ -303,6 +357,7 @@ impl Viewer {
             return;
         };
         inner.current_row = row;
+        inner.reading_page = page;
         inner.position_pending = inner.continuous && row > 0;
     }
 
@@ -318,8 +373,9 @@ impl Viewer {
             window.set_spread_mode(spread_index(inner.spread));
             window.set_continuous(inner.continuous);
             window.set_row_height_pt(inner.ref_h_pt);
-            window.set_scroll_y(-inner.scroll_px);
         }
+        let scroll_px = self.inner.borrow().scroll_px;
+        self.show_offset(scroll_px);
         self.apply_density();
         self.refresh_current_row();
         self.update_status();
@@ -463,9 +519,7 @@ impl Viewer {
                 inner.scroll_px = target;
                 target
             };
-            if let Some(window) = self.window() {
-                window.set_scroll_y(-target_px);
-            }
+            self.show_offset(target_px);
         } else {
             // A freshly shown page starts at its top.
             {
@@ -493,11 +547,15 @@ impl Viewer {
             2 => Spread::Even,
             _ => Spread::None,
         };
+        let place = self.place();
         self.inner.borrow_mut().spread = spread;
         if let Some(window) = self.window() {
             window.set_spread_mode(spread_index(spread));
         }
         self.build_layout();
+        // Back to the same page before re-fitting, so the fit starts from a
+        // position that matches the new rows.
+        self.restore_place(place);
         self.reapply_scale();
         self.update_status();
         self.update_current_page();
@@ -514,6 +572,24 @@ impl Viewer {
             if inner.specs.is_empty() || inner.position_pending {
                 return;
             }
+            inner.shown_px = offset;
+            // The list confirms an offset the viewer set before its layout pass
+            // can still move it, so the watch lasts until the reader scrolls
+            // (see `user_scrolled`) rather than ending at the first match.
+            if let Some(settling) = inner.settling
+                && (offset - settling.target).abs() > SETTLE_TOLERANCE
+            {
+                if settling.retries < MAX_SETTLE_RETRIES {
+                    inner.settling =
+                        Some(Settling { target: settling.target, retries: settling.retries + 1 });
+                    drop(inner);
+                    if let Some(window) = self.window() {
+                        window.set_scroll_y(-settling.target);
+                    }
+                    return;
+                }
+                inner.settling = None;
+            }
             inner.scroll_px = offset.max(0.0);
             let row_height = row_height_px(&inner);
             if row_height <= 0.0 {
@@ -524,6 +600,13 @@ impl Viewer {
         }
         self.update_current_page();
         self.request_visible(false);
+    }
+
+    /// The reader moved the continuous list (wheel, drag or scrollbar), so
+    /// offsets it reports from now on are theirs, not the list landing off an
+    /// offset the viewer set.
+    pub fn user_scrolled(&self) {
+        self.inner.borrow_mut().settling = None;
     }
 
     /// Requests the visible rows (and a prefetch margin), top-first. On scroll,
@@ -609,11 +692,12 @@ impl Viewer {
     /// Navigates to a 0-based page (from the outline or a thumbnail click).
     pub fn nav_to_page(&self, page: i32) {
         let row = {
-            let inner = self.inner.borrow();
+            let mut inner = self.inner.borrow_mut();
             if inner.page_loc.is_empty() {
                 return;
             }
             let page = page.clamp(0, inner.page_loc.len() as i32 - 1) as usize;
+            inner.reading_page = page;
             inner.page_loc[page].0
         };
         self.scroll_to_row(row);
@@ -727,9 +811,7 @@ impl Viewer {
             (inner.continuous, target)
         };
         if continuous {
-            if let Some(window) = self.window() {
-                window.set_scroll_y(-target_px);
-            }
+            self.show_offset(target_px);
             self.request_current_row();
         } else {
             {
@@ -873,9 +955,7 @@ impl Viewer {
             inner.scroll_px = target;
             target
         };
-        if let Some(window) = self.window() {
-            window.set_scroll_y(-target);
-        }
+        self.show_offset(target);
         self.update_current_page();
     }
 
@@ -894,9 +974,7 @@ impl Viewer {
             (inner.continuous, target_px)
         };
         if continuous {
-            if let Some(window) = self.window() {
-                window.set_scroll_y(-target_px);
-            }
+            self.show_offset(target_px);
             self.request_current_row();
         } else {
             // A new page starts scrolled to the top.
@@ -913,12 +991,14 @@ impl Viewer {
     }
 
     fn set_zoom(&self, zoom: f32) {
+        let place = self.place();
         {
             let mut inner = self.inner.borrow_mut();
             inner.fit = FitMode::Free;
             inner.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
         }
         self.apply_density();
+        self.restore_place(place);
         self.rerender_view();
         self.update_status();
     }
@@ -943,10 +1023,81 @@ impl Viewer {
             .clamp(MIN_ZOOM, MAX_ZOOM)
         };
 
+        let place = self.place();
         self.inner.borrow_mut().zoom = recomputed;
         self.apply_density();
+        self.restore_place(place);
         self.rerender_view();
         self.update_status();
+    }
+
+    /// Moves the continuous list to `target` (logical pixels from the top) and
+    /// watches its next report in case it lands elsewhere (see [`Settling`]).
+    /// A list already at `target` sends no report, so there is nothing to watch.
+    fn show_offset(&self, target: f32) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.settling = (inner.continuous
+                && (target - inner.shown_px).abs() > SETTLE_TOLERANCE)
+                .then_some(Settling { target, retries: 0 });
+            inner.shown_px = target;
+        }
+        if let Some(window) = self.window() {
+            window.set_scroll_y(-target);
+        }
+    }
+
+    /// The reader's place, to be put back with [`Viewer::restore_place`] once
+    /// the rows or their height have changed.
+    fn place(&self) -> Option<Place> {
+        let inner = self.inner.borrow();
+        let last = inner.specs.len().checked_sub(1)?;
+        let row_height = row_height_px(&inner);
+        // A position still waiting for the viewport has no offset yet; its row
+        // is the whole truth.
+        let (row, into_row) = if inner.continuous && !inner.position_pending && row_height > 0.0 {
+            let rows = inner.scroll_px / row_height;
+            // An offset put exactly on a row's top comes back a hair short
+            // of it after the division, which would read as the very end of
+            // the row before and lose a page on every relayout.
+            let row = ((rows + ROW_SNAP).floor().max(0.0) as usize).min(last);
+            (row, (rows - row as f32).clamp(0.0, 1.0))
+        } else {
+            (inner.current_row.min(last), 0.0)
+        };
+        Some(Place { page: reading_page_in(&inner, &inner.specs[row]), into_row })
+    }
+
+    /// Puts the reader back at `place` after a relayout: in continuous mode by
+    /// scrolling so its page's row is at the top again, as far into the row as
+    /// before, and in paged mode by showing that row.
+    fn restore_place(&self, place: Option<Place>) {
+        let Some(place) = place else {
+            return;
+        };
+        let scroll = {
+            let mut inner = self.inner.borrow_mut();
+            let Some(&(row, _)) = inner.page_loc.get(place.page) else {
+                return;
+            };
+            inner.current_row = row;
+            if inner.continuous && !inner.position_pending {
+                let target = ((row as f32 + place.into_row) * row_height_px(&inner))
+                    .clamp(0.0, max_scroll_px(&inner));
+                inner.scroll_px = target;
+                Some(target)
+            } else {
+                None
+            }
+        };
+        match scroll {
+            Some(target) => self.show_offset(target),
+            None => {
+                self.refresh_current_row();
+                self.push_paged_offsets();
+            }
+        }
+        self.update_current_page();
     }
 
     /// Re-applies the current zoom after a layout change: re-fit if a fit mode is
@@ -1155,9 +1306,10 @@ impl Viewer {
     }
 
     /// Publishes the page number shown by the toolbar. Normally the page at the
-    /// top of the view; at the very bottom of the document it reports the last
-    /// page, so "End" reads as the last page even in spread mode (where the top
-    /// row's left page would otherwise be one short).
+    /// top of the view, and of a spread there the one the reader asked for. At
+    /// the very bottom of the document it reports the last page, so "End" reads
+    /// as the last page even in spread mode (where the top row's left page
+    /// would otherwise be one short).
     fn update_current_page(&self) {
         let page = {
             let inner = self.inner.borrow();
@@ -1171,7 +1323,10 @@ impl Viewer {
             if at_end {
                 inner.pages_pt.len() as i32
             } else {
-                inner.specs.get(inner.current_row).map_or(0, |spec| spec.left as i32 + 1)
+                inner
+                    .specs
+                    .get(inner.current_row)
+                    .map_or(0, |spec| reading_page_in(&inner, spec) as i32 + 1)
             }
         };
         if let Some(window) = self.window() {

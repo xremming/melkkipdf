@@ -581,6 +581,10 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         let app = app.clone();
         move |offset| app.with_viewer(|v| v.scrolled(offset))
     });
+    window.on_user_scrolled({
+        let app = app.clone();
+        move || app.with_viewer(|v| v.user_scrolled())
+    });
     window.on_go_to_page({
         let app = app.clone();
         move |text| app.with_viewer(|v| v.go_to_page(text.as_str()))

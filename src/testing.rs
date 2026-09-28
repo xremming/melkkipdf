@@ -75,6 +75,14 @@ impl Harness {
         self
     }
 
+    /// Scrolls the continuous list to `offset` (logical pixels from the top)
+    /// as the reader would with the wheel or scrollbar: the list says the
+    /// reader scrolled, then reports its new offset.
+    pub fn scroll_by_user(&self, offset: f32) {
+        self.viewer.user_scrolled();
+        self.viewer.scrolled(offset);
+    }
+
     pub fn current_page(&self) -> i32 {
         self.window.get_current_page()
     }
@@ -100,6 +108,12 @@ impl Harness {
         self.window.get_density()
     }
 
+    /// The 0-based pages in the row at the top of the view (see
+    /// [`pages_at_top`]).
+    pub fn pages_at_top(&self) -> Vec<i32> {
+        pages_at_top(&self.window)
+    }
+
     /// Number of rows (one page each, or two for a spread).
     pub fn row_count(&self) -> usize {
         self.window.get_rows().row_count()
@@ -113,6 +127,27 @@ impl Harness {
             .map(|row| (row.left.page, row.has_right.then_some(row.right.page)))
             .collect()
     }
+}
+
+/// The 0-based pages in the row at the top of `window`'s view, worked out
+/// from what it shows: the scroll offset and row height in continuous mode, or
+/// the row on display in paged mode.
+pub fn pages_at_top(window: &MainWindow) -> Vec<i32> {
+    let row = if window.get_continuous() {
+        // Must match the `+ 16px` gap in the `PageRowView` delegate.
+        let row_height = window.get_row_height_pt() * window.get_density() + 16.0;
+        let index = (-window.get_scroll_y() / row_height + 1e-3).floor().max(0.0) as usize;
+        window.get_rows().row_data(index)
+    } else {
+        Some(window.get_current_row_content())
+    };
+    row.map_or_else(Vec::new, |row| {
+        let mut pages = vec![row.left.page];
+        if row.has_right {
+            pages.push(row.right.page);
+        }
+        pages
+    })
 }
 
 /// A window driven through the app's tab handling, for tests of opening,
@@ -149,6 +184,11 @@ impl Tabs {
     /// a file does, and returns the id its renders are tagged with. `title`
     /// doubles as the path the document is remembered under.
     pub fn open(&self, title: &str, count: usize) -> i32 {
+        self.open_sized(title, count, 600.0, 800.0)
+    }
+
+    /// Like [`Tabs::open`], with pages of `width`×`height` points.
+    pub fn open_sized(&self, title: &str, count: usize, width: f32, height: f32) -> i32 {
         let path = PathBuf::from(title);
         if let Some(index) = self.app.find(&path) {
             self.app.select(index);
@@ -156,7 +196,7 @@ impl Tabs {
         }
         let index = self
             .app
-            .insert(path, title.into(), vec![(600.0, 800.0); count], ModelRc::default(), |_| {
+            .insert(path, title.into(), vec![(width, height); count], ModelRc::default(), |_| {
                 let (pages, requests) = mpsc::channel();
                 let (thumbnails, thumb_requests) = mpsc::channel();
                 self.receivers.borrow_mut().push((requests, thumb_requests));

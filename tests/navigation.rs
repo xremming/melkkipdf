@@ -143,6 +143,6 @@ fn scrolling_reports_the_page_at_the_top() {
     let offset = -h.scroll_y();
     h.viewer.nav_home();
     assert_eq!(h.current_page(), 1);
-    h.viewer.scrolled(offset);
+    h.scroll_by_user(offset);
     assert_eq!(h.current_page(), 5);
 }

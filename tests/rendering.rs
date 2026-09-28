@@ -89,9 +89,9 @@ fn each_scroll_is_a_newer_epoch_so_stale_requests_are_dropped() {
     let far_down = -h.scroll_y();
     let _ = h.take_render_requests_full();
 
-    h.viewer.scrolled(near_top);
+    h.scroll_by_user(near_top);
     let first = h.take_render_requests_full();
-    h.viewer.scrolled(far_down);
+    h.scroll_by_user(far_down);
     let second = h.take_render_requests_full();
 
     let first_epoch = first.iter().map(|(_, epoch, _)| *epoch).max().unwrap();
