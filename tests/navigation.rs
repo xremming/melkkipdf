@@ -126,3 +126,30 @@ fn scrolling_reports_the_page_at_the_top() {
     h.scroll_by_user(offset);
     assert_eq!(h.current_page(), 5);
 }
+
+#[test]
+fn the_counter_keeps_the_page_at_the_top_until_it_leaves() {
+    let h = setup(20);
+    h.viewer.go_to_page("5");
+    let offset = -h.scroll_y();
+    let row_height = offset / 4.0;
+    // Most of page 5 has scrolled past, but it is still the one at the top,
+    // which is also the page a relayout would keep there.
+    h.scroll_by_user(offset + row_height * 0.6);
+    assert_eq!(h.current_page(), 5);
+    h.viewer.set_spread(0);
+    assert_eq!(h.current_page(), 5);
+}
+
+#[test]
+fn paging_down_from_a_hair_short_of_a_page_moves_on() {
+    let h = setup(20);
+    h.viewer.go_to_page("4");
+    let offset = -h.scroll_y();
+    // A fit or the list's own layout can land a fraction of a pixel short of
+    // a page's top, which is still that page.
+    h.scroll_by_user(offset - 0.05);
+    assert_eq!(h.current_page(), 4);
+    h.viewer.nav_page(1);
+    assert_eq!(h.current_page(), 5, "paging down stayed on the page at the top");
+}

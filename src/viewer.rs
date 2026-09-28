@@ -132,6 +132,9 @@ const MAX_SETTLE_RETRIES: u8 = 3;
 const SETTLE_TOLERANCE: f32 = 0.5;
 /// How close to a row's top, as a fraction of the row, counts as on it.
 const ROW_SNAP: f32 = 1e-3;
+/// How far into a row, as a fraction of the row, the view has to be for
+/// paging back to go to that row's start rather than the row before.
+const PARTWAY: f32 = 0.01;
 /// Rows to prefetch on either side of the visible range while idle.
 const PREFETCH_ROWS: usize = 4;
 /// Bytes of rendered page images a viewer keeps at once. A budget in bytes
@@ -166,6 +169,25 @@ fn render_scale(inner: &Inner) -> f32 {
     inner.zoom * BASE_DENSITY * inner.scale_factor
 }
 
+/// The continuous row at `offset` (logical pixels from the top), and how far
+/// into that row the offset is, as a fraction of the row's height. Every
+/// question about the row at the top of the view goes through here, so the
+/// page counter, paging and the remembered place always agree.
+///
+/// An offset put exactly on a row's top comes back a hair short of it after
+/// the division, which would read as the very end of the row before and lose
+/// a page, so a row starts [`ROW_SNAP`] before its top.
+fn row_at(inner: &Inner, offset: f32) -> (usize, f32) {
+    let last = inner.specs.len().saturating_sub(1);
+    let row_height = row_height_px(inner);
+    if row_height <= 0.0 {
+        return (0, 0.0);
+    }
+    let rows = offset / row_height;
+    let row = ((rows + ROW_SNAP).floor().max(0.0) as usize).min(last);
+    (row, (rows - row as f32).clamp(0.0, 1.0))
+}
+
 /// The rows on screen: in continuous mode those the viewport spans from the
 /// scroll offset, with one more below for a row sliding in, and in paged mode
 /// the one row shown.
@@ -177,7 +199,7 @@ fn rows_in_view(inner: &Inner) -> RangeInclusive<usize> {
         return row..=row;
     }
     let view_height = inner.view.map_or(0.0, |(_, h)| h);
-    let top = ((inner.scroll_px / row_height).floor().max(0.0) as usize).min(last);
+    let (top, _) = row_at(inner, inner.scroll_px);
     let span = (view_height / row_height).ceil() as usize + 1;
     top..=(top + span).min(last)
 }
@@ -762,12 +784,7 @@ impl Viewer {
                 inner.settling = None;
             }
             inner.scroll_px = offset.max(0.0);
-            let row_height = row_height_px(&inner);
-            if row_height <= 0.0 {
-                return;
-            }
-            let row = (offset / row_height).round().max(0.0) as usize;
-            inner.current_row = row.min(inner.specs.len() - 1);
+            inner.current_row = row_at(&inner, inner.scroll_px).0;
         }
         self.update_current_page();
         self.request_visible();
@@ -1151,16 +1168,15 @@ impl Viewer {
             }
             let last = inner.specs.len() as i32 - 1;
             let row = if inner.continuous {
-                let row_height = row_height_px(&inner);
-                let ratio = if row_height > 0.0 { inner.scroll_px / row_height } else { 0.0 };
-                let floor = ratio.floor();
+                let (row, into_row) = row_at(&inner, inner.scroll_px);
+                let row = row as i32;
                 if dir > 0 {
-                    floor as i32 + 1
-                } else if ratio - floor > 0.01 {
+                    row + 1
+                } else if into_row > PARTWAY {
                     // Scrolled partway into a page: snap to that page's start.
-                    floor as i32
+                    row
                 } else {
-                    floor as i32 - 1
+                    row - 1
                 }
             } else {
                 inner.current_row as i32 + dir
@@ -1300,16 +1316,10 @@ impl Viewer {
     fn place(&self) -> Option<Place> {
         let inner = self.inner.borrow();
         let last = inner.specs.len().checked_sub(1)?;
-        let row_height = row_height_px(&inner);
         // A position still waiting for the viewport has no offset yet; its row
         // is the whole truth.
-        let (row, into_row) = if inner.continuous && !inner.position_pending && row_height > 0.0 {
-            let rows = inner.scroll_px / row_height;
-            // An offset put exactly on a row's top comes back a hair short
-            // of it after the division, which would read as the very end of
-            // the row before and lose a page on every relayout.
-            let row = ((rows + ROW_SNAP).floor().max(0.0) as usize).min(last);
-            (row, (rows - row as f32).clamp(0.0, 1.0))
+        let (row, into_row) = if inner.continuous && !inner.position_pending {
+            row_at(&inner, inner.scroll_px)
         } else {
             (inner.current_row.min(last), 0.0)
         };
