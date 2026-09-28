@@ -853,22 +853,32 @@ impl Viewer {
         }
     }
 
-    /// Jumps to a 1-based page typed into the toolbar field. Invalid input is
-    /// ignored.
+    /// Jumps to a 1-based page typed into the toolbar field. A number out of
+    /// range goes to the first or last page, and anything else is ignored.
     pub fn go_to_page(&self, text: &str) {
-        if let Ok(requested) = text.trim().parse::<i32>() {
-            self.nav_to_page(requested - 1);
+        let Ok(requested) = text.trim().parse::<i64>() else {
+            return;
+        };
+        let count = self.inner.borrow().pages_pt.len() as i64;
+        if count > 0 {
+            self.nav_to_page((requested - 1).clamp(0, count - 1) as i32);
         }
     }
 
-    /// Navigates to a 0-based page (from the outline or a thumbnail click).
+    /// Navigates to a 0-based page (from the outline or a thumbnail click). A
+    /// negative page is an outline entry that leads nowhere, and is ignored.
+    /// One past the end, from an outline that is out of date, goes to the
+    /// last page.
     pub fn nav_to_page(&self, page: i32) {
+        let Ok(page) = usize::try_from(page) else {
+            return;
+        };
         let row = {
             let mut inner = self.inner.borrow_mut();
             if inner.page_loc.is_empty() {
                 return;
             }
-            let page = page.clamp(0, inner.page_loc.len() as i32 - 1) as usize;
+            let page = page.min(inner.page_loc.len() - 1);
             inner.reading_page = page;
             inner.page_loc[page].0
         };

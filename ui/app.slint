@@ -711,7 +711,9 @@ export component MainWindow inherits Window {
                             background: #444444;
                         }
 
-                        // Outline entries, indented by depth.
+                        // Outline entries, indented by depth. An entry with no
+                        // destination (page -1) is only a heading, so it is
+                        // dimmed and does not respond to clicks.
                         if root.sidebar-tab == 0: ListView {
                             for item in root.outline: Rectangle {
                                 height: 26px;
@@ -721,12 +723,13 @@ export component MainWindow inherits Window {
                                     padding-right: 8px;
                                     Text {
                                         text: item.title;
-                                        color: #cccccc;
+                                        color: item.page >= 0 ? #cccccc : #808080;
                                         vertical-alignment: center;
                                         overflow: elide;
                                     }
                                 }
                                 outline-touch := TouchArea {
+                                    enabled: item.page >= 0;
                                     clicked => {
                                         root.go-to-page-index(item.page);
                                     }

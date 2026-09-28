@@ -112,3 +112,18 @@ fn fit_page_makes_the_page_fit_the_height() {
     let page_h = 800.0 * h.density();
     assert!((page_h - 884.0).abs() < 0.5, "page height was {page_h}, expected 884");
 }
+
+#[test]
+fn an_outline_entry_leading_nowhere_stays_put() {
+    let h = setup(50);
+    h.viewer.go_to_page("25");
+    h.viewer.nav_to_page(-1);
+    assert_eq!(h.current_page(), 25);
+}
+
+#[test]
+fn an_outline_entry_past_the_end_goes_to_the_last_page() {
+    let h = setup(50);
+    h.viewer.nav_to_page(80);
+    assert_eq!(h.current_page(), 50);
+}
