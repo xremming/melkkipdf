@@ -635,32 +635,36 @@ impl Viewer {
     /// The new layout applies at once, stretching the images already there,
     /// but the pages are only rendered for it once the size has settled (see
     /// [`RESIZE_SETTLE`]). The first viewport renders straight away, since
-    /// that is what shows a freshly opened document.
+    /// that is what shows a freshly opened document. A viewport that has not
+    /// changed, as when a tab is shown again, changes nothing.
     pub fn set_viewport(&self, width: f32, height: f32) {
         let scale_factor =
             self.window.upgrade().map(|window| window.window().scale_factor()).unwrap_or(1.0);
 
-        let (first, fit_active, density_changed) = {
+        let (first, unchanged, fit_active, density_changed) = {
             let mut inner = self.inner.borrow_mut();
             let first = inner.view.is_none();
+            let density_changed = (inner.scale_factor - scale_factor).abs() > 1e-3;
+            let unchanged = inner.view == Some((width, height)) && !density_changed;
             inner.view = Some((width, height));
-            let changed = (inner.scale_factor - scale_factor).abs() > 1e-3;
             inner.scale_factor = scale_factor;
-            (first, inner.fit != FitMode::Free, changed)
+            (first, unchanged, inner.fit != FitMode::Free, density_changed)
         };
 
-        if fit_active {
-            self.fit_to_view();
-        }
-        if fit_active || density_changed {
-            if first {
-                self.rerender_view();
-            } else {
-                self.rerender_when_settled();
+        if !unchanged {
+            if fit_active {
+                self.fit_to_view();
             }
+            if fit_active || density_changed {
+                if first {
+                    self.rerender_view();
+                } else {
+                    self.rerender_when_settled();
+                }
+            }
+            // Viewport size affects paged centering and scroll limits.
+            self.push_paged_offsets();
         }
-        // Viewport size affects paged centering and scroll limits.
-        self.push_paged_offsets();
 
         let position_pending = std::mem::take(&mut self.inner.borrow_mut().position_pending);
         if position_pending {

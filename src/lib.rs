@@ -597,12 +597,11 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         let app = app.clone();
         move || app.pick_and_open()
     });
+    // The autosave records which tab is shown, so switching, which can go
+    // through several tabs a second, does not write the settings itself.
     window.on_select_tab({
         let app = app.clone();
-        move |index| {
-            app.select(index.max(0) as usize);
-            app.save();
-        }
+        move |index| app.select(index.max(0) as usize)
     });
     window.on_close_tab({
         let app = app.clone();

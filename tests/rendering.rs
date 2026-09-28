@@ -256,3 +256,15 @@ fn a_render_for_an_old_zoom_shows_but_is_asked_for_again() {
     h.scroll_by_user(1.0);
     assert!(h.take_render_requests().contains(&0), "the old render counted as current");
 }
+
+#[test]
+fn an_unchanged_viewport_asks_for_nothing() {
+    let h = Harness::uniform(100, 600.0, 800.0);
+    h.viewport(1000.0, 900.0);
+    let _ = h.take_render_requests();
+
+    // Showing a tab again replays the viewport it already has.
+    h.viewport(1000.0, 900.0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    assert!(h.take_render_requests().is_empty());
+}
