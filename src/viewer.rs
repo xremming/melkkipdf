@@ -84,6 +84,13 @@ struct RowSpec {
     right: Option<usize>,
 }
 
+impl RowSpec {
+    /// The row's one or two pages, left to right.
+    fn pages(self) -> impl Iterator<Item = usize> {
+        std::iter::once(self.left).chain(self.right)
+    }
+}
+
 /// An offset the viewer has just given the continuous list, and how often it
 /// has had to give it again.
 ///
@@ -581,13 +588,12 @@ impl Viewer {
     /// Requests renders for every page in a row.
     pub fn request_render_row(&self, row: i32) {
         let inner = self.inner.borrow();
-        let Some(spec) = inner.specs.get(row.max(0) as usize) else {
+        let Some(&spec) = inner.specs.get(row.max(0) as usize) else {
             return;
         };
         let scale = render_scale(&inner);
-        self.send(spec.left, scale, false);
-        if let Some(right) = spec.right {
-            self.send(right, scale, false);
+        for page in spec.pages() {
+            self.send(page, scale, false);
         }
     }
 
@@ -720,14 +726,7 @@ impl Viewer {
             };
             self.show_offset(target_px);
         } else {
-            // A freshly shown page starts at its top.
-            {
-                let mut inner = self.inner.borrow_mut();
-                inner.paged_scroll_x = 0.0;
-                inner.paged_scroll_y = 0.0;
-            }
-            self.refresh_current_row();
-            self.request_current_row();
+            self.show_paged_row();
         }
         self.reapply_scale();
         self.update_current_page();
@@ -838,10 +837,7 @@ impl Viewer {
             let inner = self.inner.borrow();
             let pages = |rows: &[usize], prefetch: bool| {
                 rows.iter()
-                    .flat_map(|&row| {
-                        let spec = inner.specs[row];
-                        std::iter::once(spec.left).chain(spec.right)
-                    })
+                    .flat_map(|&row| inner.specs[row].pages())
                     .map(move |page| (page, prefetch))
                     .collect::<Vec<_>>()
             };
@@ -957,10 +953,9 @@ impl Viewer {
     /// worker renders each page at most once, so re-requests are cheap.
     pub fn request_thumbnail_row(&self, row: i32) {
         let inner = self.inner.borrow();
-        if let Some(spec) = inner.specs.get(row.max(0) as usize) {
-            let _ = self.thumb_sender.send(spec.left as i32);
-            if let Some(right) = spec.right {
-                let _ = self.thumb_sender.send(right as i32);
+        if let Some(&spec) = inner.specs.get(row.max(0) as usize) {
+            for page in spec.pages() {
+                let _ = self.thumb_sender.send(page as i32);
             }
         }
     }
@@ -968,25 +963,23 @@ impl Viewer {
     /// Rebuilds the thumbnail model from the current spread specs, reusing any
     /// already-rendered thumbnails.
     fn build_thumb_model(&self) {
-        let rows: Vec<PageRow> = {
-            let inner = self.inner.borrow();
-            inner
-                .specs
-                .iter()
-                .map(|spec| {
-                    let left = Self::thumb_entry(&inner, spec.left);
-                    match spec.right {
-                        Some(right) => PageRow {
-                            left,
-                            right: Self::thumb_entry(&inner, right),
-                            has_right: true,
-                        },
-                        None => PageRow { left, right: Self::placeholder(), has_right: false },
-                    }
-                })
-                .collect()
-        };
+        let rows = Self::model_rows(&self.inner.borrow(), Self::thumb_entry);
         self.thumb_model.set_vec(rows);
+    }
+
+    /// One model row per row of pages, with each page's slot made by `entry`.
+    fn model_rows(inner: &Inner, entry: fn(&Inner, usize) -> PageEntry) -> Vec<PageRow> {
+        inner
+            .specs
+            .iter()
+            .map(|spec| {
+                let left = entry(inner, spec.left);
+                match spec.right {
+                    Some(right) => PageRow { left, right: entry(inner, right), has_right: true },
+                    None => PageRow { left, right: Self::placeholder(), has_right: false },
+                }
+            })
+            .collect()
     }
 
     /// A thumbnail slot carrying the page's size and (possibly empty) thumbnail.
@@ -1025,32 +1018,7 @@ impl Viewer {
 
     /// End: the very bottom of the document, so the last page is fully visible.
     pub fn nav_end(&self) {
-        let (continuous, target_px) = {
-            let mut inner = self.inner.borrow_mut();
-            if inner.specs.is_empty() {
-                return;
-            }
-            inner.current_row = inner.specs.len() - 1;
-            // Continuous scrolls to the maximum offset (document bottom); paged
-            // just shows the last row.
-            let target = if inner.continuous { max_scroll_px(&inner) } else { 0.0 };
-            inner.scroll_px = target;
-            (inner.continuous, target)
-        };
-        if continuous {
-            self.show_offset(target_px);
-            self.request_current_row();
-        } else {
-            {
-                let mut inner = self.inner.borrow_mut();
-                inner.paged_scroll_x = 0.0;
-                inner.paged_scroll_y = 0.0;
-            }
-            self.refresh_current_row();
-            self.request_current_row();
-            self.push_paged_offsets();
-        }
-        self.update_current_page();
+        self.jump(usize::MAX, true);
     }
 
     /// Paged-mode wheel handling: scroll within the current page, and move to the
@@ -1215,6 +1183,14 @@ impl Viewer {
     /// Moves so the given row is at the top: scrolls the ListView in continuous
     /// mode, or swaps the shown row in paged mode.
     fn scroll_to_row(&self, row: usize) {
+        self.jump(row, false);
+    }
+
+    /// Makes `row` (clamped to the last) the current row. Continuous mode
+    /// scrolls the list to its top, or to the very bottom of the document
+    /// when `to_bottom`, so the last page shows whole. Paged mode shows the
+    /// row alone, from its top.
+    fn jump(&self, row: usize, to_bottom: bool) {
         let (continuous, target_px) = {
             let mut inner = self.inner.borrow_mut();
             if inner.specs.is_empty() {
@@ -1222,7 +1198,8 @@ impl Viewer {
             }
             let row = row.min(inner.specs.len() - 1);
             inner.current_row = row;
-            let target_px = row as f32 * row_height_px(&inner);
+            let target_px =
+                if to_bottom { max_scroll_px(&inner) } else { row as f32 * row_height_px(&inner) };
             inner.scroll_px = target_px;
             (inner.continuous, target_px)
         };
@@ -1230,17 +1207,22 @@ impl Viewer {
             self.show_offset(target_px);
             self.request_current_row();
         } else {
-            // A new page starts scrolled to the top.
-            {
-                let mut inner = self.inner.borrow_mut();
-                inner.paged_scroll_x = 0.0;
-                inner.paged_scroll_y = 0.0;
-            }
-            self.refresh_current_row();
-            self.request_current_row();
-            self.push_paged_offsets();
+            self.show_paged_row();
         }
         self.update_current_page();
+    }
+
+    /// Shows the current row in paged mode from its top-left corner, as a
+    /// freshly shown page starts, and asks for it and its neighbours.
+    fn show_paged_row(&self) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.paged_scroll_x = 0.0;
+            inner.paged_scroll_y = 0.0;
+        }
+        self.refresh_current_row();
+        self.request_current_row();
+        self.push_paged_offsets();
     }
 
     fn set_zoom(&self, zoom: f32) {
@@ -1397,7 +1379,7 @@ impl Viewer {
             inner.current_row = inner.current_row.min(last_row);
         }
 
-        let rows = self.build_model_rows();
+        let rows = Self::model_rows(&self.inner.borrow(), Self::empty_page);
         self.model.set_vec(rows);
         if let Some(window) = self.window() {
             window.set_row_height_pt(self.inner.borrow().ref_h_pt);
@@ -1407,23 +1389,6 @@ impl Viewer {
         self.update_current_page();
         self.push_paged_offsets();
         self.build_thumb_model();
-    }
-
-    fn build_model_rows(&self) -> Vec<PageRow> {
-        let inner = self.inner.borrow();
-        inner
-            .specs
-            .iter()
-            .map(|spec| {
-                let left = Self::empty_page(&inner, spec.left);
-                match spec.right {
-                    Some(right) => {
-                        PageRow { left, right: Self::empty_page(&inner, right), has_right: true }
-                    }
-                    None => PageRow { left, right: Self::placeholder(), has_right: false },
-                }
-            })
-            .collect()
     }
 
     /// An unrendered slot carrying only the page's fixed size, and whether it
