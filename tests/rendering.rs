@@ -193,3 +193,24 @@ fn a_background_tab_keeps_only_the_pages_in_view() {
         assert!(!h.page_rendered(index), "page {} was kept in the background", index + 1);
     }
 }
+
+#[test]
+fn a_resize_renders_only_once_it_settles() {
+    let h = Harness::uniform(100, 600.0, 800.0);
+    // The first viewport renders at once, since that shows the document.
+    h.viewport(1000.0, 900.0);
+    assert!(!h.take_render_requests().is_empty(), "the first viewport rendered nothing");
+
+    // Dragging the window reports every size on the way.
+    for step in 1..=10 {
+        h.viewport(1000.0 - step as f32 * 20.0, 900.0);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+    }
+    assert!(h.take_render_requests().is_empty(), "rendered for a size still changing");
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    let requests = h.take_render_requests_full();
+    assert!(!requests.is_empty(), "nothing rendered once the size settled");
+    let epochs: std::collections::HashSet<u64> = requests.iter().map(|(_, e, _)| *e).collect();
+    assert_eq!(epochs.len(), 1, "rendered for more than the final size");
+}

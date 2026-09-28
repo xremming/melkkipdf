@@ -13,11 +13,12 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::RangeInclusive;
-use std::rc::Rc;
+use std::rc::{self, Rc};
 use std::sync::mpsc::Sender;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use slint::{ComponentHandle, Image, Model, ModelRc, VecModel, Weak};
+use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 
 use crate::render::{RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale};
 use crate::{MainWindow, PageEntry, PageRow};
@@ -126,6 +127,11 @@ const PREFETCH_ROWS: usize = 4;
 /// rather than pages, because one page can take anywhere from kilobytes to a
 /// hundred megabytes depending on its size and the zoom.
 const RETAIN_BUDGET: usize = 256 * 1024 * 1024;
+/// How long the viewport has to stay one size before pages are rendered for
+/// it. A window being dragged to a new size reports every step on the way,
+/// and each one would otherwise render the visible pages at a scale that is
+/// thrown away a moment later.
+const RESIZE_SETTLE: Duration = Duration::from_millis(150);
 
 /// The 0/1/2 index used by the toolbar's spread radios.
 fn spread_index(spread: Spread) -> i32 {
@@ -355,6 +361,8 @@ struct Inner {
 }
 
 pub struct Viewer {
+    /// This viewer, for the timer that renders once a resize settles.
+    me: rc::Weak<Viewer>,
     inner: RefCell<Inner>,
     model: Rc<VecModel<PageRow>>,
     thumb_model: Rc<VecModel<PageRow>>,
@@ -365,6 +373,8 @@ pub struct Viewer {
     sender: Sender<WorkerMessage>,
     thumb_sender: Sender<i32>,
     control: RenderControl,
+    /// Renders the view once the viewport has stopped changing size.
+    resize_timer: Timer,
 }
 
 impl Viewer {
@@ -381,7 +391,8 @@ impl Viewer {
         let model = Rc::new(VecModel::<PageRow>::default());
         let thumb_model = Rc::new(VecModel::<PageRow>::default());
 
-        let viewer = Rc::new(Self {
+        let viewer = Rc::new_cyclic(|me| Self {
+            me: me.clone(),
             inner: RefCell::new(Inner {
                 pages_pt,
                 zoom: settings.zoom.clamp(MIN_ZOOM, MAX_ZOOM),
@@ -415,6 +426,7 @@ impl Viewer {
             sender,
             thumb_sender,
             control,
+            resize_timer: Timer::default(),
         });
 
         viewer.build_layout();
@@ -481,6 +493,8 @@ impl Viewer {
     /// that nobody is looking at.
     pub fn deactivate(&self) {
         self.active.set(false);
+        // Coming back replays the viewport, which renders whatever is due.
+        self.resize_timer.stop();
         let dropped: Vec<usize> = {
             let mut inner = self.inner.borrow_mut();
             let view = rows_in_view(&inner);
@@ -557,22 +571,33 @@ impl Viewer {
 
     /// Updates the remembered viewport size and refreshes the HiDPI scale factor,
     /// re-fitting or re-rendering as needed.
+    ///
+    /// The new layout applies at once, stretching the images already there,
+    /// but the pages are only rendered for it once the size has settled (see
+    /// [`RESIZE_SETTLE`]). The first viewport renders straight away, since
+    /// that is what shows a freshly opened document.
     pub fn set_viewport(&self, width: f32, height: f32) {
         let scale_factor =
             self.window.upgrade().map(|window| window.window().scale_factor()).unwrap_or(1.0);
 
-        let (fit_active, density_changed) = {
+        let (first, fit_active, density_changed) = {
             let mut inner = self.inner.borrow_mut();
+            let first = inner.view.is_none();
             inner.view = Some((width, height));
             let changed = (inner.scale_factor - scale_factor).abs() > 1e-3;
             inner.scale_factor = scale_factor;
-            (inner.fit != FitMode::Free, changed)
+            (first, inner.fit != FitMode::Free, changed)
         };
 
         if fit_active {
-            self.apply_fit();
-        } else if density_changed {
-            self.rerender_view();
+            self.fit_to_view();
+        }
+        if fit_active || density_changed {
+            if first {
+                self.rerender_view();
+            } else {
+                self.rerender_when_settled();
+            }
         }
         // Viewport size affects paged centering and scroll limits.
         self.push_paged_offsets();
@@ -1134,7 +1159,26 @@ impl Viewer {
         self.rerender_view();
     }
 
+    /// Re-fits the zoom to the viewport and renders the view at it.
     fn apply_fit(&self) {
+        self.fit_to_view();
+        self.rerender_view();
+    }
+
+    /// Renders the view once [`RESIZE_SETTLE`] passes without another call,
+    /// each call starting the wait again.
+    fn rerender_when_settled(&self) {
+        let me = self.me.clone();
+        self.resize_timer.start(TimerMode::SingleShot, RESIZE_SETTLE, move || {
+            if let Some(viewer) = me.upgrade() {
+                viewer.rerender_view();
+            }
+        });
+    }
+
+    /// Sets the zoom a fit mode asks for at the current viewport, keeping the
+    /// reader's place, without rendering anything for it.
+    fn fit_to_view(&self) {
         let recomputed = {
             let inner = self.inner.borrow();
             let Some((view_w, view_h)) = inner.view else {
@@ -1167,7 +1211,6 @@ impl Viewer {
         self.inner.borrow_mut().zoom = recomputed;
         self.apply_density();
         self.restore_place(place);
-        self.rerender_view();
     }
 
     /// Moves the continuous list to `target` (logical pixels from the top) and
