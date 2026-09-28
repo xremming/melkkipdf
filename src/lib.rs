@@ -4,6 +4,8 @@
 //! [`Viewer`]; the `testing` feature exposes a headless [`testing::Harness`] that
 //! drives it without an event loop for integration tests.
 
+#[cfg(target_os = "macos")]
+mod macos;
 mod render;
 mod viewer;
 
@@ -156,6 +158,12 @@ pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
         viewport: Cell::new((0.0, 0.0)),
     });
     wire_callbacks(&window, &app);
+
+    #[cfg(target_os = "macos")]
+    macos::on_open_document({
+        let app = app.clone();
+        move |path| app.open(path.to_string_lossy().into_owned())
+    });
 
     if let Some(path) = path {
         app.open(path);

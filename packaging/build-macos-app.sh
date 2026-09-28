@@ -34,9 +34,8 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/MelkkiPDF.icns"
 
-# No CFBundleDocumentTypes yet: Finder hands documents over as Apple Events
-# rather than arguments, and the app does not handle those, so declaring PDF
-# support would open an empty window.
+# The Alternate rank lists the viewer under Open With without taking over as
+# the default for PDFs; the user can still choose it as the default in Finder.
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -52,6 +51,15 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>PDF Document</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 EOF

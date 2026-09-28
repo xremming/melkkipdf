@@ -15,6 +15,18 @@ slint = "1.17"
 mupdf = "0.8"
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSAppleEventDescriptor",
+    "NSAppleEventManager",
+    "NSNotification",
+    "NSString",
+    "NSURL",
+] }
+
 [build-dependencies]
 slint-build = "1.17"
 
