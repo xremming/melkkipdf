@@ -9,13 +9,19 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-generator_url=https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+# The generator is pinned to a commit, so the same Cargo.lock always gives the
+# same sources and a change upstream cannot slip into the build unreviewed.
+# Bump it deliberately, and check the regenerated file's diff when you do.
+generator_commit=41c20aa10819cdb2a4f3ca171758a96d1955c018
+generator_url=https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/$generator_commit/cargo/flatpak-cargo-generator.py
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/melkkipdf-packaging
+# Named after the commit, so bumping the pin fetches the new version.
+generator=$cache/flatpak-cargo-generator-$generator_commit.py
 
 mkdir -p "$cache"
-if [[ ! -f $cache/flatpak-cargo-generator.py ]]; then
-    echo "Fetching flatpak-cargo-generator.py."
-    curl -sSfL -o "$cache/flatpak-cargo-generator.py" "$generator_url"
+if [[ ! -f $generator ]]; then
+    echo "Fetching flatpak-cargo-generator.py at $generator_commit."
+    curl -sSfL -o "$generator" "$generator_url"
 fi
 
 if [[ ! -x $cache/venv/bin/python ]]; then
@@ -25,7 +31,7 @@ if [[ ! -x $cache/venv/bin/python ]]; then
 fi
 
 echo "Generating packaging/cargo-sources.json."
-"$cache/venv/bin/python" "$cache/flatpak-cargo-generator.py" \
+"$cache/venv/bin/python" "$generator" \
     Cargo.lock -o packaging/cargo-sources.json
 
 echo "Done. Remember to commit packaging/cargo-sources.json."
