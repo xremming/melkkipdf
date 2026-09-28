@@ -46,6 +46,15 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.1" date="2026-09-28">
+      <description>
+        <p>
+          Page Fit and Page Width now use all the room there is: a page
+          shown one at a time meets the edges of the view, and in continuous
+          mode only the gap between pages is left around it.
+        </p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-09-28">
       <description>
         <p>
