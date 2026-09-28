@@ -23,9 +23,13 @@ finish-args:
   # Slint renders through OpenGL, which needs the GPU device nodes.
   - --device=dri
   # PDFs opened from a file manager or the portal arrive through the document
-  # portal, but a path passed on the command line does not, so the viewer needs
-  # to be able to read the host filesystem.
-  - --filesystem=host:ro
+  # portal, but a path passed on the command line, or a tab reopened from the
+  # last session, does not. Reading the home directory and removable media
+  # covers where documents live without exposing the rest of the system.
+  - --filesystem=home:ro
+  - --filesystem=/media:ro
+  - --filesystem=/run/media:ro
+  - --filesystem=/mnt:ro
 
 modules:
   - name: melkkipdf
