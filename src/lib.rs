@@ -590,8 +590,16 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// A row, page or tab index from the window, which Slint passes as a signed
+/// integer. A negative one means none, such as the page of an outline entry
+/// that leads nowhere.
+fn index(value: i32) -> Option<usize> {
+    usize::try_from(value).ok()
+}
+
 /// Connects the window's callbacks to the app, dispatching each to the viewer of
-/// the active tab, or of the document a render belongs to.
+/// the active tab, or of the document a render belongs to. Slint's integers
+/// become indices and spreads here, so nothing past this point sees them.
 fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_open_document({
         let app = app.clone();
@@ -601,20 +609,34 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     // through several tabs a second, does not write the settings itself.
     window.on_select_tab({
         let app = app.clone();
-        move |index| app.select(index.max(0) as usize)
+        move |tab| {
+            if let Some(tab) = index(tab) {
+                app.select(tab);
+            }
+        }
     });
     window.on_close_tab({
         let app = app.clone();
-        move |index| app.close(index.max(0) as usize)
+        move |tab| {
+            if let Some(tab) = index(tab) {
+                app.close(tab);
+            }
+        }
     });
     window.on_request_render_row({
         let app = app.clone();
-        move |row| app.with_viewer(|v| v.request_render_row(row))
+        move |row| {
+            if let Some(row) = index(row) {
+                app.with_viewer(|v| v.request_render_row(row));
+            }
+        }
     });
     window.on_page_rendered({
         let app = app.clone();
         move |doc, page, scale, image| {
-            app.with_document(doc, |v| v.on_page_rendered(page, scale, image.clone()))
+            if let Some(page) = index(page) {
+                app.with_document(doc, |v| v.on_page_rendered(page, scale, image.clone()));
+            }
         }
     });
     window.on_document_loaded({
@@ -623,7 +645,11 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_page_failed({
         let app = app.clone();
-        move |doc, page| app.with_document(doc, |v| v.on_page_failed(page))
+        move |doc, page| {
+            if let Some(page) = index(page) {
+                app.with_document(doc, |v| v.on_page_failed(page));
+            }
+        }
     });
     window.on_notify({
         let app = app.clone();
@@ -678,7 +704,7 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_set_spread({
         let app = app.clone();
-        move |mode| app.with_viewer(|v| v.set_spread(mode))
+        move |mode| app.with_viewer(|v| v.set_spread(Spread::from_index(mode)))
     });
     window.on_nav_line({
         let app = app.clone();
@@ -702,21 +728,35 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_go_to_page_index({
         let app = app.clone();
-        move |page| app.with_viewer(|v| v.nav_to_page(page))
+        move |page| {
+            if let Some(page) = index(page) {
+                app.with_viewer(|v| v.nav_to_page(page));
+            }
+        }
     });
     window.on_request_thumbnail_row({
         let app = app.clone();
-        move |row| app.with_viewer(|v| v.request_thumbnail_row(row))
+        move |row| {
+            if let Some(row) = index(row) {
+                app.with_viewer(|v| v.request_thumbnail_row(row));
+            }
+        }
     });
     window.on_thumbnail_rendered({
         let app = app.clone();
         move |doc, page, image| {
-            app.with_document(doc, |v| v.on_thumbnail_rendered(page, image.clone()))
+            if let Some(page) = index(page) {
+                app.with_document(doc, |v| v.on_thumbnail_rendered(page, image.clone()));
+            }
         }
     });
     window.on_thumbnail_failed({
         let app = app.clone();
-        move |doc, page| app.with_document(doc, |v| v.on_thumbnail_failed(page))
+        move |doc, page| {
+            if let Some(page) = index(page) {
+                app.with_document(doc, |v| v.on_thumbnail_failed(page));
+            }
+        }
     });
     window.on_toggle_sidebar({
         let window = window.as_weak();

@@ -162,12 +162,23 @@ const FLIP_OVERSCROLL: f32 = 60.0;
 /// fingers lift, and without the rest one fling would turn page after page.
 const FLIP_QUIET: Duration = Duration::from_millis(150);
 
-/// The 0/1/2 index used by the toolbar's spread radios.
-fn spread_index(spread: Spread) -> i32 {
-    match spread {
-        Spread::None => 0,
-        Spread::Odd => 1,
-        Spread::Even => 2,
+impl Spread {
+    /// The spread for the toolbar's 0/1/2 index; anything else is single pages.
+    pub(crate) fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Odd,
+            2 => Self::Even,
+            _ => Self::None,
+        }
+    }
+
+    /// The 0/1/2 index used by the toolbar's spread radios.
+    fn index(self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Odd => 1,
+            Self::Even => 2,
+        }
     }
 }
 
@@ -538,7 +549,7 @@ impl Viewer {
             window.set_rows(ModelRc::from(self.model.clone()));
             window.set_thumb_rows(ModelRc::from(self.thumb_model.clone()));
             window.set_page_count(inner.pages_pt.len() as i32);
-            window.set_spread_mode(spread_index(inner.spread));
+            window.set_spread_mode(inner.spread.index());
             window.set_continuous(inner.continuous);
             window.set_row_height_pt(inner.ref_h_pt);
         }
@@ -586,9 +597,9 @@ impl Viewer {
     }
 
     /// Requests renders for every page in a row.
-    pub fn request_render_row(&self, row: i32) {
+    pub fn request_render_row(&self, row: usize) {
         let inner = self.inner.borrow();
-        let Some(&spec) = inner.specs.get(row.max(0) as usize) else {
+        let Some(&spec) = inner.specs.get(row) else {
             return;
         };
         let scale = render_scale(&inner);
@@ -604,8 +615,7 @@ impl Viewer {
     /// Borrows of `inner` are kept to short scopes: the model updates and the
     /// self-calls below (which borrow `inner` themselves) must not run while a
     /// borrow is held, or a re-entrant call panics.
-    pub fn on_page_rendered(&self, page: i32, scale: f32, image: Image) {
-        let index = page as usize;
+    pub fn on_page_rendered(&self, index: usize, scale: f32, image: Image) {
         let size = image.size();
         let (row_index, is_right, width_pt, height_pt, is_current_paged, evicted) = {
             let mut inner = self.inner.borrow_mut();
@@ -625,7 +635,7 @@ impl Viewer {
             (row_index, is_right, width_pt, height_pt, is_current_paged, evicted)
         };
 
-        let entry = PageEntry { page, width_pt, height_pt, image, failed: false };
+        let entry = PageEntry { page: index as i32, width_pt, height_pt, image, failed: false };
         self.set_row_entry(row_index, is_right, entry);
         if is_current_paged {
             self.refresh_current_row();
@@ -737,17 +747,12 @@ impl Viewer {
         self.set_continuous(!continuous);
     }
 
-    /// Sets the spread mode (0 = single, 1 = odd, 2 = even) and rebuilds rows.
-    pub fn set_spread(&self, mode: i32) {
-        let spread = match mode {
-            1 => Spread::Odd,
-            2 => Spread::Even,
-            _ => Spread::None,
-        };
+    /// Sets the spread mode and rebuilds rows.
+    pub fn set_spread(&self, spread: Spread) {
         let place = self.place();
         self.inner.borrow_mut().spread = spread;
         if let Some(window) = self.window() {
-            window.set_spread_mode(spread_index(spread));
+            window.set_spread_mode(spread.index());
         }
         self.build_layout();
         // Back to the same page before re-fitting, so the fit starts from a
@@ -861,18 +866,14 @@ impl Viewer {
         };
         let count = self.inner.borrow().pages_pt.len() as i64;
         if count > 0 {
-            self.nav_to_page((requested - 1).clamp(0, count - 1) as i32);
+            self.nav_to_page((requested - 1).clamp(0, count - 1) as usize);
         }
     }
 
-    /// Navigates to a 0-based page (from the outline or a thumbnail click). A
-    /// negative page is an outline entry that leads nowhere, and is ignored.
+    /// Navigates to a 0-based page (from the outline or a thumbnail click).
     /// One past the end, from an outline that is out of date, goes to the
     /// last page.
-    pub fn nav_to_page(&self, page: i32) {
-        let Ok(page) = usize::try_from(page) else {
-            return;
-        };
+    pub fn nav_to_page(&self, page: usize) {
         let row = {
             let mut inner = self.inner.borrow_mut();
             if inner.page_loc.is_empty() {
@@ -886,8 +887,7 @@ impl Viewer {
     }
 
     /// Installs a rendered thumbnail into the sidebar's thumbnail model.
-    pub fn on_thumbnail_rendered(&self, page: i32, image: Image) {
-        let index = page as usize;
+    pub fn on_thumbnail_rendered(&self, index: usize, image: Image) {
         let (row, is_right, width_pt, height_pt) = {
             let mut inner = self.inner.borrow_mut();
             let Some(&(row, is_right)) = inner.page_loc.get(index) else {
@@ -899,14 +899,13 @@ impl Viewer {
             let (width_pt, height_pt) = inner.pages_pt[index];
             (row, is_right, width_pt, height_pt)
         };
-        let entry = PageEntry { page, width_pt, height_pt, image, failed: false };
+        let entry = PageEntry { page: index as i32, width_pt, height_pt, image, failed: false };
         self.set_thumb_entry(row, is_right, entry);
     }
 
     /// Marks a page whose thumbnail failed to render, so its slot in the
     /// sidebar stops showing a spinner.
-    pub fn on_thumbnail_failed(&self, page: i32) {
-        let index = page as usize;
+    pub fn on_thumbnail_failed(&self, index: usize) {
         let (row, is_right, entry) = {
             let mut inner = self.inner.borrow_mut();
             let Some(&(row, is_right)) = inner.page_loc.get(index) else {
@@ -932,8 +931,7 @@ impl Viewer {
 
     /// Marks a page that failed to render, so it shows as failed rather than
     /// loading and is not asked for again until the zoom changes.
-    pub fn on_page_failed(&self, page: i32) {
-        let index = page as usize;
+    pub fn on_page_failed(&self, index: usize) {
         let (row_index, is_right, entry, is_current_paged) = {
             let mut inner = self.inner.borrow_mut();
             let Some(&(row_index, is_right)) = inner.page_loc.get(index) else {
@@ -951,9 +949,9 @@ impl Viewer {
 
     /// Requests thumbnails for a visible thumbnail row's pages. The thumbnail
     /// worker renders each page at most once, so re-requests are cheap.
-    pub fn request_thumbnail_row(&self, row: i32) {
+    pub fn request_thumbnail_row(&self, row: usize) {
         let inner = self.inner.borrow();
-        if let Some(&spec) = inner.specs.get(row.max(0) as usize) {
+        if let Some(&spec) = inner.specs.get(row) {
             for page in spec.pages() {
                 let _ = self.thumb_sender.send(page as i32);
             }

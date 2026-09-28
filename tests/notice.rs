@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use i_slint_backend_testing::ElementHandle;
+use melkkipdf::Spread;
 use melkkipdf::testing::{Harness, Tabs};
 use slint::{ComponentHandle, Model};
 
@@ -79,6 +80,6 @@ fn a_failed_page_keeps_its_mark_across_a_spread_change() {
     let h = Harness::uniform(20, 600.0, 800.0);
     h.viewport(1000.0, 900.0);
     h.viewer.on_page_failed(3);
-    h.viewer.set_spread(1);
+    h.viewer.set_spread(Spread::Odd);
     assert!(shown_failed(&h, 3));
 }

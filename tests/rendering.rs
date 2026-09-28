@@ -108,7 +108,7 @@ fn scrolling_does_not_rerequest_already_rendered_pages() {
 
     // Pretend those pages finished rendering.
     for &page in &first {
-        h.deliver(page, slint::Image::default());
+        h.deliver(page as usize, slint::Image::default());
     }
 
     // Scrolling to the same spot again should not re-request rendered pages.

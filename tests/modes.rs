@@ -115,10 +115,12 @@ fn fit_page_makes_the_page_fit_the_height() {
 
 #[test]
 fn an_outline_entry_leading_nowhere_stays_put() {
-    let h = setup(50);
-    h.viewer.go_to_page("25");
-    h.viewer.nav_to_page(-1);
-    assert_eq!(h.current_page(), 25);
+    let t = melkkipdf::testing::Tabs::new();
+    t.open("a.pdf", 50);
+    t.viewer(0).go_to_page("25");
+    // The outline passes -1 for an entry with no destination.
+    t.window.invoke_go_to_page_index(-1);
+    assert_eq!(t.window.get_current_page(), 25);
 }
 
 #[test]

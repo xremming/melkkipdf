@@ -1,6 +1,7 @@
 //! Keyboard / wheel navigation behavior. Run with `cargo test --features testing`.
 #![cfg(feature = "testing")]
 
+use melkkipdf::Spread;
 use melkkipdf::testing::Harness;
 
 /// A harness with a known viewport, so fit and scroll math are defined.
@@ -41,11 +42,11 @@ fn end_reaches_the_last_page_in_spread_modes() {
     let h = setup(449);
     h.viewer.fit_width();
 
-    h.viewer.set_spread(2); // even
+    h.viewer.set_spread(Spread::Even); // even
     h.viewer.nav_end();
     assert_eq!(h.current_page(), 449, "even spread End should reach the last page");
 
-    h.viewer.set_spread(1); // odd
+    h.viewer.set_spread(Spread::Odd); // odd
     h.viewer.nav_end();
     assert_eq!(h.current_page(), 449, "odd spread End should reach the last page");
 }
@@ -137,7 +138,7 @@ fn the_counter_keeps_the_page_at_the_top_until_it_leaves() {
     // which is also the page a relayout would keep there.
     h.scroll_by_user(offset + row_height * 0.6);
     assert_eq!(h.current_page(), 5);
-    h.viewer.set_spread(0);
+    h.viewer.set_spread(Spread::None);
     assert_eq!(h.current_page(), 5);
 }
 

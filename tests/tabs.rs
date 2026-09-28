@@ -233,3 +233,14 @@ fn many_tabs_narrow_to_fit_the_window() {
         assert!(tab.size().width < 220.0);
     }
 }
+
+#[test]
+fn a_negative_tab_index_closes_and_selects_nothing() {
+    let t = tabs();
+    t.open("a.pdf", 1);
+    t.open("b.pdf", 1);
+    t.window.invoke_close_tab(-1);
+    t.window.invoke_select_tab(-1);
+    assert_eq!(t.titles(), ["a.pdf", "b.pdf"]);
+    assert_eq!(t.active_tab(), 1);
+}

@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use melkkipdf::Spread;
 use melkkipdf::testing::Tabs;
 use mupdf::Size;
 use mupdf::pdf::PdfDocument;
@@ -42,7 +43,7 @@ fn reopening_a_document_restores_its_view() {
     t.open("a.pdf", 20);
     let a = t.viewer(0);
     a.set_continuous(false);
-    a.set_spread(1);
+    a.set_spread(Spread::Odd);
     a.zoom_in();
     a.go_to_page("9");
     let density = t.window.get_density();
@@ -59,7 +60,7 @@ fn reopening_a_document_restores_its_view() {
 fn a_document_never_opened_before_gets_the_defaults() {
     let t = tabs();
     t.open("a.pdf", 20);
-    t.viewer(0).set_spread(2);
+    t.viewer(0).set_spread(Spread::Even);
     t.viewer(0).set_continuous(false);
     t.window.invoke_close_tab(0);
 
@@ -105,7 +106,7 @@ fn settings_and_tabs_survive_a_restart() {
         run.open_file(&a);
         run.open_file(&b);
         run.window.invoke_select_tab(0);
-        run.viewer(0).set_spread(2);
+        run.viewer(0).set_spread(Spread::Even);
         run.viewer(0).set_continuous(false);
         run.viewer(0).go_to_page("4");
         run.save();

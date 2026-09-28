@@ -101,7 +101,7 @@ impl Harness {
 
     /// Delivers a rendered image for the 0-based `page`, as the worker does,
     /// rendered at the scale the viewer asks for now.
-    pub fn deliver(&self, page: i32, image: slint::Image) {
+    pub fn deliver(&self, page: usize, image: slint::Image) {
         self.viewer.on_page_rendered(page, self.viewer.render_scale(), image);
     }
 

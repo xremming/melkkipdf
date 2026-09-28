@@ -4,6 +4,7 @@
 //! the spread, switching between continuous and paged, zooming, fitting and
 //! resizing all keep the page being read at the top of the view.
 
+use melkkipdf::Spread;
 use melkkipdf::testing::Harness;
 
 const PAGES: usize = 60;
@@ -46,7 +47,8 @@ fn go_to(h: &Harness, page: i32) {
 /// A named step in a sequence of view changes.
 type Step<T> = (&'static str, fn(&T));
 
-const SPREADS: [(i32, &str); 3] = [(0, "single"), (1, "odd"), (2, "even")];
+const SPREADS: [(Spread, &str); 3] =
+    [(Spread::None, "single"), (Spread::Odd, "odd"), (Spread::Even, "even")];
 /// A left page in odd spreads, a right page in odd spreads, and one near the end.
 const START_PAGES: [i32; 3] = [10, 11, 57];
 
@@ -90,10 +92,10 @@ fn cycling_through_every_mode_keeps_the_page() {
     go_to(&h, 23);
     for step in 0..12 {
         match step % 4 {
-            0 => h.viewer.set_spread(1),
+            0 => h.viewer.set_spread(Spread::Odd),
             1 => h.viewer.toggle_continuous(),
-            2 => h.viewer.set_spread(2),
-            _ => h.viewer.set_spread(0),
+            2 => h.viewer.set_spread(Spread::Even),
+            _ => h.viewer.set_spread(Spread::None),
         }
         assert_reading(&h, 23, &format!("step {step}"));
     }
@@ -138,9 +140,9 @@ fn a_page_scrolled_partway_into_stays_on_top() {
     let row = -h.scroll_y() / 11.0;
     h.scroll_by_user(-h.scroll_y() + row / 3.0);
     assert_reading(&h, 11, "scrolled partway");
-    h.viewer.set_spread(1);
+    h.viewer.set_spread(Spread::Odd);
     assert_reading(&h, 11, "odd spread");
-    h.viewer.set_spread(0);
+    h.viewer.set_spread(Spread::None);
     assert_reading(&h, 11, "single again");
 }
 
@@ -208,14 +210,14 @@ fn live_mode_zoom_and_fit_changes_keep_the_page() {
     pump(&t);
     t.viewer(0).go_to_page("31");
     let steps: [Step<Tabs>; 8] = [
-        ("odd spread", |t| t.viewer(0).set_spread(1)),
+        ("odd spread", |t| t.viewer(0).set_spread(Spread::Odd)),
         ("paged", |t| t.viewer(0).set_continuous(false)),
         ("continuous", |t| t.viewer(0).set_continuous(true)),
         ("zoom in", |t| t.viewer(0).zoom_in()),
         ("page width", |t| t.viewer(0).fit_width()),
-        ("even spread", |t| t.viewer(0).set_spread(2)),
+        ("even spread", |t| t.viewer(0).set_spread(Spread::Even)),
         ("zoom out", |t| t.viewer(0).zoom_out()),
-        ("single", |t| t.viewer(0).set_spread(0)),
+        ("single", |t| t.viewer(0).set_spread(Spread::None)),
     ];
     for (name, step) in steps {
         step(&t);

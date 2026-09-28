@@ -1,6 +1,7 @@
 //! Spread / row-layout behavior. Run with `cargo test --features testing`.
 #![cfg(feature = "testing")]
 
+use melkkipdf::Spread;
 use melkkipdf::testing::Harness;
 
 #[test]
@@ -21,7 +22,7 @@ fn single_mode_is_one_page_per_row() {
 #[test]
 fn odd_spread_pairs_from_the_first_page() {
     let h = Harness::uniform(5, 600.0, 800.0);
-    h.viewer.set_spread(1);
+    h.viewer.set_spread(Spread::Odd);
     assert_eq!(h.spread_mode(), 1);
     assert_eq!(h.rows(), vec![(0, Some(1)), (2, Some(3)), (4, None)]);
 }
@@ -29,7 +30,7 @@ fn odd_spread_pairs_from_the_first_page() {
 #[test]
 fn even_spread_keeps_the_first_page_alone() {
     let h = Harness::uniform(5, 600.0, 800.0);
-    h.viewer.set_spread(2);
+    h.viewer.set_spread(Spread::Even);
     assert_eq!(h.spread_mode(), 2);
     assert_eq!(h.rows(), vec![(0, None), (1, Some(2)), (3, Some(4))]);
 }
@@ -38,11 +39,11 @@ fn even_spread_keeps_the_first_page_alone() {
 fn spread_mode_changes_row_count() {
     let h = Harness::uniform(10, 600.0, 800.0);
     assert_eq!(h.row_count(), 10); // single: one row per page
-    h.viewer.set_spread(1);
+    h.viewer.set_spread(Spread::Odd);
     assert_eq!(h.row_count(), 5); // odd: five pairs
-    h.viewer.set_spread(2);
+    h.viewer.set_spread(Spread::Even);
     assert_eq!(h.row_count(), 6); // even: [0] then five pairs
-    h.viewer.set_spread(0);
+    h.viewer.set_spread(Spread::None);
     assert_eq!(h.row_count(), 10);
 }
 
@@ -53,6 +54,6 @@ fn switching_spread_clamps_the_current_page() {
     h.viewer.nav_end();
     assert_eq!(h.current_page(), 9);
     // Fewer rows after pairing; the current page must stay in range.
-    h.viewer.set_spread(1);
+    h.viewer.set_spread(Spread::Odd);
     assert!(h.current_page() >= 1 && h.current_page() <= 9);
 }

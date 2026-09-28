@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use i_slint_backend_testing::ElementHandle;
+use melkkipdf::Spread;
 use melkkipdf::testing::Tabs;
 use slint::ComponentHandle;
 
@@ -87,7 +88,7 @@ fn paged_page_fit_fills_the_width_of_a_landscape_page() {
 fn paged_page_fit_fits_a_spread_and_its_gap_exactly() {
     let t = window_with(600.0, 800.0);
     t.viewer(0).set_continuous(false);
-    t.viewer(0).set_spread(1);
+    t.viewer(0).set_spread(Spread::Odd);
     t.viewer(0).fit_page();
     let ((content_x, _, content_w, _), pages) = layout(&t);
     let (left_x, _, left_w, _) = pages[0];
