@@ -15,15 +15,18 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
+use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, VecModel, Weak};
 
 use crate::render::{RenderControl, RenderRequest};
 use crate::{MainWindow, PageEntry, PageRow};
 
 /// How pages are grouped into rows.
-#[derive(Clone, Copy, PartialEq)]
-enum Spread {
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Spread {
     /// One page per row.
+    #[serde(rename = "single")]
     None,
     /// Two pages per row starting at the first page: [0,1] [2,3] …
     Odd,
@@ -32,11 +35,33 @@ enum Spread {
 }
 
 /// How pages are scaled to the viewport when a fit mode is active.
-#[derive(Clone, Copy, PartialEq)]
-enum FitMode {
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FitMode {
     Free,
     Width,
     Page,
+}
+
+/// The per-document view choices remembered between runs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewSettings {
+    pub continuous: bool,
+    pub spread: Spread,
+    pub fit: FitMode,
+    /// Only meaningful with [`FitMode::Free`]; a fit mode derives the zoom from
+    /// the window size instead.
+    pub zoom: f32,
+    /// The 0-based page at the top of the view. A page rather than a scroll
+    /// offset, since the offset depends on the window size, zoom and spread.
+    pub page: usize,
+}
+
+impl Default for ViewSettings {
+    fn default() -> Self {
+        Self { continuous: true, spread: Spread::None, fit: FitMode::Page, zoom: 1.0, page: 0 }
+    }
 }
 
 /// The page indices making up one row.
@@ -186,6 +211,10 @@ struct Inner {
     ref_h_pt: f32,
     /// Rendered sidebar thumbnails, indexed by page (empty until rendered).
     thumb_images: Vec<Image>,
+    /// Whether the continuous view still has to scroll to `current_row`. A
+    /// restored position can only become a scroll offset once the viewport is
+    /// known, because a fit mode's zoom decides how tall each row is.
+    position_pending: bool,
 }
 
 pub struct Viewer {
@@ -209,6 +238,7 @@ impl Viewer {
         sender: Sender<RenderRequest>,
         thumb_sender: Sender<i32>,
         control: RenderControl,
+        settings: &ViewSettings,
     ) -> Rc<Self> {
         let page_count = pages_pt.len();
         let model = Rc::new(VecModel::<PageRow>::default());
@@ -217,13 +247,13 @@ impl Viewer {
         let viewer = Rc::new(Self {
             inner: RefCell::new(Inner {
                 pages_pt,
-                zoom: 1.0,
+                zoom: settings.zoom.clamp(MIN_ZOOM, MAX_ZOOM),
                 scale_factor,
                 view: None,
-                fit: FitMode::Page,
+                fit: settings.fit,
                 retained: VecDeque::new(),
-                spread: Spread::None,
-                continuous: true,
+                spread: settings.spread,
+                continuous: settings.continuous,
                 current_row: 0,
                 scroll_px: 0.0,
                 paged_scroll_x: 0.0,
@@ -234,6 +264,7 @@ impl Viewer {
                 ref_w_pt: 0.0,
                 ref_h_pt: 0.0,
                 thumb_images: vec![Image::default(); page_count],
+                position_pending: false,
             }),
             model,
             thumb_model,
@@ -245,10 +276,34 @@ impl Viewer {
         });
 
         viewer.build_layout();
+        viewer.restore_page(settings.page);
         // The window may still show another tab's modes and scroll position, so
         // publish every property rather than only the ones build_layout sets.
         viewer.activate();
         viewer
+    }
+
+    /// The view choices to remember for this document.
+    pub fn settings(&self) -> ViewSettings {
+        let inner = self.inner.borrow();
+        ViewSettings {
+            continuous: inner.continuous,
+            spread: inner.spread,
+            fit: inner.fit,
+            zoom: inner.zoom,
+            page: inner.specs.get(inner.current_row).map_or(0, |spec| spec.left),
+        }
+    }
+
+    /// Puts a restored page at the top of the view. Paged mode shows it right
+    /// away; continuous mode scrolls to it once the viewport is known.
+    fn restore_page(&self, page: usize) {
+        let mut inner = self.inner.borrow_mut();
+        let Some(&(row, _)) = inner.page_loc.get(page) else {
+            return;
+        };
+        inner.current_row = row;
+        inner.position_pending = inner.continuous && row > 0;
     }
 
     /// Makes this the viewer the window shows and publishes its whole state:
@@ -355,6 +410,12 @@ impl Viewer {
         }
         // Viewport size affects paged centering and scroll limits.
         self.push_paged_offsets();
+
+        let position_pending = std::mem::take(&mut self.inner.borrow_mut().position_pending);
+        if position_pending {
+            let row = self.inner.borrow().current_row;
+            self.scroll_to_row(row);
+        }
     }
 
     pub fn zoom_in(&self) {
@@ -448,7 +509,9 @@ impl Viewer {
     pub fn scrolled(&self, offset: f32) {
         {
             let mut inner = self.inner.borrow_mut();
-            if inner.specs.is_empty() {
+            // Until the restored position is scrolled to, the list reports the
+            // offset it starts at, which would overwrite that position.
+            if inner.specs.is_empty() || inner.position_pending {
                 return;
             }
             inner.scroll_px = offset.max(0.0);
@@ -1143,6 +1206,7 @@ mod tests {
             sender,
             std::sync::mpsc::channel().0,
             crate::render::RenderControl::inert(),
+            &super::ViewSettings::default(),
         );
 
         // Switch to paged mode, then deliver renders — including enough to force
@@ -1169,6 +1233,7 @@ mod tests {
             sender,
             std::sync::mpsc::channel().0,
             crate::render::RenderControl::inert(),
+            &super::ViewSettings::default(),
         );
         // Paged mode avoids touching the scroll offset property.
         viewer.set_continuous(false);

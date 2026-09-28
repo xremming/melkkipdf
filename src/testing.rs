@@ -7,14 +7,15 @@
 //! assertions reflect the intended behavior.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 
 use slint::{Model, ModelRc};
 
 use crate::render::{RenderControl, RenderRequest};
-use crate::{App, MainWindow, Tab, Viewer};
+use crate::settings::Store;
+use crate::{App, MainWindow, ViewSettings, Viewer, Workers};
 
 /// A window + viewer pair for tests, plus convenience accessors.
 pub struct Harness {
@@ -39,7 +40,15 @@ impl Harness {
         let window = MainWindow::new().ok()?;
         let (sender, requests) = mpsc::channel();
         let (thumb_sender, _thumb_requests) = mpsc::channel();
-        let viewer = Viewer::new(&window, pages, 1.0, sender, thumb_sender, RenderControl::inert());
+        let viewer = Viewer::new(
+            &window,
+            pages,
+            1.0,
+            sender,
+            thumb_sender,
+            RenderControl::inert(),
+            &ViewSettings::default(),
+        );
         Some(Self { window, viewer, requests, _thumb_requests })
     }
 
@@ -107,8 +116,9 @@ impl Harness {
 }
 
 /// A window driven through the app's tab handling, for tests of opening,
-/// switching and closing tabs. Its documents have no file behind them: each is
-/// a set of uniform pages whose renders go nowhere.
+/// switching and closing tabs and of what is remembered between runs. Its
+/// documents normally have no file behind them: each is a set of uniform pages
+/// whose renders go nowhere.
 pub struct Tabs {
     pub window: MainWindow,
     app: Rc<App>,
@@ -117,36 +127,59 @@ pub struct Tabs {
 }
 
 impl Tabs {
-    /// An empty window. Returns `None` if no windowing backend is available.
+    /// An empty window that remembers nothing on disk. Returns `None` if no
+    /// windowing backend is available.
     pub fn new() -> Option<Self> {
+        Self::with_store(Store::in_memory())
+    }
+
+    /// An empty window that remembers settings in `file`, as a real run does
+    /// in its state directory. Nothing is restored until [`Tabs::restore`].
+    pub fn with_settings_file(file: PathBuf) -> Option<Self> {
+        Self::with_store(Store::load(file))
+    }
+
+    fn with_store(store: Store) -> Option<Self> {
         let window = MainWindow::new().ok()?;
-        let app = App::new(&window);
+        let app = App::new(&window, store);
         Some(Self { window, app, receivers: RefCell::new(Vec::new()) })
     }
 
     /// Opens a document of `count` pages named `title` in a new tab, as opening
-    /// a file does, and returns the id its renders are tagged with.
+    /// a file does, and returns the id its renders are tagged with. `title`
+    /// doubles as the path the document is remembered under.
     pub fn open(&self, title: &str, count: usize) -> i32 {
-        let (sender, requests) = mpsc::channel();
-        let (thumb_sender, thumb_requests) = mpsc::channel();
-        self.receivers.borrow_mut().push((requests, thumb_requests));
-        let viewer = Viewer::new(
-            &self.window,
-            vec![(600.0, 800.0); count],
-            1.0,
-            sender,
-            thumb_sender,
-            RenderControl::inert(),
-        );
-        let id = self.app.allocate_id();
-        self.app.add_tab(Tab {
-            id,
-            path: PathBuf::from(title),
-            title: title.into(),
-            viewer,
-            outline: ModelRc::default(),
-        });
-        id
+        let path = PathBuf::from(title);
+        if let Some(index) = self.app.find(&path) {
+            self.app.select(index);
+            return self.app.tabs.borrow()[index].id;
+        }
+        let index = self
+            .app
+            .insert(path, title.into(), vec![(600.0, 800.0); count], ModelRc::default(), |_| {
+                let (pages, requests) = mpsc::channel();
+                let (thumbnails, thumb_requests) = mpsc::channel();
+                self.receivers.borrow_mut().push((requests, thumb_requests));
+                Workers { pages, thumbnails, control: RenderControl::inert() }
+            })
+            .expect("the window is gone");
+        self.app.tabs.borrow()[index].id
+    }
+
+    /// Opens a real file, exactly as the open button or the command line does.
+    pub fn open_file(&self, path: &Path) {
+        self.app.open(path.to_string_lossy().into_owned());
+    }
+
+    /// Writes out what the app remembers, as it does when a tab closes, the
+    /// autosave timer fires or the window closes.
+    pub fn save(&self) {
+        self.app.save();
+    }
+
+    /// Reopens the tabs saved last time, as a real run does on start.
+    pub fn restore(&self) {
+        self.app.restore_session();
     }
 
     /// The viewer of the tab at `index`.

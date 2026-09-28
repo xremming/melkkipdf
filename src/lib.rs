@@ -7,17 +7,23 @@
 #[cfg(target_os = "macos")]
 mod macos;
 mod render;
+mod settings;
 mod viewer;
 
 use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc::Sender;
+use std::time::Duration;
 
 use mupdf::Document;
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
+use slint::{ComponentHandle, ModelRc, SharedString, TimerMode, VecModel, Weak};
 
-pub use viewer::Viewer;
+use render::{RenderControl, RenderRequest};
+use settings::{Session, Store};
+
+pub use viewer::{FitMode, Spread, ViewSettings, Viewer};
 
 slint::include_modules!();
 
@@ -56,6 +62,17 @@ pub fn read_outline(path: &str) -> Vec<(String, i32, i32)> {
     items
 }
 
+/// How often changes are written out between the explicit save points, which
+/// bounds what a crash or a killed process can lose.
+const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The channels to one document's render workers.
+struct Workers {
+    pages: Sender<RenderRequest>,
+    thumbnails: Sender<i32>,
+    control: RenderControl,
+}
+
 /// One open document: its viewer, plus what the window shows for it outside
 /// the viewer.
 struct Tab {
@@ -82,10 +99,12 @@ pub(crate) struct App {
     /// Last viewport size reported by the window. Only the active viewer hears
     /// about resizes, so this is replayed into a viewer when its tab is shown.
     viewport: Cell<(f32, f32)>,
+    /// Each document's remembered view, and the tabs to reopen next time.
+    store: RefCell<Store>,
 }
 
 impl App {
-    pub(crate) fn new(window: &MainWindow) -> Rc<Self> {
+    pub(crate) fn new(window: &MainWindow, store: Store) -> Rc<Self> {
         let titles = Rc::new(VecModel::default());
         window.set_tabs(ModelRc::from(titles.clone()));
         let app = Rc::new(Self {
@@ -95,6 +114,7 @@ impl App {
             titles,
             next_id: Cell::new(0),
             viewport: Cell::new((0.0, 0.0)),
+            store: RefCell::new(store),
         });
         app.show_empty();
         wire_callbacks(window, &app);
@@ -125,31 +145,28 @@ impl App {
         }
     }
 
-    /// Opens `path` in a new tab and shows it. A document that already has a
-    /// tab is shown there instead, since a second copy would only split the
-    /// reading position between two tabs. On a read error the message is shown
-    /// and the open tabs are left as they are.
-    pub(crate) fn open(&self, path: String) {
-        let Some(window) = self.window.upgrade() else {
-            return;
-        };
+    /// Opens `path` in a new tab and shows it, returning the tab's index. A
+    /// document that already has a tab is shown there instead, since a second
+    /// copy would only split the reading position between two tabs. On a read
+    /// error the message is shown and the open tabs are left as they are.
+    pub(crate) fn open(&self, path: String) -> Option<usize> {
+        let window = self.window.upgrade()?;
 
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
-        let existing = self.tabs.borrow().iter().position(|tab| tab.path == canonical);
-        if let Some(index) = existing {
+        if let Some(index) = self.find(&canonical) {
             self.select(index);
-            return;
+            return Some(index);
         }
 
         let pages_pt = match read_page_sizes(&path) {
             Ok(sizes) if !sizes.is_empty() => sizes,
             Ok(_) => {
                 window.set_status("Document has no pages.".into());
-                return;
+                return None;
             }
             Err(err) => {
                 window.set_status(format!("Failed to open {path}: {err}").into());
-                return;
+                return None;
             }
         };
 
@@ -157,23 +174,59 @@ impl App {
             .into_iter()
             .map(|(title, page, depth)| OutlineItem { title: title.into(), page, depth })
             .collect();
-
-        let id = self.allocate_id();
-        let scale_factor = window.window().scale_factor();
-        let (sender, control) = render::spawn(path.clone(), id, window.as_weak());
-        let thumb_sender = render::spawn_thumbnails(path.clone(), id, window.as_weak());
-        let viewer = Viewer::new(&window, pages_pt, scale_factor, sender, thumb_sender, control);
-
         let title = Path::new(&path)
             .file_name()
             .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
-        self.add_tab(Tab {
-            id,
-            path: canonical,
-            title: title.into(),
-            viewer,
-            outline: ModelRc::new(VecModel::from(outline)),
-        });
+
+        self.insert(
+            canonical,
+            title.into(),
+            pages_pt,
+            ModelRc::new(VecModel::from(outline)),
+            |id| {
+                let (pages, control) = render::spawn(path.clone(), id, window.as_weak());
+                let thumbnails = render::spawn_thumbnails(path.clone(), id, window.as_weak());
+                Workers { pages, thumbnails, control }
+            },
+        )
+    }
+
+    /// The index of the tab showing the document at the canonical `path`.
+    fn find(&self, path: &Path) -> Option<usize> {
+        self.tabs.borrow().iter().position(|tab| tab.path == path)
+    }
+
+    /// Adds a tab for a document whose pages have been read and shows it,
+    /// restoring the view the document was last left in. `spawn` starts the
+    /// document's render workers, tagged with the id it is given.
+    fn insert(
+        &self,
+        path: PathBuf,
+        title: SharedString,
+        pages_pt: Vec<(f32, f32)>,
+        outline: ModelRc<OutlineItem>,
+        spawn: impl FnOnce(i32) -> Workers,
+    ) -> Option<usize> {
+        let window = self.window.upgrade()?;
+        let settings = {
+            let mut store = self.store.borrow_mut();
+            let settings = store.document(&path).unwrap_or_default();
+            store.record_open(&path);
+            settings
+        };
+
+        let id = self.allocate_id();
+        let workers = spawn(id);
+        let viewer = Viewer::new(
+            &window,
+            pages_pt,
+            window.window().scale_factor(),
+            workers.pages,
+            workers.thumbnails,
+            workers.control,
+            &settings,
+        );
+        Some(self.add_tab(Tab { id, path, title, viewer, outline }))
     }
 
     /// A fresh id to tag a new document's renders with.
@@ -185,7 +238,7 @@ impl App {
 
     /// Appends `tab` after the last one and shows it, as a browser does with a
     /// new tab.
-    fn add_tab(&self, tab: Tab) {
+    fn add_tab(&self, tab: Tab) -> usize {
         let title = tab.title.clone();
         let index = {
             let mut tabs = self.tabs.borrow_mut();
@@ -194,6 +247,7 @@ impl App {
         };
         self.titles.push(title);
         self.select(index);
+        index
     }
 
     /// Shows the tab at `index`, handing the window over to its viewer.
@@ -247,6 +301,8 @@ impl App {
         };
         self.titles.remove(index);
         let remaining = self.tabs.borrow().len();
+        // Taken now, while the viewer is still here to ask.
+        self.store.borrow_mut().update(&removed.path, removed.viewer.settings());
 
         match self.active.get() {
             Some(active) if active == index => {
@@ -265,6 +321,50 @@ impl App {
                 }
             }
             _ => {}
+        }
+        self.save();
+    }
+
+    /// Records every open tab's view and the tabs themselves, then writes them
+    /// out if anything changed since the last save.
+    pub(crate) fn save(&self) {
+        let open: Vec<(PathBuf, ViewSettings)> = self
+            .tabs
+            .borrow()
+            .iter()
+            .map(|tab| (tab.path.clone(), tab.viewer.settings()))
+            .collect();
+        let mut store = self.store.borrow_mut();
+        let session = Session {
+            tabs: open.iter().map(|(path, _)| path.clone()).collect(),
+            active: self.active.get(),
+        };
+        for (path, settings) in open {
+            store.update(&path, settings);
+        }
+        store.set_session(session);
+        if let Err(err) = store.save() {
+            eprintln!("Failed to save settings: {err}.");
+        }
+    }
+
+    /// Reopens the tabs that were open when the app last closed and shows the
+    /// one that was active. A document that has since gone is skipped.
+    pub(crate) fn restore_session(&self) {
+        let session = self.store.borrow().session();
+        let mut active = None;
+        for (index, path) in session.tabs.iter().enumerate() {
+            if !path.exists() {
+                eprintln!("Not reopening {}, which no longer exists.", path.display());
+                continue;
+            }
+            let opened = self.open(path.to_string_lossy().into_owned());
+            if session.active == Some(index) {
+                active = opened;
+            }
+        }
+        if let Some(active) = active {
+            self.select(active);
         }
     }
 
@@ -300,9 +400,9 @@ impl App {
     }
 }
 
-/// Opens the window with a tab for each of `paths` (or an empty window with
-/// the open button when there are none) and runs the event loop until the
-/// window closes.
+/// Opens the window with the tabs left open last time plus one for each of
+/// `paths` (or an empty window with the open button when there are none) and
+/// runs the event loop until the window closes.
 pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
     let window = MainWindow::new()?;
 
@@ -312,19 +412,33 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
     // when the window is actually shown, so setting it here is in time.
     slint::set_xdg_app_id("io.github.xremming.MelkkiPDF")?;
 
-    let app = App::new(&window);
+    let app = App::new(&window, Store::open_default());
 
     #[cfg(target_os = "macos")]
     macos::on_open_document({
         let app = app.clone();
-        move |path| app.open(path.to_string_lossy().into_owned())
+        move |path| {
+            app.open(path.to_string_lossy().into_owned());
+        }
     });
 
+    app.restore_session();
     for path in paths {
         app.open(path);
     }
 
+    let autosave = slint::Timer::default();
+    autosave.start(TimerMode::Repeated, AUTOSAVE_INTERVAL, {
+        let app = Rc::downgrade(&app);
+        move || {
+            if let Some(app) = app.upgrade() {
+                app.save();
+            }
+        }
+    });
+
     window.run()?;
+    app.save();
     Ok(())
 }
 
@@ -337,7 +451,10 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_select_tab({
         let app = app.clone();
-        move |index| app.select(index.max(0) as usize)
+        move |index| {
+            app.select(index.max(0) as usize);
+            app.save();
+        }
     });
     window.on_close_tab({
         let app = app.clone();
