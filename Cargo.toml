@@ -11,7 +11,7 @@ license = "AGPL-3.0-or-later"
 testing = []
 
 [dependencies]
-slint = "1.18"
+slint = { version = "1.18", features = ["unstable-winit-030"] }
 mupdf = "0.8"
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 serde = { version = "1", features = ["derive"] }

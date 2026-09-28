@@ -15,7 +15,7 @@ use slint::{Model, ModelRc};
 
 use crate::render::{RenderControl, RenderRequest};
 use crate::settings::Store;
-use crate::{App, MainWindow, ViewSettings, Viewer, Workers};
+use crate::{App, FileDrag, MainWindow, ViewSettings, Viewer, Workers};
 
 /// A window + viewer pair for tests, plus convenience accessors.
 pub struct Harness {
@@ -169,6 +169,22 @@ impl Tabs {
     /// Opens a real file, exactly as the open button or the command line does.
     pub fn open_file(&self, path: &Path) {
         self.app.open(path.to_string_lossy().into_owned());
+    }
+
+    /// Files dragged from another application arrive over the window.
+    pub fn drag_files_over(&self) {
+        self.app.file_drag(FileDrag::Hovered);
+    }
+
+    /// The drag leaves the window without dropping anything.
+    pub fn drag_away(&self) {
+        self.app.file_drag(FileDrag::Cancelled);
+    }
+
+    /// A file is dropped onto the window. It opens once the event loop gets
+    /// to it, so advance the mock time before looking for its tab.
+    pub fn drop_file(&self, path: &Path) {
+        self.app.file_drag(FileDrag::Dropped(path.to_path_buf()));
     }
 
     /// Writes out what the app remembers, as it does when a tab closes, the

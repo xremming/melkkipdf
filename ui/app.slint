@@ -354,6 +354,9 @@ export component MainWindow inherits Window {
     // The name of the open document, shown in the window title bar.
     in property <string> doc-title;
 
+    // Whether files dragged from another application are over the window.
+    in property <bool> drop-hover;
+
     // One title per open document, in tab order, and the index of the tab
     // shown (-1 while nothing is open).
     in property <[string]> tabs;
@@ -806,4 +809,19 @@ export component MainWindow inherits Window {
         }
     }
 }
+
+    // Shown while files dragged from another application are over the window,
+    // so it is clear that letting go opens them.
+    if root.drop-hover: drop-overlay := Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+        border-width: 3px;
+        border-color: #6ea8fe;
+        Text {
+            text: "Drop to open in a new tab";
+            color: #ffffff;
+            font-size: 20px;
+        }
+    }
 }

@@ -18,7 +18,8 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use mupdf::Document;
-use slint::{ComponentHandle, ModelRc, SharedString, TimerMode, VecModel, Weak};
+use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
+use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
 use render::{RenderControl, RenderRequest};
 use settings::{Session, Store};
@@ -66,6 +67,25 @@ pub fn read_outline(path: &str) -> Vec<(String, i32, i32)> {
 /// bounds what a crash or a killed process can lose.
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// A file dragged from another application over the window. Kept apart from
+/// winit's event type so the tests can drive it.
+pub(crate) enum FileDrag {
+    Hovered,
+    Cancelled,
+    Dropped(PathBuf),
+}
+
+impl FileDrag {
+    fn from_winit(event: &winit::event::WindowEvent) -> Option<Self> {
+        match event {
+            winit::event::WindowEvent::HoveredFile(_) => Some(Self::Hovered),
+            winit::event::WindowEvent::HoveredFileCancelled => Some(Self::Cancelled),
+            winit::event::WindowEvent::DroppedFile(path) => Some(Self::Dropped(path.clone())),
+            _ => None,
+        }
+    }
+}
+
 /// The channels to one document's render workers.
 struct Workers {
     pages: Sender<RenderRequest>,
@@ -101,6 +121,9 @@ pub(crate) struct App {
     viewport: Cell<(f32, f32)>,
     /// Each document's remembered view, and the tabs to reopen next time.
     store: RefCell<Store>,
+    /// Files dropped onto the window and not yet opened, in the order they
+    /// arrived.
+    dropped: RefCell<Vec<PathBuf>>,
 }
 
 impl App {
@@ -115,6 +138,7 @@ impl App {
             next_id: Cell::new(0),
             viewport: Cell::new((0.0, 0.0)),
             store: RefCell::new(store),
+            dropped: RefCell::new(Vec::new()),
         });
         app.show_empty();
         wire_callbacks(window, &app);
@@ -383,6 +407,43 @@ impl App {
         window.set_status("Open a PDF to get started.".into());
     }
 
+    /// Highlights the window while files are dragged over it, and opens each
+    /// dropped file in a new tab. Several files dropped together arrive one
+    /// event each, so each gets its own tab, in the order they come.
+    pub(crate) fn file_drag(self: &Rc<Self>, drag: FileDrag) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        match drag {
+            FileDrag::Hovered => window.set_drop_hover(true),
+            FileDrag::Cancelled => window.set_drop_hover(false),
+            FileDrag::Dropped(path) => {
+                window.set_drop_hover(false);
+                // Opening reads the document and reshapes the window, which is
+                // best done from the event loop rather than from inside the
+                // windowing system's delivery of the drop. The files are queued
+                // for one timer, because timers due at the same moment do not
+                // fire in the order they were started, and the tabs should.
+                let first = {
+                    let mut dropped = self.dropped.borrow_mut();
+                    dropped.push(path);
+                    dropped.len() == 1
+                };
+                if first {
+                    let app = Rc::downgrade(self);
+                    Timer::single_shot(Duration::ZERO, move || {
+                        if let Some(app) = app.upgrade() {
+                            let dropped = std::mem::take(&mut *app.dropped.borrow_mut());
+                            for path in dropped {
+                                app.open(path.to_string_lossy().into_owned());
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
     /// Prompts for a PDF with a native file dialog and opens the chosen one. The
     /// picker runs as a future on Slint's event loop so the UI stays responsive.
     fn pick_and_open(self: &Rc<Self>) {
@@ -419,6 +480,19 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
         let app = app.clone();
         move |path| {
             app.open(path.to_string_lossy().into_owned());
+        }
+    });
+
+    // Slint's own DropArea does not receive drops from other applications on
+    // winit yet, so files dropped onto the window are taken from winit.
+    window.window().on_winit_window_event({
+        let app = Rc::downgrade(&app);
+        move |_, event| match (FileDrag::from_winit(event), app.upgrade()) {
+            (Some(drag), Some(app)) => {
+                app.file_drag(drag);
+                EventResult::PreventDefault
+            }
+            _ => EventResult::Propagate,
         }
     });
 
