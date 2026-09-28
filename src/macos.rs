@@ -60,15 +60,17 @@ define_class!(
             // a u32, and returns a possibly nil descriptor.
             let documents: Option<Retained<NSAppleEventDescriptor>> =
                 unsafe { msg_send![event, paramDescriptorForKeyword: DIRECT_OBJECT] };
-            // The viewer has a single window, so of several documents selected
-            // together only the first is opened. Apple Event lists are 1-based.
-            let path = documents.and_then(|documents| {
-                (1..=documents.numberOfItems())
-                    .filter_map(|index| documents.descriptorAtIndex(index))
-                    .find_map(|document| document.fileURLValue()?.to_file_path())
-            });
-            if let Some(path) = path {
-                (self.ivars().on_open)(path);
+            let Some(documents) = documents else {
+                return;
+            };
+            // Apple Event lists are 1-based.
+            for index in 1..=documents.numberOfItems() {
+                let path = documents
+                    .descriptorAtIndex(index)
+                    .and_then(|document| document.fileURLValue()?.to_file_path());
+                if let Some(path) = path {
+                    (self.ivars().on_open)(path);
+                }
             }
         }
     }

@@ -97,8 +97,14 @@ fn cache_key(request: &RenderRequest) -> CacheKey {
 ///
 /// The worker opens its own `Document` (the UI thread reads page sizes from a
 /// separate handle), renders on demand, and delivers each finished page back to
-/// the viewer via the window's `page-rendered` callback.
-pub fn spawn(path: String, window: Weak<MainWindow>) -> (Sender<RenderRequest>, RenderControl) {
+/// the viewer via the window's `page-rendered` callback. Every page is tagged
+/// with `doc`, because each open tab has a worker of its own and all of them
+/// report through the one window.
+pub fn spawn(
+    path: String,
+    doc: i32,
+    window: Weak<MainWindow>,
+) -> (Sender<RenderRequest>, RenderControl) {
     let (sender, receiver) = mpsc::channel::<RenderRequest>();
     let abort = Arc::new(Mutex::new(AbortSlot::default()));
     let control = RenderControl { abort: abort.clone() };
@@ -143,7 +149,7 @@ pub fn spawn(path: String, window: Weak<MainWindow>) -> (Sender<RenderRequest>, 
             let key = cache_key(&request);
 
             if let Some(buffer) = cache.get(&key) {
-                push_page(&window, request.page, buffer);
+                push_page(&window, doc, request.page, buffer);
                 continue;
             }
 
@@ -158,7 +164,7 @@ pub fn spawn(path: String, window: Weak<MainWindow>) -> (Sender<RenderRequest>, 
             match outcome {
                 Ok(buffer) => {
                     cache.put(key, buffer.clone());
-                    push_page(&window, request.page, buffer);
+                    push_page(&window, doc, request.page, buffer);
                 }
                 Err(err) => {
                     let page = request.page + 1;
@@ -172,9 +178,9 @@ pub fn spawn(path: String, window: Weak<MainWindow>) -> (Sender<RenderRequest>, 
 }
 
 /// Hands a finished page to the UI thread.
-fn push_page(window: &Weak<MainWindow>, page: i32, buffer: PageBuffer) {
+fn push_page(window: &Weak<MainWindow>, doc: i32, page: i32, buffer: PageBuffer) {
     let _ = window.upgrade_in_event_loop(move |window| {
-        window.invoke_page_rendered(page, Image::from_rgb8(buffer));
+        window.invoke_page_rendered(doc, page, Image::from_rgb8(buffer));
     });
 }
 
@@ -238,8 +244,8 @@ const THUMB_WIDTH: f32 = 150.0;
 /// deliberately independent of the main render pipeline: thumbnails are cheap,
 /// persistent (never aborted or epoch-dropped), and each page is rendered at
 /// most once. Send it 0-based page indices; results arrive via the window's
-/// `thumbnail-rendered` callback.
-pub fn spawn_thumbnails(path: String, window: Weak<MainWindow>) -> Sender<i32> {
+/// `thumbnail-rendered` callback, tagged with `doc` like the pages of [`spawn`].
+pub fn spawn_thumbnails(path: String, doc: i32, window: Weak<MainWindow>) -> Sender<i32> {
     let (sender, receiver) = mpsc::channel::<i32>();
     thread::spawn(move || {
         let Ok(document) = Document::open(&path) else {
@@ -252,7 +258,7 @@ pub fn spawn_thumbnails(path: String, window: Weak<MainWindow>) -> Sender<i32> {
             }
             if let Ok(buffer) = render_thumbnail(&document, page) {
                 let _ = window.upgrade_in_event_loop(move |window| {
-                    window.invoke_thumbnail_rendered(page, Image::from_rgb8(buffer));
+                    window.invoke_thumbnail_rendered(doc, page, Image::from_rgb8(buffer));
                 });
             }
         }

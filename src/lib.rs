@@ -11,11 +11,11 @@ mod viewer;
 
 use std::cell::{Cell, RefCell};
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use mupdf::Document;
-use slint::{ComponentHandle, Weak};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 pub use viewer::Viewer;
 
@@ -56,34 +56,90 @@ pub fn read_outline(path: &str) -> Vec<(String, i32, i32)> {
     items
 }
 
-/// Holds the live window and the viewer for the document currently open. The
-/// viewer is swapped out (not the window) when a new PDF is opened, so all the
-/// UI callbacks dispatch through here rather than capturing a fixed viewer.
-struct App {
+/// One open document: its viewer, plus what the window shows for it outside
+/// the viewer.
+struct Tab {
+    /// Tags this document's renders, which arrive through the shared window.
+    id: i32,
+    /// The canonical path, so opening a document twice finds its tab.
+    path: PathBuf,
+    title: SharedString,
+    viewer: Rc<Viewer>,
+    outline: ModelRc<OutlineItem>,
+}
+
+/// Holds the live window and a tab per open document. There is one window and
+/// one set of callbacks, so the callbacks dispatch through here to whichever
+/// tab is active rather than capturing a fixed viewer.
+pub(crate) struct App {
     window: Weak<MainWindow>,
-    viewer: RefCell<Option<Rc<Viewer>>>,
-    /// Last viewport size reported by the window. A viewer created after the
-    /// window is already shown never sees a `viewport-resized` event (the size
-    /// did not change), so we replay the last one into it.
+    tabs: RefCell<Vec<Tab>>,
+    /// Index into `tabs` of the tab shown, or `None` while nothing is open.
+    active: Cell<Option<usize>>,
+    /// The tab titles, in tab order, which the tab strip draws.
+    titles: Rc<VecModel<SharedString>>,
+    next_id: Cell<i32>,
+    /// Last viewport size reported by the window. Only the active viewer hears
+    /// about resizes, so this is replayed into a viewer when its tab is shown.
     viewport: Cell<(f32, f32)>,
 }
 
 impl App {
-    /// Runs `action` on the current viewer, if a document is open.
+    pub(crate) fn new(window: &MainWindow) -> Rc<Self> {
+        let titles = Rc::new(VecModel::default());
+        window.set_tabs(ModelRc::from(titles.clone()));
+        let app = Rc::new(Self {
+            window: window.as_weak(),
+            tabs: RefCell::new(Vec::new()),
+            active: Cell::new(None),
+            titles,
+            next_id: Cell::new(0),
+            viewport: Cell::new((0.0, 0.0)),
+        });
+        app.show_empty();
+        wire_callbacks(window, &app);
+        app
+    }
+
+    /// The active tab's viewer. Cloned out so no borrow of `tabs` is held while
+    /// the viewer runs.
+    fn active_viewer(&self) -> Option<Rc<Viewer>> {
+        let index = self.active.get()?;
+        self.tabs.borrow().get(index).map(|tab| tab.viewer.clone())
+    }
+
+    /// Runs `action` on the active tab's viewer, if a document is open.
     fn with_viewer(&self, action: impl FnOnce(&Viewer)) {
-        if let Some(viewer) = self.viewer.borrow().as_ref() {
-            action(viewer);
+        if let Some(viewer) = self.active_viewer() {
+            action(&viewer);
         }
     }
 
-    /// Loads `path` into the window, replacing any document already open. On a
-    /// read error the message is shown and the current document (if any) is
-    /// kept. Dropping the previous viewer closes its render channels, so the old
-    /// worker threads shut themselves down.
-    fn open(&self, path: String) {
+    /// Runs `action` on the viewer of the document `id`, whether or not its tab
+    /// is active. Renders for a tab closed since they were requested find none.
+    fn with_document(&self, id: i32, action: impl FnOnce(&Viewer)) {
+        let viewer =
+            self.tabs.borrow().iter().find(|tab| tab.id == id).map(|tab| tab.viewer.clone());
+        if let Some(viewer) = viewer {
+            action(&viewer);
+        }
+    }
+
+    /// Opens `path` in a new tab and shows it. A document that already has a
+    /// tab is shown there instead, since a second copy would only split the
+    /// reading position between two tabs. On a read error the message is shown
+    /// and the open tabs are left as they are.
+    pub(crate) fn open(&self, path: String) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
+
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+        let existing = self.tabs.borrow().iter().position(|tab| tab.path == canonical);
+        if let Some(index) = existing {
+            self.select(index);
+            return;
+        }
 
         let pages_pt = match read_page_sizes(&path) {
             Ok(sizes) if !sizes.is_empty() => sizes,
@@ -97,31 +153,134 @@ impl App {
             }
         };
 
-        // Populate the outline (bookmarks) sidebar.
         let outline: Vec<OutlineItem> = read_outline(&path)
             .into_iter()
             .map(|(title, page, depth)| OutlineItem { title: title.into(), page, depth })
             .collect();
-        window.set_outline(slint::ModelRc::new(slint::VecModel::from(outline)));
 
+        let id = self.allocate_id();
         let scale_factor = window.window().scale_factor();
-        let (sender, control) = render::spawn(path.clone(), window.as_weak());
-        let thumb_sender = render::spawn_thumbnails(path.clone(), window.as_weak());
+        let (sender, control) = render::spawn(path.clone(), id, window.as_weak());
+        let thumb_sender = render::spawn_thumbnails(path.clone(), id, window.as_weak());
         let viewer = Viewer::new(&window, pages_pt, scale_factor, sender, thumb_sender, control);
 
-        // Replay the current viewport so the fresh viewer lays out immediately
-        // instead of waiting for a resize.
-        let (view_w, view_h) = self.viewport.get();
-        if view_w > 0.0 && view_h > 0.0 {
-            viewer.set_viewport(view_w, view_h);
+        let title = Path::new(&path)
+            .file_name()
+            .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+        self.add_tab(Tab {
+            id,
+            path: canonical,
+            title: title.into(),
+            viewer,
+            outline: ModelRc::new(VecModel::from(outline)),
+        });
+    }
+
+    /// A fresh id to tag a new document's renders with.
+    fn allocate_id(&self) -> i32 {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        id
+    }
+
+    /// Appends `tab` after the last one and shows it, as a browser does with a
+    /// new tab.
+    fn add_tab(&self, tab: Tab) {
+        let title = tab.title.clone();
+        let index = {
+            let mut tabs = self.tabs.borrow_mut();
+            tabs.push(tab);
+            tabs.len() - 1
+        };
+        self.titles.push(title);
+        self.select(index);
+    }
+
+    /// Shows the tab at `index`, handing the window over to its viewer.
+    pub(crate) fn select(&self, index: usize) {
+        if self.active.get() == Some(index) {
+            return;
         }
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let Some((viewer, outline, title)) = self
+            .tabs
+            .borrow()
+            .get(index)
+            .map(|tab| (tab.viewer.clone(), tab.outline.clone(), tab.title.clone()))
+        else {
+            return;
+        };
 
-        let name =
-            Path::new(&path).file_name().map_or(path.as_str(), |n| n.to_str().unwrap_or(&path));
-        window.set_doc_title(name.into());
+        // A viewer created for a new tab has already taken over the window, but
+        // the previous one still believes it owns it until told otherwise.
+        if let Some(previous) = self.active_viewer()
+            && !Rc::ptr_eq(&previous, &viewer)
+        {
+            previous.deactivate();
+        }
+        self.active.set(Some(index));
 
-        // Dropping the previous viewer here shuts down its render workers.
-        *self.viewer.borrow_mut() = Some(viewer);
+        window.set_active_tab(index as i32);
+        window.set_outline(outline);
+        window.set_doc_title(title);
+        viewer.activate();
+        // The window may have been resized while this tab was in the background.
+        let (width, height) = self.viewport.get();
+        if width > 0.0 && height > 0.0 {
+            viewer.set_viewport(width, height);
+        }
+    }
+
+    /// Closes the tab at `index`. Closing the active tab shows its right-hand
+    /// neighbour, or the left-hand one when it was the last, as browsers do.
+    /// Dropping the tab's viewer closes its render channels, so its worker
+    /// threads shut themselves down.
+    pub(crate) fn close(&self, index: usize) {
+        let removed = {
+            let mut tabs = self.tabs.borrow_mut();
+            if index >= tabs.len() {
+                return;
+            }
+            tabs.remove(index)
+        };
+        self.titles.remove(index);
+        let remaining = self.tabs.borrow().len();
+
+        match self.active.get() {
+            Some(active) if active == index => {
+                removed.viewer.deactivate();
+                self.active.set(None);
+                if remaining == 0 {
+                    self.show_empty();
+                } else {
+                    self.select(index.min(remaining - 1));
+                }
+            }
+            Some(active) if active > index => {
+                self.active.set(Some(active - 1));
+                if let Some(window) = self.window.upgrade() {
+                    window.set_active_tab(active as i32 - 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Resets the window to the state it starts in, with no document open.
+    fn show_empty(&self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        window.set_active_tab(-1);
+        window.set_rows(ModelRc::default());
+        window.set_thumb_rows(ModelRc::default());
+        window.set_outline(ModelRc::default());
+        window.set_page_count(0);
+        window.set_current_page(0);
+        window.set_doc_title(SharedString::new());
+        window.set_status("Open a PDF to get started.".into());
     }
 
     /// Prompts for a PDF with a native file dialog and opens the chosen one. The
@@ -141,9 +300,10 @@ impl App {
     }
 }
 
-/// Opens the window for `path` (or an empty window with the open button when
-/// `None`) and runs the event loop until the window closes.
-pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
+/// Opens the window with a tab for each of `paths` (or an empty window with
+/// the open button when there are none) and runs the event loop until the
+/// window closes.
+pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
     let window = MainWindow::new()?;
 
     // Without an app ID matching the desktop entry, compositors cannot tie the
@@ -152,12 +312,7 @@ pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
     // when the window is actually shown, so setting it here is in time.
     slint::set_xdg_app_id("io.github.xremming.MelkkiPDF")?;
 
-    let app = Rc::new(App {
-        window: window.as_weak(),
-        viewer: RefCell::new(None),
-        viewport: Cell::new((0.0, 0.0)),
-    });
-    wire_callbacks(&window, &app);
+    let app = App::new(&window);
 
     #[cfg(target_os = "macos")]
     macos::on_open_document({
@@ -165,10 +320,8 @@ pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
         move |path| app.open(path.to_string_lossy().into_owned())
     });
 
-    if let Some(path) = path {
+    for path in paths {
         app.open(path);
-    } else {
-        window.set_status("Open a PDF to get started.".into());
     }
 
     window.run()?;
@@ -176,11 +329,19 @@ pub fn run(path: Option<String>) -> Result<(), Box<dyn Error>> {
 }
 
 /// Connects the window's callbacks to the app, dispatching each to the viewer of
-/// the document currently open.
+/// the active tab, or of the document a render belongs to.
 fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_open_document({
         let app = app.clone();
         move || app.pick_and_open()
+    });
+    window.on_select_tab({
+        let app = app.clone();
+        move |index| app.select(index.max(0) as usize)
+    });
+    window.on_close_tab({
+        let app = app.clone();
+        move |index| app.close(index.max(0) as usize)
     });
     window.on_request_render_row({
         let app = app.clone();
@@ -188,7 +349,7 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_page_rendered({
         let app = app.clone();
-        move |page, image| app.with_viewer(|v| v.on_page_rendered(page, image.clone()))
+        move |doc, page, image| app.with_document(doc, |v| v.on_page_rendered(page, image.clone()))
     });
     window.on_viewport_resized({
         let app = app.clone();
@@ -267,7 +428,9 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_thumbnail_rendered({
         let app = app.clone();
-        move |page, image| app.with_viewer(|v| v.on_thumbnail_rendered(page, image.clone()))
+        move |doc, page, image| {
+            app.with_document(doc, |v| v.on_thumbnail_rendered(page, image.clone()))
+        }
     });
     window.on_toggle_sidebar({
         let window = window.as_weak();

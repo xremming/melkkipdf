@@ -47,8 +47,6 @@ fn icon_groups_are_their_icons_plus_padding() {
     assert_eq!(width_of(&window, "MainWindow::zoom-group"), 2.0 * segment);
     assert_eq!(width_of(&window, "MainWindow::spread-group"), 3.0 * segment);
     assert_eq!(width_of(&window, "MainWindow::page-field"), 48.0);
-    // The standalone buttons carry a single icon, so they match one segment.
-    assert_eq!(width_of(&window, "MainWindow::open-frame"), segment);
 }
 
 #[test]

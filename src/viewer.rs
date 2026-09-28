@@ -5,8 +5,12 @@
 //! side for a spread); the model holds rows, and only rendered pages carry an
 //! image. Zoom is applied through the window's shared `density` property so a
 //! zoom change writes one value instead of every row.
+//!
+//! Each open tab has a viewer of its own, but they all share one window, so only
+//! the active viewer writes to it. The others keep updating their own state and
+//! models, and [`Viewer::activate`] puts all of it back on screen.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
@@ -189,6 +193,9 @@ pub struct Viewer {
     model: Rc<VecModel<PageRow>>,
     thumb_model: Rc<VecModel<PageRow>>,
     window: Weak<MainWindow>,
+    /// Whether this viewer's tab is the one shown. Only then may it write to the
+    /// window, which every other tab's viewer shares.
+    active: Cell<bool>,
     sender: Sender<RenderRequest>,
     thumb_sender: Sender<i32>,
     control: RenderControl,
@@ -205,9 +212,7 @@ impl Viewer {
     ) -> Rc<Self> {
         let page_count = pages_pt.len();
         let model = Rc::new(VecModel::<PageRow>::default());
-        window.set_rows(ModelRc::from(model.clone()));
         let thumb_model = Rc::new(VecModel::<PageRow>::default());
-        window.set_thumb_rows(ModelRc::from(thumb_model.clone()));
 
         let viewer = Rc::new(Self {
             inner: RefCell::new(Inner {
@@ -233,19 +238,48 @@ impl Viewer {
             model,
             thumb_model,
             window: window.as_weak(),
+            active: Cell::new(true),
             sender,
             thumb_sender,
             control,
         });
 
-        window.set_page_count(page_count as i32);
-        window.set_spread_mode(spread_index(Spread::None));
-
         viewer.build_layout();
-        viewer.apply_density();
-        viewer.update_status();
-        viewer.update_current_page();
+        // The window may still show another tab's modes and scroll position, so
+        // publish every property rather than only the ones build_layout sets.
+        viewer.activate();
         viewer
+    }
+
+    /// Makes this the viewer the window shows and publishes its whole state:
+    /// models, modes, zoom, scroll position and page counter.
+    pub fn activate(&self) {
+        self.active.set(true);
+        if let Some(window) = self.window() {
+            let inner = self.inner.borrow();
+            window.set_rows(ModelRc::from(self.model.clone()));
+            window.set_thumb_rows(ModelRc::from(self.thumb_model.clone()));
+            window.set_page_count(inner.pages_pt.len() as i32);
+            window.set_spread_mode(spread_index(inner.spread));
+            window.set_continuous(inner.continuous);
+            window.set_row_height_pt(inner.ref_h_pt);
+            window.set_scroll_y(-inner.scroll_px);
+        }
+        self.apply_density();
+        self.refresh_current_row();
+        self.update_status();
+        self.update_current_page();
+    }
+
+    /// Stops this viewer from writing to the window because another tab took
+    /// it over. Renders still arrive and land in this viewer's own models.
+    pub fn deactivate(&self) {
+        self.active.set(false);
+    }
+
+    /// The window, while this viewer is the one it shows.
+    fn window(&self) -> Option<MainWindow> {
+        if self.active.get() { self.window.upgrade() } else { None }
     }
 
     /// Requests renders for every page in a row.
@@ -355,7 +389,7 @@ impl Viewer {
             return;
         }
         self.inner.borrow_mut().continuous = continuous;
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.window() {
             window.set_continuous(continuous);
         }
         if continuous {
@@ -368,7 +402,7 @@ impl Viewer {
                 inner.scroll_px = target;
                 target
             };
-            if let Some(window) = self.window.upgrade() {
+            if let Some(window) = self.window() {
                 window.set_scroll_y(-target_px);
             }
         } else {
@@ -399,7 +433,7 @@ impl Viewer {
             _ => Spread::None,
         };
         self.inner.borrow_mut().spread = spread;
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.window() {
             window.set_spread_mode(spread_index(spread));
         }
         self.build_layout();
@@ -630,7 +664,7 @@ impl Viewer {
             (inner.continuous, target)
         };
         if continuous {
-            if let Some(window) = self.window.upgrade() {
+            if let Some(window) = self.window() {
                 window.set_scroll_y(-target_px);
             }
             self.request_current_row();
@@ -732,7 +766,7 @@ impl Viewer {
             };
             (offset_x, offset_y, content_w, content_h)
         };
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.window() {
             window.set_paged_offset_x(offset_x);
             window.set_paged_offset_y(offset_y);
             window.set_paged_content_w(content_w);
@@ -776,7 +810,7 @@ impl Viewer {
             inner.scroll_px = target;
             target
         };
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.window() {
             window.set_scroll_y(-target);
         }
         self.update_current_page();
@@ -797,7 +831,7 @@ impl Viewer {
             (inner.continuous, target_px)
         };
         if continuous {
-            if let Some(window) = self.window.upgrade() {
+            if let Some(window) = self.window() {
                 window.set_scroll_y(-target_px);
             }
             self.request_current_row();
@@ -879,7 +913,7 @@ impl Viewer {
 
         let rows = self.build_model_rows();
         self.model.set_vec(rows);
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.window() {
             window.set_row_height_pt(self.inner.borrow().ref_h_pt);
         }
         self.refresh_current_row();
@@ -952,7 +986,7 @@ impl Viewer {
     /// Pushes the current row's data to the paged view.
     fn refresh_current_row(&self) {
         let index = self.inner.borrow().current_row;
-        if let (Some(window), Some(row)) = (self.window.upgrade(), self.model.row_data(index)) {
+        if let (Some(window), Some(row)) = (self.window(), self.model.row_data(index)) {
             window.set_current_row_content(row);
         }
     }
@@ -1014,7 +1048,7 @@ impl Viewer {
 
     fn apply_density(&self) {
         let density = BASE_DENSITY * self.inner.borrow().zoom;
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.window() {
             window.set_density(density);
         }
         // Zoom changes the paged content size; keep its offsets in range.
@@ -1052,7 +1086,7 @@ impl Viewer {
                 inner.specs.len().max(1),
             )
         };
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.window() {
             window.set_status(status.into());
         }
     }
@@ -1077,7 +1111,7 @@ impl Viewer {
                 inner.specs.get(inner.current_row).map_or(0, |spec| spec.left as i32 + 1)
             }
         };
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.window() {
             window.set_current_page(page);
         }
     }

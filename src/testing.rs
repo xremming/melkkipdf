@@ -1,18 +1,20 @@
 //! Headless test harness (enabled by the `testing` feature).
 //!
-//! Creates a [`MainWindow`] and [`Viewer`] without running the event loop, so
-//! integration tests can drive navigation, zoom, and layout logic and read the
-//! resulting window state directly. Viewer methods set their state immediately
+//! Creates a [`MainWindow`] and [`Viewer`] (or, for tabs, the whole app) without
+//! running the event loop, so integration tests can drive navigation, zoom,
+//! layout and tab logic and read the resulting window state directly. Viewer methods set their state immediately
 //! (the `scrolled` callback that a live ListView would fire is not needed), so
 //! assertions reflect the intended behavior.
 
+use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 
-use slint::Model;
+use slint::{Model, ModelRc};
 
 use crate::render::{RenderControl, RenderRequest};
-use crate::{MainWindow, Viewer};
+use crate::{App, MainWindow, Tab, Viewer};
 
 /// A window + viewer pair for tests, plus convenience accessors.
 pub struct Harness {
@@ -101,5 +103,64 @@ impl Harness {
             .filter_map(|index| model.row_data(index))
             .map(|row| (row.left.page, row.has_right.then_some(row.right.page)))
             .collect()
+    }
+}
+
+/// A window driven through the app's tab handling, for tests of opening,
+/// switching and closing tabs. Its documents have no file behind them: each is
+/// a set of uniform pages whose renders go nowhere.
+pub struct Tabs {
+    pub window: MainWindow,
+    app: Rc<App>,
+    // Kept so each document's render requests have a live receiver.
+    receivers: RefCell<Vec<(Receiver<RenderRequest>, Receiver<i32>)>>,
+}
+
+impl Tabs {
+    /// An empty window. Returns `None` if no windowing backend is available.
+    pub fn new() -> Option<Self> {
+        let window = MainWindow::new().ok()?;
+        let app = App::new(&window);
+        Some(Self { window, app, receivers: RefCell::new(Vec::new()) })
+    }
+
+    /// Opens a document of `count` pages named `title` in a new tab, as opening
+    /// a file does, and returns the id its renders are tagged with.
+    pub fn open(&self, title: &str, count: usize) -> i32 {
+        let (sender, requests) = mpsc::channel();
+        let (thumb_sender, thumb_requests) = mpsc::channel();
+        self.receivers.borrow_mut().push((requests, thumb_requests));
+        let viewer = Viewer::new(
+            &self.window,
+            vec![(600.0, 800.0); count],
+            1.0,
+            sender,
+            thumb_sender,
+            RenderControl::inert(),
+        );
+        let id = self.app.allocate_id();
+        self.app.add_tab(Tab {
+            id,
+            path: PathBuf::from(title),
+            title: title.into(),
+            viewer,
+            outline: ModelRc::default(),
+        });
+        id
+    }
+
+    /// The viewer of the tab at `index`.
+    pub fn viewer(&self, index: usize) -> Rc<Viewer> {
+        self.app.tabs.borrow()[index].viewer.clone()
+    }
+
+    /// The titles the tab strip shows, in order.
+    pub fn titles(&self) -> Vec<String> {
+        let model = self.window.get_tabs();
+        (0..model.row_count()).filter_map(|i| model.row_data(i)).map(Into::into).collect()
+    }
+
+    pub fn active_tab(&self) -> i32 {
+        self.window.get_active_tab()
     }
 }
