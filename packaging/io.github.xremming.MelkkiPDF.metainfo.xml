@@ -18,6 +18,7 @@
     </p>
     <p>Features:</p>
     <ul>
+      <li>Tabs for keeping several documents open</li>
       <li>Continuous and single-page reading modes</li>
       <li>Single, odd, and even page spreads</li>
       <li>Zoom, fit-width, and fit-page</li>
@@ -44,6 +45,14 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.2.0" date="2026-09-28">
+      <description>
+        <p>
+          Documents now open in tabs, so several can be kept open in one
+          window, and opening several files at once gives each its own tab.
+        </p>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-08-09">
       <description>
         <p>
