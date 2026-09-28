@@ -11,7 +11,7 @@ license = "AGPL-3.0-or-later"
 testing = []
 
 [dependencies]
-slint = "1.17"
+slint = "1.18"
 mupdf = "0.8"
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
@@ -28,7 +28,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 ] }
 
 [build-dependencies]
-slint-build = "1.17"
+slint-build = "1.18"
 
 # MuPDF is heavy to compile; optimize it even in debug builds so rendering
 # is usable while iterating on the viewer itself.
@@ -36,4 +36,4 @@ slint-build = "1.17"
 opt-level = 3
 
 [dev-dependencies]
-i-slint-backend-testing = "1.17"
+i-slint-backend-testing = "1.18"

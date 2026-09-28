@@ -755,9 +755,9 @@ export component MainWindow inherits Window {
                 if root.page-count > 0 && root.continuous: ListView {
                     // Two-way bound so Rust can both read the scroll offset (for the
                     // page counter) and set it (to jump to a page).
-                    viewport-y <=> root.scroll-y;
-                    changed viewport-y => {
-                        root.scrolled(-self.viewport-y / 1px);
+                    content-y <=> root.scroll-y;
+                    changed content-y => {
+                        root.scrolled(-self.content-y / 1px);
                     }
                     for entry[idx] in root.rows: PageRowView {
                         page-row: entry;
