@@ -104,6 +104,20 @@ fn cache_key(request: &RenderRequest) -> CacheKey {
     (request.page, (request.scale * 1000.0).round() as u32)
 }
 
+/// The largest width or height, in pixels, a page is rendered at. A rendered
+/// page becomes one GPU texture, and a texture over the GPU's size limit fails
+/// to upload, leaving the page blank. Practically every desktop GPU allows
+/// 8192, and it also caps one page at under 200 MB. A page zoomed past it is
+/// drawn from a smaller render and looks softer, but it shows.
+pub const MAX_RENDER_PX: f32 = 8192.0;
+
+/// `scale`, reduced where needed so a page of `width_pt`×`height_pt` points
+/// renders within [`MAX_RENDER_PX`] on both sides.
+pub fn capped_scale(width_pt: f32, height_pt: f32, scale: f32) -> f32 {
+    let largest = width_pt.max(height_pt) * scale;
+    if largest > MAX_RENDER_PX { scale * MAX_RENDER_PX / largest } else { scale }
+}
+
 /// The bytes a rendered page takes in memory.
 pub fn buffer_bytes(width: u32, height: u32) -> usize {
     width as usize * height as usize * 3
@@ -243,6 +257,8 @@ fn render_abortable(
 }
 
 /// Renders one page to a tightly-packed RGB buffer, honoring the abort cookie.
+/// The scale is capped by [`capped_scale`], and the viewer stretches the
+/// smaller image over the page.
 ///
 /// `alpha = false` (a white background) is emulated by clearing the pixmap to
 /// white before running the page, matching `to_pixmap(..., alpha=false)`.
@@ -253,8 +269,10 @@ fn render_page(
     cookie: &Cookie,
 ) -> Result<PageBuffer, Error> {
     let page = document.load_page(page)?;
+    let bounds = page.bounds()?;
+    let scale = capped_scale(bounds.width(), bounds.height(), scale);
     let ctm = Matrix::new_scale(scale, scale);
-    let bbox = page.bounds()?.transform(&ctm).round();
+    let bbox = bounds.transform(&ctm).round();
 
     let mut pixmap = Pixmap::new_with_rect(&Colorspace::device_rgb(), bbox, false)?;
     pixmap.clear_with(0xff)?; // white paper
@@ -395,7 +413,31 @@ impl<K: Eq + Hash + Clone, V: Clone> LruCache<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::LruCache;
+    use mupdf::pdf::PdfDocument;
+    use mupdf::{Cookie, Size};
+
+    use super::{LruCache, MAX_RENDER_PX, capped_scale, render_page};
+
+    #[test]
+    fn a_scale_within_the_limit_is_kept() {
+        assert_eq!(capped_scale(600.0, 800.0, 2.0), 2.0);
+        assert_eq!(capped_scale(600.0, 800.0, MAX_RENDER_PX / 800.0), MAX_RENDER_PX / 800.0);
+    }
+
+    #[test]
+    fn a_scale_past_the_limit_is_capped_by_the_longer_side() {
+        assert_eq!(capped_scale(600.0, 800.0, 20.0), MAX_RENDER_PX / 800.0);
+        assert_eq!(capped_scale(1600.0, 400.0, 20.0), MAX_RENDER_PX / 1600.0);
+    }
+
+    #[test]
+    fn a_page_zoomed_past_the_limit_renders_within_it() {
+        let mut document = PdfDocument::new();
+        document.new_page(Size::A4).unwrap();
+        let buffer = render_page(&document, 0, 30.0, &Cookie::new().unwrap()).unwrap();
+        assert_eq!(buffer.height(), MAX_RENDER_PX as u32);
+        assert!(buffer.width() < buffer.height());
+    }
 
     #[test]
     fn evicts_least_recently_used() {

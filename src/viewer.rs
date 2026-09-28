@@ -19,7 +19,7 @@ use std::sync::mpsc::Sender;
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, VecModel, Weak};
 
-use crate::render::{RenderControl, RenderRequest, WorkerMessage, buffer_bytes};
+use crate::render::{RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale};
 use crate::{MainWindow, PageEntry, PageRow};
 
 /// How pages are grouped into rows.
@@ -169,6 +169,7 @@ fn row_rendered(inner: &Inner, row: usize) -> bool {
 /// budget could not hold them next to the rows in view. Prefetching more
 /// would only render pages to evict them again.
 fn prefetch_rows(inner: &Inner, in_view: usize, scale: f32) -> usize {
+    let scale = capped_scale(inner.ref_w_pt, inner.ref_h_pt, scale);
     let row_bytes = buffer_bytes(
         (inner.ref_w_pt * scale).ceil() as u32,
         (inner.ref_h_pt * scale).ceil() as u32,
