@@ -11,14 +11,15 @@
 //! models, and [`Viewer::activate`] puts all of it back on screen.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::HashMap;
+use std::ops::RangeInclusive;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, VecModel, Weak};
 
-use crate::render::{RenderControl, RenderRequest};
+use crate::render::{RenderControl, RenderRequest, WorkerMessage, buffer_bytes};
 use crate::{MainWindow, PageEntry, PageRow};
 
 /// How pages are grouped into rows.
@@ -121,8 +122,10 @@ const SETTLE_TOLERANCE: f32 = 0.5;
 const ROW_SNAP: f32 = 1e-3;
 /// Rows to prefetch on either side of the visible range while idle.
 const PREFETCH_ROWS: usize = 4;
-/// Maximum number of rendered page images retained at once.
-const MAX_RETAINED: usize = 48;
+/// Bytes of rendered page images a viewer keeps at once. A budget in bytes
+/// rather than pages, because one page can take anywhere from kilobytes to a
+/// hundred megabytes depending on its size and the zoom.
+const RETAIN_BUDGET: usize = 256 * 1024 * 1024;
 
 /// The 0/1/2 index used by the toolbar's spread radios.
 fn spread_index(spread: Spread) -> i32 {
@@ -131,6 +134,83 @@ fn spread_index(spread: Spread) -> i32 {
         Spread::Odd => 1,
         Spread::Even => 2,
     }
+}
+
+/// Physical pixels per point that pages are rendered at.
+fn render_scale(inner: &Inner) -> f32 {
+    inner.zoom * BASE_DENSITY * inner.scale_factor
+}
+
+/// The rows on screen: in continuous mode those the viewport spans from the
+/// scroll offset, with one more below for a row sliding in, and in paged mode
+/// the one row shown.
+fn rows_in_view(inner: &Inner) -> RangeInclusive<usize> {
+    let last = inner.specs.len().saturating_sub(1);
+    let row_height = row_height_px(inner);
+    if !inner.continuous || row_height <= 0.0 {
+        let row = inner.current_row.min(last);
+        return row..=row;
+    }
+    let view_height = inner.view.map_or(0.0, |(_, h)| h);
+    let top = ((inner.scroll_px / row_height).floor().max(0.0) as usize).min(last);
+    let span = (view_height / row_height).ceil() as usize + 1;
+    top..=(top + span).min(last)
+}
+
+/// Whether every page of `row` has a rendered image.
+fn row_rendered(inner: &Inner, row: usize) -> bool {
+    let spec = &inner.specs[row];
+    inner.retained.contains_key(&spec.left)
+        && spec.right.is_none_or(|right| inner.retained.contains_key(&right))
+}
+
+/// How many rows to prefetch on each side of the `in_view` rows on screen:
+/// [`PREFETCH_ROWS`], or fewer once the zoom makes pages so large that the
+/// budget could not hold them next to the rows in view. Prefetching more
+/// would only render pages to evict them again.
+fn prefetch_rows(inner: &Inner, in_view: usize, scale: f32) -> usize {
+    let row_bytes = buffer_bytes(
+        (inner.ref_w_pt * scale).ceil() as u32,
+        (inner.ref_h_pt * scale).ceil() as u32,
+    )
+    .max(1);
+    let spare = (RETAIN_BUDGET / row_bytes).saturating_sub(in_view);
+    PREFETCH_ROWS.min(spare / 2)
+}
+
+/// The rendered pages to drop so the retained images fit [`RETAIN_BUDGET`],
+/// furthest from the view first. Pages in view are never chosen, even over
+/// the budget, since dropping what is on screen would only have it rendered
+/// again straight away.
+fn pages_over_budget(inner: &Inner) -> Vec<usize> {
+    let mut used: usize = inner.retained.values().sum();
+    if used <= RETAIN_BUDGET {
+        return Vec::new();
+    }
+    let view = rows_in_view(inner);
+    let mut candidates: Vec<(usize, usize)> = inner
+        .retained
+        .keys()
+        .filter_map(|&page| {
+            let row = inner.page_loc[page].0;
+            let distance = if row < *view.start() {
+                view.start() - row
+            } else {
+                row.saturating_sub(*view.end())
+            };
+            (distance > 0).then_some((distance, page))
+        })
+        .collect();
+    candidates.sort_unstable_by(|a, b| b.cmp(a));
+    let mut evicted = Vec::new();
+    for (_, page) in candidates {
+        if used <= RETAIN_BUDGET {
+            break;
+        }
+        used -= inner.retained[&page];
+        evicted.push(page);
+    }
+    evicted
 }
 
 /// The on-screen height of one row (all rows are uniform) in logical pixels.
@@ -234,7 +314,8 @@ struct Inner {
     scale_factor: f32,
     view: Option<(f32, f32)>,
     fit: FitMode,
-    retained: VecDeque<usize>,
+    /// The pages holding a rendered image, and the bytes each image takes.
+    retained: HashMap<usize, usize>,
     spread: Spread,
     continuous: bool,
     current_row: usize,
@@ -275,7 +356,7 @@ pub struct Viewer {
     /// Whether this viewer's tab is the one shown. Only then may it write to the
     /// window, which every other tab's viewer shares.
     active: Cell<bool>,
-    sender: Sender<RenderRequest>,
+    sender: Sender<WorkerMessage>,
     thumb_sender: Sender<i32>,
     control: RenderControl,
 }
@@ -285,7 +366,7 @@ impl Viewer {
         window: &MainWindow,
         pages_pt: Vec<(f32, f32)>,
         scale_factor: f32,
-        sender: Sender<RenderRequest>,
+        sender: Sender<WorkerMessage>,
         thumb_sender: Sender<i32>,
         control: RenderControl,
         settings: &ViewSettings,
@@ -301,7 +382,7 @@ impl Viewer {
                 scale_factor,
                 view: None,
                 fit: settings.fit,
-                retained: VecDeque::new(),
+                retained: HashMap::new(),
                 spread: settings.spread,
                 continuous: settings.continuous,
                 current_row: 0,
@@ -386,8 +467,31 @@ impl Viewer {
 
     /// Stops this viewer from writing to the window because another tab took
     /// it over. Renders still arrive and land in this viewer's own models.
+    ///
+    /// A tab in the background keeps only the pages it has on screen, which
+    /// are what shows first when it comes back, and its worker drops its
+    /// cache. Otherwise every open tab would hold a full budget of pixels
+    /// that nobody is looking at.
     pub fn deactivate(&self) {
         self.active.set(false);
+        let dropped: Vec<usize> = {
+            let mut inner = self.inner.borrow_mut();
+            let view = rows_in_view(&inner);
+            let dropped: Vec<usize> = inner
+                .retained
+                .keys()
+                .copied()
+                .filter(|&page| !view.contains(&inner.page_loc[page].0))
+                .collect();
+            for page in &dropped {
+                inner.retained.remove(page);
+            }
+            dropped
+        };
+        for page in dropped {
+            self.clear_page_image(page);
+        }
+        let _ = self.sender.send(WorkerMessage::ClearCache);
     }
 
     /// The window, while this viewer is the one it shows.
@@ -401,7 +505,7 @@ impl Viewer {
         let Some(spec) = inner.specs.get(row.max(0) as usize) else {
             return;
         };
-        let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
+        let scale = render_scale(&inner);
         self.send(spec.left, scale, false);
         if let Some(right) = spec.right {
             self.send(right, scale, false);
@@ -409,13 +513,14 @@ impl Viewer {
     }
 
     /// Installs a freshly rendered page image into its row, evicting the
-    /// furthest-back images if we are over the retention budget.
+    /// images furthest from the view if that takes the viewer over its budget.
     ///
     /// Borrows of `inner` are kept to short scopes: the model updates and the
     /// self-calls below (which borrow `inner` themselves) must not run while a
     /// borrow is held, or a re-entrant call panics.
     pub fn on_page_rendered(&self, page: i32, image: Image) {
         let index = page as usize;
+        let size = image.size();
         let (row_index, is_right, width_pt, height_pt, is_current_paged, evicted) = {
             let mut inner = self.inner.borrow_mut();
             let Some(&(row_index, is_right)) = inner.page_loc.get(index) else {
@@ -424,15 +529,10 @@ impl Viewer {
             let (width_pt, height_pt) = inner.pages_pt[index];
             let is_current_paged = !inner.continuous && row_index == inner.current_row;
 
-            inner.retained.push_back(index);
-            let mut evicted = Vec::new();
-            while inner.retained.len() > MAX_RETAINED {
-                if let Some(candidate) = inner.retained.pop_front()
-                    && candidate != index
-                    && !inner.retained.contains(&candidate)
-                {
-                    evicted.push(candidate);
-                }
+            inner.retained.insert(index, buffer_bytes(size.width, size.height));
+            let evicted = pages_over_budget(&inner);
+            for page in &evicted {
+                inner.retained.remove(page);
             }
             (row_index, is_right, width_pt, height_pt, is_current_paged, evicted)
         };
@@ -619,36 +719,22 @@ impl Viewer {
         self.advance_epoch();
         let (visible, prefetch, scale) = {
             let inner = self.inner.borrow();
-            if !inner.continuous || inner.specs.is_empty() {
+            if !inner.continuous || inner.specs.is_empty() || row_height_px(&inner) <= 0.0 {
                 return;
             }
-            let row_height = row_height_px(&inner);
-            let view_height = inner.view.map_or(0.0, |(_, h)| h);
-            if row_height <= 0.0 {
-                return;
-            }
-            let top = (inner.scroll_px / row_height).floor().max(0.0) as usize;
-            let span = (view_height / row_height).ceil() as usize + 1;
+            let view = rows_in_view(&inner);
+            let (top, visible_end) = (*view.start(), *view.end());
             let last = inner.specs.len() - 1;
-            let visible_end = (top + span).min(last);
-
-            let rendered: std::collections::HashSet<usize> =
-                inner.retained.iter().copied().collect();
-            let needs = |row: usize| {
-                if force {
-                    return true;
-                }
-                let spec = &inner.specs[row];
-                !rendered.contains(&spec.left)
-                    || spec.right.is_some_and(|right| !rendered.contains(&right))
-            };
+            let scale = render_scale(&inner);
+            let needs = |row: usize| force || !row_rendered(&inner, row);
 
             let visible: Vec<i32> =
                 (top..=visible_end).filter(|&r| needs(r)).map(|r| r as i32).collect();
 
             // Prefetch a few rows on either side of the visible range.
-            let below = (visible_end + PREFETCH_ROWS).min(last);
-            let above = top.saturating_sub(PREFETCH_ROWS);
+            let margin = prefetch_rows(&inner, visible_end - top + 1, scale);
+            let below = (visible_end + margin).min(last);
+            let above = top.saturating_sub(margin);
             let mut prefetch: Vec<i32> = Vec::new();
             for row in (visible_end + 1)..=below {
                 if needs(row) {
@@ -661,7 +747,6 @@ impl Viewer {
                 }
             }
 
-            let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
             (visible, prefetch, scale)
         };
         for row in visible {
@@ -1227,20 +1312,14 @@ impl Viewer {
             }
             let current = inner.current_row;
             let last = inner.specs.len() - 1;
-            let rendered: std::collections::HashSet<usize> =
-                inner.retained.iter().copied().collect();
-            let needs = |row: usize| {
-                let spec = &inner.specs[row];
-                !rendered.contains(&spec.left)
-                    || spec.right.is_some_and(|right| !rendered.contains(&right))
-            };
-            let start = current.saturating_sub(PREFETCH_ROWS);
-            let end = (current + PREFETCH_ROWS).min(last);
+            let scale = render_scale(&inner);
+            let margin = prefetch_rows(&inner, 1, scale);
+            let start = current.saturating_sub(margin);
+            let end = (current + margin).min(last);
             let neighbors: Vec<i32> = (start..=end)
-                .filter(|&row| row != current && needs(row))
+                .filter(|&row| row != current && !row_rendered(&inner, row))
                 .map(|row| row as i32)
                 .collect();
-            let scale = inner.zoom * BASE_DENSITY * inner.scale_factor;
             (current as i32, neighbors, scale)
         };
         self.send_row(current, scale, false);
@@ -1257,7 +1336,8 @@ impl Viewer {
 
     fn send(&self, page: usize, scale: f32, prefetch: bool) {
         let generation = self.inner.borrow().generation;
-        let _ = self.sender.send(RenderRequest { page: page as i32, scale, generation, prefetch });
+        let request = RenderRequest { page: page as i32, scale, generation, prefetch };
+        let _ = self.sender.send(WorkerMessage::Render(request));
     }
 
     /// Marks a new view: bumped before issuing a fresh set of render requests so
@@ -1368,6 +1448,12 @@ mod tests {
         MainWindow::new().expect("failed to create the window")
     }
 
+    /// An image as large as a page at a high zoom. The pixels are shared, so
+    /// handing it out for several pages costs its memory only once.
+    fn large_image() -> slint::Image {
+        slint::Image::from_rgb8(slint::SharedPixelBuffer::new(5000, 5000))
+    }
+
     /// Regression: a page arriving in paged mode used to re-enter a held borrow
     /// of `inner` via `refresh_current_row` and panic. Drive that exact path.
     #[test]
@@ -1388,11 +1474,12 @@ mod tests {
         // Switch to paged mode, then deliver renders — including enough to force
         // the eviction path, which also calls back into the viewer.
         viewer.toggle_continuous();
+        let image = large_image();
         for page in 0..5 {
-            viewer.on_page_rendered(page, slint::Image::default());
+            viewer.on_page_rendered(page, image.clone());
         }
         viewer.nav_page(1);
-        viewer.on_page_rendered(2, slint::Image::default());
+        viewer.on_page_rendered(2, image);
     }
 
     /// go_to_page parses, clamps, and reports the resulting page.

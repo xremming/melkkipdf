@@ -119,3 +119,77 @@ fn scrolling_does_not_rerequest_already_rendered_pages() {
         "already-rendered visible pages should not be re-requested, got {second:?}"
     );
 }
+
+/// A rendered page image of `width`×`height` pixels. The pixels are shared, so
+/// handing one image out for several pages costs its memory only once.
+fn image(width: u32, height: u32) -> slint::Image {
+    slint::Image::from_rgb8(slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(width, height))
+}
+
+#[test]
+fn large_pages_are_evicted_by_size_keeping_those_in_view() {
+    let h = Harness::uniform(100, 600.0, 800.0);
+    h.viewport(1000.0, 900.0);
+
+    // Each image is 75 MB, so the budget holds only a few. The rows in view
+    // (the first page, the one below it and the one sliding in) stay; every
+    // page past them is dropped again, however recently it arrived.
+    let page = image(5000, 5000);
+    for index in 0..10 {
+        h.viewer.on_page_rendered(index, page.clone());
+    }
+    for index in 0..3 {
+        assert!(h.page_rendered(index), "page {} in view was evicted", index + 1);
+    }
+    for index in 3..10 {
+        assert!(!h.page_rendered(index), "page {} was kept over the budget", index + 1);
+    }
+}
+
+#[test]
+fn small_pages_are_all_kept() {
+    let h = Harness::uniform(100, 600.0, 800.0);
+    h.viewport(1000.0, 900.0);
+    let page = image(800, 1000);
+    for index in 0..60 {
+        h.viewer.on_page_rendered(index, page.clone());
+    }
+    assert!((0..60).all(|index| h.page_rendered(index)));
+}
+
+#[test]
+fn high_zoom_prefetches_only_what_the_budget_holds() {
+    let h = Harness::uniform(100, 600.0, 800.0);
+    h.viewport(1000.0, 900.0);
+    for _ in 0..10 {
+        h.viewer.zoom_in();
+    }
+    h.viewer.go_to_page("50");
+    let offset = -h.scroll_y();
+    let _ = h.take_render_requests_full();
+    h.viewer.scrolled(offset);
+
+    let requests = h.take_render_requests_full();
+    assert!(requests.iter().any(|(_, _, prefetch)| !prefetch), "nothing visible was requested");
+    let prefetched: Vec<i32> =
+        requests.iter().filter(|(_, _, prefetch)| *prefetch).map(|(page, ..)| *page).collect();
+    assert!(prefetched.is_empty(), "prefetched {prefetched:?} past the budget");
+}
+
+#[test]
+fn a_background_tab_keeps_only_the_pages_in_view() {
+    let h = Harness::uniform(20, 600.0, 800.0);
+    h.viewport(1000.0, 900.0);
+    let page = image(800, 1000);
+    for index in 0..8 {
+        h.viewer.on_page_rendered(index, page.clone());
+    }
+
+    h.viewer.deactivate();
+    for index in 0..3 {
+        assert!(h.page_rendered(index), "page {} in view was dropped", index + 1);
+    }
+    for index in 3..8 {
+        assert!(!h.page_rendered(index), "page {} was kept in the background", index + 1);
+    }
+}

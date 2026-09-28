@@ -13,7 +13,7 @@ use std::sync::mpsc::{self, Receiver};
 
 use slint::{Model, ModelRc};
 
-use crate::render::{RenderControl, RenderRequest};
+use crate::render::{RenderControl, WorkerMessage};
 use crate::settings::Store;
 use crate::{App, FileDrag, MainWindow, ViewSettings, Viewer, Workers};
 
@@ -23,7 +23,7 @@ pub struct Harness {
     pub viewer: Rc<Viewer>,
     // Kept so render requests the viewer sends have a live receiver; tests can
     // drain it to see which pages were requested and in what order.
-    requests: Receiver<RenderRequest>,
+    requests: Receiver<WorkerMessage>,
     // Kept alive so thumbnail requests have a receiver.
     _thumb_requests: Receiver<i32>,
 }
@@ -79,10 +79,22 @@ impl Harness {
     /// and whether it is a low-priority prefetch.
     pub fn take_render_requests_full(&self) -> Vec<(i32, u64, bool)> {
         let mut requests = Vec::new();
-        while let Ok(request) = self.requests.try_recv() {
-            requests.push((request.page, request.generation, request.prefetch));
+        while let Ok(message) = self.requests.try_recv() {
+            if let WorkerMessage::Render(request) = message {
+                requests.push((request.page, request.generation, request.prefetch));
+            }
         }
         requests
+    }
+
+    /// Whether the viewer shows a rendered image for the 0-based `page`.
+    pub fn page_rendered(&self, page: usize) -> bool {
+        let model = self.window.get_rows();
+        (0..model.row_count()).filter_map(|index| model.row_data(index)).any(|row| {
+            [row.left, row.right]
+                .iter()
+                .any(|entry| entry.page == page as i32 && entry.image.size().width > 0)
+        })
     }
 
     /// Sets the viewport size, as a window resize would. Returns `&self` so it
@@ -175,7 +187,7 @@ pub struct Tabs {
     pub window: MainWindow,
     app: Rc<App>,
     // Kept so each document's render requests have a live receiver.
-    receivers: RefCell<Vec<(Receiver<RenderRequest>, Receiver<i32>)>>,
+    receivers: RefCell<Vec<(Receiver<WorkerMessage>, Receiver<i32>)>>,
 }
 
 impl Default for Tabs {

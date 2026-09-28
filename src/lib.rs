@@ -21,7 +21,7 @@ use mupdf::Document;
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
-use render::{RenderControl, RenderRequest};
+use render::{RenderControl, WorkerMessage};
 use settings::{Session, Store};
 
 pub use viewer::{FitMode, Spread, ViewSettings, Viewer};
@@ -88,7 +88,7 @@ impl FileDrag {
 
 /// The channels to one document's render workers.
 struct Workers {
-    pages: Sender<RenderRequest>,
+    pages: Sender<WorkerMessage>,
     thumbnails: Sender<i32>,
     control: RenderControl,
 }

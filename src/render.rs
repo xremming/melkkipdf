@@ -73,9 +73,20 @@ pub struct RenderRequest {
     pub prefetch: bool,
 }
 
-/// Number of rendered pages kept in memory. Sized to comfortably cover a page
-/// plus the neighbors we will prerender in a later step.
-const CACHE_CAPACITY: usize = 48;
+/// A message to a document's render worker.
+pub enum WorkerMessage {
+    /// Render a page and deliver it to the viewer.
+    Render(RenderRequest),
+    /// Drop every cached page. Sent when the document's tab goes to the
+    /// background, so tabs nobody is looking at do not hold on to pixels.
+    ClearCache,
+}
+
+/// Bytes of rendered pages the worker keeps, so a page scrolled or zoomed
+/// back to arrives without rendering it again. A budget in bytes rather than
+/// pages, because one page can take anywhere from kilobytes to a hundred
+/// megabytes depending on its size and the zoom.
+const CACHE_BUDGET: usize = 256 * 1024 * 1024;
 
 /// A page rendered to a shared RGB buffer. Cloning is a cheap refcount bump, so
 /// the cache and the UI can hold the same pixels without copying.
@@ -93,6 +104,11 @@ fn cache_key(request: &RenderRequest) -> CacheKey {
     (request.page, (request.scale * 1000.0).round() as u32)
 }
 
+/// The bytes a rendered page takes in memory.
+pub fn buffer_bytes(width: u32, height: u32) -> usize {
+    width as usize * height as usize * 3
+}
+
 /// Spawns the render worker and returns a channel for sending it requests.
 ///
 /// The worker opens its own `Document` (the UI thread reads page sizes from a
@@ -104,8 +120,8 @@ pub fn spawn(
     path: String,
     doc: i32,
     window: Weak<MainWindow>,
-) -> (Sender<RenderRequest>, RenderControl) {
-    let (sender, receiver) = mpsc::channel::<RenderRequest>();
+) -> (Sender<WorkerMessage>, RenderControl) {
+    let (sender, receiver) = mpsc::channel::<WorkerMessage>();
     let abort = Arc::new(Mutex::new(AbortSlot::default()));
     let control = RenderControl { abort: abort.clone() };
 
@@ -118,7 +134,7 @@ pub fn spawn(
             }
         };
 
-        let mut cache: LruCache<CacheKey, PageBuffer> = LruCache::new(CACHE_CAPACITY);
+        let mut cache: LruCache<CacheKey, PageBuffer> = LruCache::new(CACHE_BUDGET);
 
         // Requests waiting to be rendered. We render one page at a time and
         // re-check the channel after each, so a fresh scroll preempts a stale
@@ -128,12 +144,12 @@ pub fn spawn(
         loop {
             if pending.is_empty() {
                 match receiver.recv() {
-                    Ok(request) => pending.push(request),
+                    Ok(message) => accept(message, &mut pending, &mut cache),
                     Err(_) => break, // channel closed: shut down
                 }
             }
-            while let Ok(more) = receiver.try_recv() {
-                pending.push(more);
+            while let Ok(message) = receiver.try_recv() {
+                accept(message, &mut pending, &mut cache);
             }
 
             // Keep only the newest view; drop everything older (off screen).
@@ -163,7 +179,8 @@ pub fn spawn(
             }
             match outcome {
                 Ok(buffer) => {
-                    cache.put(key, buffer.clone());
+                    let bytes = buffer_bytes(buffer.width(), buffer.height());
+                    cache.put(key, buffer.clone(), bytes);
                     push_page(&window, doc, request.page, buffer);
                 }
                 Err(err) => {
@@ -175,6 +192,19 @@ pub fn spawn(
     });
 
     (sender, control)
+}
+
+/// Takes one message off the worker's channel: queues a render, or empties
+/// the cache.
+fn accept(
+    message: WorkerMessage,
+    pending: &mut Vec<RenderRequest>,
+    cache: &mut LruCache<CacheKey, PageBuffer>,
+) {
+    match message {
+        WorkerMessage::Render(request) => pending.push(request),
+        WorkerMessage::ClearCache => cache.clear(),
+    }
 }
 
 /// Hands a finished page to the UI thread.
@@ -303,17 +333,26 @@ fn push_status(window: &Weak<MainWindow>, status: String) {
     });
 }
 
-/// A small least-recently-used cache. Capacity is tiny, so a linear scan to find
-/// the eviction victim is cheaper than the bookkeeping a heavier structure needs.
+/// A least-recently-used cache holding values up to a total cost. The cache
+/// holds tens of entries at most once pages are large enough for the budget
+/// to matter, so a linear scan to find the eviction victim is cheaper than the
+/// bookkeeping a heavier structure needs.
 struct LruCache<K, V> {
-    capacity: usize,
+    budget: usize,
+    used: usize,
     tick: u64,
-    entries: HashMap<K, (V, u64)>,
+    entries: HashMap<K, Entry<V>>,
+}
+
+struct Entry<V> {
+    value: V,
+    cost: usize,
+    tick: u64,
 }
 
 impl<K: Eq + Hash + Clone, V: Clone> LruCache<K, V> {
-    fn new(capacity: usize) -> Self {
-        Self { capacity, tick: 0, entries: HashMap::new() }
+    fn new(budget: usize) -> Self {
+        Self { budget, used: 0, tick: 0, entries: HashMap::new() }
     }
 
     /// Returns a clone of the cached value, refreshing its recency.
@@ -321,20 +360,36 @@ impl<K: Eq + Hash + Clone, V: Clone> LruCache<K, V> {
         self.tick += 1;
         let tick = self.tick;
         let entry = self.entries.get_mut(key)?;
-        entry.1 = tick;
-        Some(entry.0.clone())
+        entry.tick = tick;
+        Some(entry.value.clone())
     }
 
-    fn put(&mut self, key: K, value: V) {
+    /// Stores `value` at `cost`, then evicts the least recently used entries
+    /// until the cache is within its budget again. The new entry itself is
+    /// always kept, even when it alone is over the budget, since the page it
+    /// holds is the one the viewer wants now.
+    fn put(&mut self, key: K, value: V, cost: usize) {
         self.tick += 1;
-        let tick = self.tick;
-        self.entries.insert(key, (value, tick));
-        if self.entries.len() > self.capacity
-            && let Some(oldest) =
-                self.entries.iter().min_by_key(|(_, (_, tick))| *tick).map(|(key, _)| key.clone())
-        {
-            self.entries.remove(&oldest);
+        let entry = Entry { value, cost, tick: self.tick };
+        if let Some(previous) = self.entries.insert(key, entry) {
+            self.used -= previous.cost;
         }
+        self.used += cost;
+        while self.used > self.budget && self.entries.len() > 1 {
+            let Some(oldest) =
+                self.entries.iter().min_by_key(|(_, entry)| entry.tick).map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(evicted) = self.entries.remove(&oldest) {
+                self.used -= evicted.cost;
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.used = 0;
     }
 }
 
@@ -345,14 +400,14 @@ mod tests {
     #[test]
     fn evicts_least_recently_used() {
         let mut cache: LruCache<i32, i32> = LruCache::new(2);
-        cache.put(1, 10);
-        cache.put(2, 20);
+        cache.put(1, 10, 1);
+        cache.put(2, 20, 1);
 
         // Touch key 1 so key 2 becomes the least-recently-used entry.
         assert_eq!(cache.get(&1), Some(10));
 
         // Inserting a third entry must evict key 2, not the just-touched key 1.
-        cache.put(3, 30);
+        cache.put(3, 30, 1);
         assert_eq!(cache.get(&2), None);
         assert_eq!(cache.get(&1), Some(10));
         assert_eq!(cache.get(&3), Some(30));
@@ -361,9 +416,46 @@ mod tests {
     #[test]
     fn overwrites_existing_key_without_growing() {
         let mut cache: LruCache<i32, i32> = LruCache::new(2);
-        cache.put(1, 10);
-        cache.put(1, 11);
+        cache.put(1, 10, 1);
+        cache.put(1, 11, 1);
         assert_eq!(cache.get(&1), Some(11));
         assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.used, 1);
+    }
+
+    #[test]
+    fn evicts_by_cost_rather_than_count() {
+        let mut cache: LruCache<i32, i32> = LruCache::new(100);
+        for key in 0..10 {
+            cache.put(key, key, 10);
+        }
+        assert_eq!(cache.entries.len(), 10);
+
+        // One large entry pushes out as many small ones as it needs room for.
+        cache.put(10, 10, 45);
+        assert_eq!(cache.used, 95);
+        assert_eq!(cache.entries.len(), 6);
+        assert_eq!(cache.get(&4), None);
+        assert_eq!(cache.get(&5), Some(5));
+    }
+
+    #[test]
+    fn keeps_a_new_entry_larger_than_the_budget() {
+        let mut cache: LruCache<i32, i32> = LruCache::new(100);
+        cache.put(1, 1, 10);
+        cache.put(2, 2, 500);
+        assert_eq!(cache.get(&1), None);
+        assert_eq!(cache.get(&2), Some(2));
+    }
+
+    #[test]
+    fn clearing_frees_the_budget() {
+        let mut cache: LruCache<i32, i32> = LruCache::new(100);
+        cache.put(1, 1, 60);
+        cache.clear();
+        assert_eq!(cache.get(&1), None);
+        cache.put(2, 2, 60);
+        cache.put(3, 3, 40);
+        assert_eq!(cache.get(&2), Some(2));
     }
 }
