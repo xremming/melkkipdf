@@ -19,6 +19,7 @@
     <p>Features:</p>
     <ul>
       <li>Tabs for keeping several documents open</li>
+      <li>Reopens your tabs and each document's view where you left off</li>
       <li>Continuous and single-page reading modes</li>
       <li>Single, odd, and even page spreads</li>
       <li>Zoom, fit-width, and fit-page</li>
@@ -45,6 +46,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.0" date="2026-09-28">
+      <description>
+        <p>
+          Each document now reopens in the view it was left in, and the tabs
+          open on exit come back on the next start. Changing the spread, zoom
+          or reading mode no longer loses the page being read. On X11, PDFs
+          dropped onto the window open in new tabs.
+        </p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-09-28">
       <description>
         <p>

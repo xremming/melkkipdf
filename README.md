@@ -34,6 +34,7 @@ To build the flatpak instead, see [packaging/README.md](packaging/README.md).
 ## Features
 
 - Tabs for keeping several documents open
+- Reopens your tabs and each document's view where you left off
 - Continuous and single-page reading modes
 - Single, odd, and even page spreads
 - Zoom, fit-width, and fit-page
