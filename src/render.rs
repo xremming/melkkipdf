@@ -7,9 +7,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::mem::ManuallyDrop;
 use std::path::Path;
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use mupdf::{Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap};
@@ -19,7 +20,7 @@ use crate::MainWindow;
 
 /// Points to the cookie of the render currently in progress, so the UI thread
 /// can abort it. The address is valid only while `active`, which the worker sets
-/// and clears under the mutex around each render.
+/// and clears under the mutex around each render, through a [`Registration`].
 #[derive(Default)]
 struct AbortSlot {
     cookie: usize,
@@ -41,6 +42,13 @@ pub struct RenderControl {
     abort: Arc<Mutex<AbortSlot>>,
 }
 
+/// Locks the slot. It holds only plain values that every writer leaves
+/// consistent, so a panic elsewhere while it was held does not make it
+/// unusable, and the UI thread should not panic over one.
+fn lock(abort: &Mutex<AbortSlot>) -> MutexGuard<'_, AbortSlot> {
+    abort.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 impl RenderControl {
     /// Aborts an in-progress render from an epoch older than `epoch`, unless
     /// the new view still wants its page at its scale, as one of the `wanted`
@@ -51,17 +59,23 @@ impl RenderControl {
     /// it requested again and started over, so on a slow scroll a heavy page
     /// would never finish.
     pub fn advance(&self, epoch: u64, wanted: &[(i32, f32)]) {
-        let mut slot = self.abort.lock().unwrap();
+        let mut slot = lock(&self.abort);
         let still_wanted = wanted
             .iter()
             .any(|&(page, scale)| page == slot.page && scale_key(scale) == scale_key(slot.scale));
         if slot.active && slot.epoch < epoch && !still_wanted {
             // SAFETY: while `active`, the worker keeps the cookie alive and will
             // not drop it until it re-takes this lock, so the address is valid.
-            // Setting the abort flag while the worker reads it mid-render is the
-            // unsynchronized signaling MuPDF's cookie is explicitly designed for.
+            // The worker holds the cookie borrowed for the render, so it must
+            // not be borrowed mutably here. A `Cookie` is only a pointer to
+            // MuPDF's C struct, so aborting through a bitwise copy of it
+            // writes the same flag without touching the worker's value, and
+            // `ManuallyDrop` keeps the copy from freeing the struct. Setting
+            // the flag while the render reads it is the unsynchronized
+            // signaling MuPDF's cookie is designed for.
             unsafe {
-                (*(slot.cookie as *mut Cookie)).abort();
+                let mut handle = ManuallyDrop::new(std::ptr::read(slot.cookie as *const Cookie));
+                handle.abort();
             }
             slot.aborted = true;
         }
@@ -269,33 +283,57 @@ fn push_page(window: &Weak<MainWindow>, doc: i32, page: i32, buffer: PageBuffer)
     });
 }
 
-/// Renders a page under an abort cookie, registering the cookie so the UI thread
-/// can cancel the render if the page scrolls off screen.
-fn render_abortable(
-    document: &Document,
-    request: &RenderRequest,
-    abort: &Arc<Mutex<AbortSlot>>,
-) -> (Result<PageBuffer, Error>, bool) {
-    // A fresh cookie starts un-aborted (mupdf-rs exposes no way to reset one).
-    let mut cookie = match Cookie::new() {
-        Ok(cookie) => cookie,
-        Err(err) => return (Err(err), false),
-    };
-    {
-        let mut slot = abort.lock().unwrap();
-        slot.cookie = &mut cookie as *mut Cookie as usize;
+/// A cookie published in the slot for the length of one render. Dropping it
+/// withdraws the cookie, so even a render that panics cannot leave the UI
+/// thread holding the address of a cookie that no longer exists.
+struct Registration<'a> {
+    abort: &'a Mutex<AbortSlot>,
+}
+
+impl<'a> Registration<'a> {
+    /// Publishes `cookie` as the one to abort for `request`. The registration
+    /// must be dropped before the cookie is.
+    fn new(abort: &'a Mutex<AbortSlot>, cookie: &Cookie, request: &RenderRequest) -> Self {
+        let mut slot = lock(abort);
+        slot.cookie = cookie as *const Cookie as usize;
         slot.epoch = request.generation;
         slot.page = request.page;
         slot.scale = request.scale;
         slot.active = true;
         slot.aborted = false;
+        Self { abort }
     }
-    let result = render_page(document, request.page, request.scale, &cookie);
-    let aborted = {
-        let mut slot = abort.lock().unwrap();
+
+    /// Withdraws the cookie and says whether the render was aborted, under
+    /// one lock, so no abort can land between the two.
+    fn finish(self) -> bool {
+        let mut slot = lock(self.abort);
         slot.active = false;
         slot.aborted
+    }
+}
+
+impl Drop for Registration<'_> {
+    fn drop(&mut self) {
+        lock(self.abort).active = false;
+    }
+}
+
+/// Renders a page under an abort cookie, registering the cookie so the UI thread
+/// can cancel the render if the page scrolls off screen.
+fn render_abortable(
+    document: &Document,
+    request: &RenderRequest,
+    abort: &Mutex<AbortSlot>,
+) -> (Result<PageBuffer, Error>, bool) {
+    // A fresh cookie starts un-aborted (mupdf-rs exposes no way to reset one).
+    let cookie = match Cookie::new() {
+        Ok(cookie) => cookie,
+        Err(err) => return (Err(err), false),
     };
+    let registration = Registration::new(abort, &cookie, request);
+    let result = render_page(document, request.page, request.scale, &cookie);
+    let aborted = registration.finish();
     (result, aborted)
 }
 
@@ -475,7 +513,29 @@ mod tests {
     use mupdf::pdf::PdfDocument;
     use mupdf::{Cookie, Size};
 
-    use super::{AbortSlot, LruCache, MAX_RENDER_PX, RenderControl, capped_scale, render_page};
+    use super::{
+        AbortSlot, LruCache, MAX_RENDER_PX, Registration, RenderControl, RenderRequest,
+        capped_scale, render_page,
+    };
+
+    #[test]
+    fn a_registration_withdraws_its_cookie_even_on_a_panic() {
+        let control = RenderControl::inert();
+        let request = RenderRequest { page: 2, scale: 1.0, generation: 1, prefetch: false };
+        let result = std::panic::catch_unwind(|| {
+            let cookie = Cookie::new().unwrap();
+            let _registration = Registration::new(&control.abort, &cookie, &request);
+            assert!(control.abort.lock().unwrap().active);
+            panic!("the render failed");
+        });
+        assert!(result.is_err());
+        // The slot may be poisoned by the panic, but must say nothing is live,
+        // so advancing never touches the dropped cookie.
+        let active = control.abort.lock().unwrap_or_else(|err| err.into_inner()).active;
+        assert!(!active);
+        control.advance(2, &[]);
+        assert!(!control.abort.lock().unwrap_or_else(|err| err.into_inner()).aborted);
+    }
 
     /// A control whose slot says `page` is being rendered at `scale` for
     /// epoch 1, under the given cookie.
