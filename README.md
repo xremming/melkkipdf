@@ -31,6 +31,16 @@ cargo build --release
 
 To build the flatpak instead, see [packaging/README.md](packaging/README.md).
 
+It also builds and runs on macOS. `packaging/build-macos-app.sh` wraps the
+release binary in an app bundle that Finder can open PDFs with, signed only for
+the machine that built it.
+
+The tests drive the window headlessly, so they need no display:
+
+```sh
+cargo test --features testing
+```
+
 ## Features
 
 - Tabs for keeping several documents open
@@ -40,6 +50,31 @@ To build the flatpak instead, see [packaging/README.md](packaging/README.md).
 - Zoom, fit-width, and fit-page
 - Bookmark sidebar with page thumbnails
 - Keyboard-driven navigation
+
+## Keyboard shortcuts
+
+Ctrl is ⌘ on macOS.
+
+| Keys                                   | Action                                        |
+| -------------------------------------- | --------------------------------------------- |
+| Up, Down                               | Scroll, or turn the page at its edge in paged mode |
+| Left, Right, Page Up, Page Down, Space | Previous or next page                         |
+| Home, End                              | First or last page                            |
+| Ctrl+Plus, Ctrl+Minus, Ctrl+0          | Zoom in, zoom out, 100%                       |
+| F, P                                   | Fit the page width, fit the whole page        |
+| C                                      | Switch between continuous and paged           |
+| 1, 2, 3                                | Single pages, odd spreads, even spreads       |
+| Ctrl+Tab, Ctrl+Shift+Tab               | Next or previous tab                          |
+| Ctrl+W                                 | Close the tab                                 |
+
+## Where it keeps its state
+
+Each document's view and the tabs to reopen are kept in one file,
+`documents.json`:
+
+- Linux: `~/.local/state/melkkipdf/`, or `$XDG_STATE_HOME/melkkipdf/`.
+- Flatpak: `~/.var/app/io.github.xremming.MelkkiPDF/.local/state/melkkipdf/`.
+- macOS: `~/Library/Application Support/io.github.xremming.MelkkiPDF/`.
 
 ## License
 

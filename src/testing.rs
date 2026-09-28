@@ -2,9 +2,10 @@
 //!
 //! Creates a [`MainWindow`] and [`Viewer`] (or, for tabs, the whole app) without
 //! running the event loop, so integration tests can drive navigation, zoom,
-//! layout and tab logic and read the resulting window state directly. Viewer methods set their state immediately
-//! (the `scrolled` callback that a live ListView would fire is not needed), so
-//! assertions reflect the intended behavior.
+//! layout and tab logic and read the resulting window state directly. Viewer
+//! methods set their state immediately (the `scrolled` callback that a live
+//! ListView would fire is not needed), so assertions reflect the intended
+//! behavior.
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};

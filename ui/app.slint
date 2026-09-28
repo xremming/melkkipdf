@@ -788,62 +788,63 @@ export component MainWindow inherits Window {
 
                 content := Rectangle {
                     if root.page-count == 0: VerticalLayout {
-                    alignment: center;
-                    Text {
-                        text: root.status;
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
-                    }
-                }
-
-                if root.page-count > 0 && root.continuous: ListView {
-                    // Two-way bound so Rust can both read the scroll offset (for the
-                    // page counter) and set it (to jump to a page).
-                    content-y <=> root.scroll-y;
-                    changed content-y => {
-                        root.scrolled(-self.content-y / 1px);
-                    }
-                    scrolled => {
-                        root.user-scrolled();
-                    }
-                    for entry[idx] in root.rows: PageRowView {
-                        page-row: entry;
-                        density: root.density;
-                        row-height-pt: root.row-height-pt;
-                        // Request pixels when this row scrolls into view. Zoom
-                        // re-renders are driven from Rust (rerender_loaded).
-                        init => {
-                            root.request-render-row(idx);
+                        alignment: center;
+                        Text {
+                            text: root.status;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
                         }
                     }
-                }
 
-                // Paged view: a Rust-controlled scroll surface. The wheel scrolls
-                // within the page and pages at the edges; content is positioned
-                // and sized by Rust so centering, scrolling, and shift-to-scroll-
-                // horizontally are all deterministic.
-                if root.page-count > 0 && !root.continuous: TouchArea {
-                    scroll-event(event) => {
-                        root.paged-scroll(event.delta-x / 1px, event.delta-y / 1px, event.modifiers.shift);
-                        return accept;
+                    if root.page-count > 0 && root.continuous: ListView {
+                        // Two-way bound so Rust can both read the scroll offset (for the
+                        // page counter) and set it (to jump to a page).
+                        content-y <=> root.scroll-y;
+                        changed content-y => {
+                            root.scrolled(-self.content-y / 1px);
+                        }
+                        scrolled => {
+                            root.user-scrolled();
+                        }
+                        for entry[idx] in root.rows: PageRowView {
+                            page-row: entry;
+                            density: root.density;
+                            row-height-pt: root.row-height-pt;
+                            // Request pixels when this row scrolls into view. Zoom
+                            // re-renders are driven from Rust (rerender_view).
+                            init => {
+                                root.request-render-row(idx);
+                            }
+                        }
                     }
-                    Rectangle {
-                        clip: true;
-                        Rectangle {
-                            x: root.paged-offset-x;
-                            y: root.paged-offset-y;
-                            width: root.paged-content-w;
-                            height: root.paged-content-h;
 
-                            HorizontalLayout {
-                                spacing: PageLayout.spread-spacing;
-                                PageImageView {
-                                    entry: root.current-row-content.left;
-                                    density: root.density;
-                                }
-                                if root.current-row-content.has-right: PageImageView {
-                                    entry: root.current-row-content.right;
-                                    density: root.density;
+                    // Paged view: a Rust-controlled scroll surface. The wheel scrolls
+                    // within the page and pages at the edges; content is positioned
+                    // and sized by Rust so centering, scrolling, and shift-to-scroll-
+                    // horizontally are all deterministic.
+                    if root.page-count > 0 && !root.continuous: TouchArea {
+                        scroll-event(event) => {
+                            root.paged-scroll(event.delta-x / 1px, event.delta-y / 1px, event.modifiers.shift);
+                            return accept;
+                        }
+                        Rectangle {
+                            clip: true;
+                            Rectangle {
+                                x: root.paged-offset-x;
+                                y: root.paged-offset-y;
+                                width: root.paged-content-w;
+                                height: root.paged-content-h;
+
+                                HorizontalLayout {
+                                    spacing: PageLayout.spread-spacing;
+                                    PageImageView {
+                                        entry: root.current-row-content.left;
+                                        density: root.density;
+                                    }
+                                    if root.current-row-content.has-right: PageImageView {
+                                        entry: root.current-row-content.right;
+                                        density: root.density;
+                                    }
                                 }
                             }
                         }
@@ -852,7 +853,6 @@ export component MainWindow inherits Window {
             }
         }
     }
-}
 
     // Problems are reported over the bottom of the window, where they stay in
     // view whatever the document shows. A click dismisses one early.

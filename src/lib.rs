@@ -1,4 +1,4 @@
-//! melkkipdf — a fast, minimal PDF viewer for Linux.
+//! melkkipdf — a fast, minimal PDF viewer.
 //!
 //! The binary is a thin wrapper around [`run`]. The viewer state lives in
 //! [`Viewer`]; the `testing` feature exposes a headless [`testing::Harness`] that

@@ -373,15 +373,23 @@ fn reading_page_in(inner: &Inner, spec: &RowSpec) -> usize {
     if spec.right == Some(inner.reading_page) { inner.reading_page } else { spec.left }
 }
 
+/// Everything the viewer knows about its document and how it is shown. Kept
+/// behind one `RefCell`, borrowed in short scopes, so no borrow is held while
+/// the viewer calls back into itself or into the window.
 struct Inner {
+    /// Every page's width and height in PDF points.
     pages_pt: Vec<(f32, f32)>,
     /// The gap between rows and between the pages of a spread, in logical
     /// pixels, as the window's `PageLayout` lays them out.
     row_gap: f32,
     spread_spacing: f32,
+    /// The zoom, where 1.0 shows a point at [`BASE_DENSITY`] logical pixels.
     zoom: f32,
+    /// Physical pixels per logical pixel on the window's display.
     scale_factor: f32,
+    /// The page area's width and height in logical pixels, once known.
     view: Option<(f32, f32)>,
+    /// Whether the zoom follows the viewport, and how.
     fit: FitMode,
     /// The pages holding a rendered image.
     retained: HashMap<usize, Retained>,
@@ -390,7 +398,9 @@ struct Inner {
     /// The pages whose thumbnail failed to render.
     thumb_failed: HashSet<usize>,
     spread: Spread,
+    /// Continuous scrolling, rather than one row at a time.
     continuous: bool,
+    /// The row at the top of the view, or the one shown in paged mode.
     current_row: usize,
     /// Current continuous scroll offset from the top, in logical pixels.
     scroll_px: f32,
@@ -403,8 +413,12 @@ struct Inner {
     /// View epoch, bumped whenever the visible set changes, so the render worker
     /// can drop requests from earlier views.
     generation: u64,
+    /// The rows the pages are grouped into for the current spread.
     specs: Vec<RowSpec>,
+    /// For each page, its row and whether it is the right page of a spread.
     page_loc: Vec<(usize, bool)>,
+    /// The widest row's width and the tallest row's height in points, which
+    /// the fit modes fit and every row's height is sized to.
     ref_w_pt: f32,
     ref_h_pt: f32,
     /// Rendered sidebar thumbnails, indexed by page (empty until rendered).
@@ -424,18 +438,27 @@ struct Inner {
     position_pending: bool,
 }
 
+/// One open document's view: its layout, zoom, modes and reading position,
+/// the rows the window shows for it, and the render requests that fill them.
+/// Every method runs on the UI thread.
 pub struct Viewer {
     /// This viewer, for the timer that renders once a resize settles.
     me: rc::Weak<Viewer>,
     inner: RefCell<Inner>,
+    /// The rows of pages the continuous list shows, and paged mode takes its
+    /// row from.
     model: Rc<VecModel<PageRow>>,
+    /// The sidebar's thumbnails, grouped into rows like the pages.
     thumb_model: Rc<VecModel<PageRow>>,
     window: Weak<MainWindow>,
     /// Whether this viewer's tab is the one shown. Only then may it write to the
     /// window, which every other tab's viewer shares.
     active: Cell<bool>,
+    /// Requests to the document's page worker.
     sender: Sender<WorkerMessage>,
+    /// Pages to the document's thumbnail worker.
     thumb_sender: Sender<i32>,
+    /// Aborts a page render the view no longer wants.
     control: RenderControl,
     /// Renders the view once the viewport has stopped changing size.
     resize_timer: Timer,

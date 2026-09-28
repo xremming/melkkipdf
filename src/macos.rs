@@ -87,6 +87,9 @@ define_class!(
 pub fn on_open_document(on_open: impl Fn(PathBuf) + 'static) {
     let mtm = MainThreadMarker::new().expect("must be called on the main thread");
     let handler = OpenDocumentsHandler::alloc(mtm).set_ivars(Ivars { on_open: Box::new(on_open) });
+    // SAFETY: NSObject's init takes no arguments and returns the initialised
+    // object, and the ivars were set above, as define_class! requires before
+    // calling the superclass initialiser.
     let handler: Retained<OpenDocumentsHandler> = unsafe { msg_send![super(handler), init] };
 
     // SAFETY: The selector names a method of this class that takes the
