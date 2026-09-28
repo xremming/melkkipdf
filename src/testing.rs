@@ -12,11 +12,11 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use slint::{Model, ModelRc};
+use slint::{ComponentHandle, Model, ModelRc};
 
 use crate::render::{RenderControl, WorkerMessage};
 use crate::settings::Store;
-use crate::{App, FileDrag, MainWindow, ViewSettings, Viewer, Workers};
+use crate::{App, FileDrag, MainWindow, PageLayout, ViewSettings, Viewer, Workers};
 
 /// A window + viewer pair for tests, plus convenience accessors.
 pub struct Harness {
@@ -171,8 +171,8 @@ impl Harness {
 /// the row on display in paged mode.
 pub fn pages_at_top(window: &MainWindow) -> Vec<i32> {
     let row = if window.get_continuous() {
-        // Must match the `+ 16px` gap in the `PageRowView` delegate.
-        let row_height = window.get_row_height_pt() * window.get_density() + 16.0;
+        let row_gap = window.global::<PageLayout>().get_row_gap();
+        let row_height = window.get_row_height_pt() * window.get_density() + row_gap;
         let index = (-window.get_scroll_y() / row_height + 1e-3).floor().max(0.0) as usize;
         window.get_rows().row_data(index)
     } else {

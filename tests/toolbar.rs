@@ -5,7 +5,7 @@
 //! runs and the resulting geometry can be read back.
 
 use i_slint_backend_testing::ElementHandle;
-use melkkipdf::MainWindow;
+use melkkipdf::{MainWindow, Toolbar};
 use slint::ComponentHandle;
 
 /// The one element with this id. Panics if it is missing or ambiguous.
@@ -23,10 +23,6 @@ fn width_of(window: &MainWindow, id: &str) -> f32 {
 
 /// Far wider than the toolbar's content, so a stretching group stands out.
 const WINDOW_WIDTH: f32 = 1600.0;
-/// Must match `SegmentedControl::segment-padding` in `app.slint`.
-const PADDING: f32 = 16.0;
-/// Must match the icon size in `Segment` in `app.slint`.
-const ICON: f32 = 18.0;
 
 fn toolbar_window() -> MainWindow {
     i_slint_backend_testing::init_no_event_loop();
@@ -43,7 +39,8 @@ fn icon_groups_are_their_icons_plus_padding() {
 
     // Each segment is exactly one icon wide plus the guaranteed gap on each
     // side; the group is just its segments end to end.
-    let segment = ICON + 2.0 * PADDING;
+    let toolbar = window.global::<Toolbar>();
+    let segment = toolbar.get_icon_size() + 2.0 * toolbar.get_h_padding();
     assert_eq!(width_of(&window, "MainWindow::zoom-group"), 2.0 * segment);
     assert_eq!(width_of(&window, "MainWindow::spread-group"), 3.0 * segment);
     assert_eq!(width_of(&window, "MainWindow::page-field"), 48.0);
@@ -88,7 +85,8 @@ fn text_group_is_its_labels_plus_padding() {
     assert_eq!(labels.len(), 2, "expected two text segments, got {labels:?}");
     let content: f32 = labels.iter().sum();
     assert!(content > 0.0, "labels measured zero: {labels:?}");
-    assert_eq!(width_of(&window, "MainWindow::fit-group"), content + 4.0 * PADDING);
+    let padding = window.global::<Toolbar>().get_h_padding();
+    assert_eq!(width_of(&window, "MainWindow::fit-group"), content + 4.0 * padding);
 }
 
 #[test]

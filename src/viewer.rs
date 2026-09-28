@@ -23,7 +23,7 @@ use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, 
 use crate::render::{
     RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale, scale_key,
 };
-use crate::{MainWindow, PageEntry, PageRow};
+use crate::{MainWindow, PageEntry, PageLayout, PageRow};
 
 /// How pages are grouped into rows.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -126,9 +126,6 @@ const BASE_DENSITY: f32 = 96.0 / 72.0;
 /// the right edge of the pages. Paged mode has no scrollbar and holds back
 /// nothing.
 const SCROLLBAR_GUTTER: f32 = 24.0;
-/// Vertical gap added to each row's height. Must match the `+ 16px` in the
-/// `PageRowView` delegate so scroll-offset math matches the on-screen layout.
-const ROW_GAP: f32 = 16.0;
 /// How far an arrow key scrolls when the page is taller than the viewport.
 const SCROLL_STEP: f32 = 120.0;
 /// How many times the viewer puts the list back on an offset it set before
@@ -287,7 +284,7 @@ fn pages_over_budget(inner: &Inner) -> Vec<usize> {
 
 /// The on-screen height of one row (all rows are uniform) in logical pixels.
 fn row_height_px(inner: &Inner) -> f32 {
-    inner.ref_h_pt * BASE_DENSITY * inner.zoom + ROW_GAP
+    inner.ref_h_pt * BASE_DENSITY * inner.zoom + inner.row_gap
 }
 
 /// The largest valid continuous scroll offset in logical pixels.
@@ -295,10 +292,6 @@ fn max_scroll_px(inner: &Inner) -> f32 {
     let view_height = inner.view.map_or(0.0, |(_, h)| h);
     (inner.specs.len() as f32 * row_height_px(inner) - view_height).max(0.0)
 }
-
-/// Horizontal gap between the two pages of a spread, in logical pixels. Must
-/// match the `spacing` of the paged content layout in the `.slint` file.
-const SPREAD_SPACING: f32 = 4.0;
 
 /// The current paged row's rendered content size (width, height) in logical
 /// pixels: one page, or two side by side for a spread.
@@ -311,7 +304,7 @@ fn paged_content_size(inner: &Inner) -> (f32, f32) {
     let (right_w, right_h, spacing) = match spec.right {
         Some(right) => {
             let (w, h) = inner.pages_pt[right];
-            (w, h, SPREAD_SPACING)
+            (w, h, inner.spread_spacing)
         }
         None => (0.0, 0.0, 0.0),
     };
@@ -382,6 +375,10 @@ fn reading_page_in(inner: &Inner, spec: &RowSpec) -> usize {
 
 struct Inner {
     pages_pt: Vec<(f32, f32)>,
+    /// The gap between rows and between the pages of a spread, in logical
+    /// pixels, as the window's `PageLayout` lays them out.
+    row_gap: f32,
+    spread_spacing: f32,
     zoom: f32,
     scale_factor: f32,
     view: Option<(f32, f32)>,
@@ -465,6 +462,8 @@ impl Viewer {
             me: me.clone(),
             inner: RefCell::new(Inner {
                 pages_pt,
+                row_gap: window.global::<PageLayout>().get_row_gap(),
+                spread_spacing: window.global::<PageLayout>().get_spread_spacing(),
                 zoom: settings.zoom.clamp(MIN_ZOOM, MAX_ZOOM),
                 scale_factor,
                 view: None,
@@ -1269,8 +1268,8 @@ impl Viewer {
             // so a fitted row fills the view exactly. The gap between the two
             // pages of a spread is not part of the pages' own width either.
             let (gutter_w, gutter_h) =
-                if inner.continuous { (SCROLLBAR_GUTTER, ROW_GAP) } else { (0.0, 0.0) };
-            let spacing = if inner.spread == Spread::None { 0.0 } else { SPREAD_SPACING };
+                if inner.continuous { (SCROLLBAR_GUTTER, inner.row_gap) } else { (0.0, 0.0) };
+            let spacing = if inner.spread == Spread::None { 0.0 } else { inner.spread_spacing };
             let width_zoom =
                 (view_w - gutter_w - spacing).max(1.0) / (inner.ref_w_pt * BASE_DENSITY);
             match inner.fit {

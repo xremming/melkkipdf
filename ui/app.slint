@@ -1,10 +1,20 @@
 import { ListView, ScrollView, Spinner } from "std-widgets.slint";
 
 // Shared toolbar metrics, so the standalone buttons and the segmented controls
-// give their icons the same breathing room.
-global Toolbar {
+// give their icons the same breathing room. Exported for the layout tests.
+export global Toolbar {
     out property <length> icon-size: 18px;
     out property <length> h-padding: 16px;
+}
+
+// How pages are spaced. The viewer reads these for its scroll and fit math,
+// so they are defined here once and the two cannot drift apart.
+export global PageLayout {
+    // The gap between rows in continuous mode, half above the pages and half
+    // below, as part of each row's height.
+    out property <length> row-gap: 16px;
+    // The gap between the two pages of a spread.
+    out property <length> spread-spacing: 4px;
 }
 
 // One page's fixed size (in PDF points) and its rendered image. The image is
@@ -106,12 +116,12 @@ component PageRowView inherits Rectangle {
     in property <PageRow> page-row;
     in property <float> density;
     in property <float> row-height-pt;
-    height: row-height-pt * density * 1px + 16px;
+    height: row-height-pt * density * 1px + PageLayout.row-gap;
     background: #2b2b2b;
 
     HorizontalLayout {
         alignment: center;
-        spacing: 4px;
+        spacing: PageLayout.spread-spacing;
 
         VerticalLayout {
             alignment: center;
@@ -826,7 +836,7 @@ export component MainWindow inherits Window {
                             height: root.paged-content-h;
 
                             HorizontalLayout {
-                                spacing: 4px;
+                                spacing: PageLayout.spread-spacing;
                                 PageImageView {
                                     entry: root.current-row-content.left;
                                     density: root.density;

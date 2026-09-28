@@ -8,14 +8,10 @@
 use std::time::Duration;
 
 use i_slint_backend_testing::ElementHandle;
+use melkkipdf::PageLayout;
 use melkkipdf::Spread;
 use melkkipdf::testing::Tabs;
 use slint::ComponentHandle;
-
-/// Must match `ROW_GAP` in the viewer and the `+ 16px` in `PageRowView`.
-const ROW_GAP: f32 = 16.0;
-/// Must match `SPREAD_SPACING` in the viewer.
-const SPREAD_SPACING: f32 = 4.0;
 
 /// A shown window with one document of `count` pages of `width`×`height`
 /// points, and the sidebar closed so the page area is simply the window's.
@@ -95,7 +91,8 @@ fn paged_page_fit_fits_a_spread_and_its_gap_exactly() {
     let (_, _, right_w, _) = pages[1];
     // Two portrait pages side by side are wider than tall, so the width binds.
     assert_close(left_x, content_x, "the space left of the spread");
-    assert_close(left_w + SPREAD_SPACING + right_w, content_w, "the spread's width");
+    let spacing = t.window.global::<PageLayout>().get_spread_spacing();
+    assert_close(left_w + spacing + right_w, content_w, "the spread's width");
 }
 
 #[test]
@@ -105,6 +102,7 @@ fn continuous_page_fit_leaves_only_the_gap_between_pages() {
     let ((_, content_y, _, content_h), pages) = layout(&t);
     let (_, page_y, _, page_h) = pages[0];
     // Each row carries its gap as half above the page and half below.
-    assert_close(page_y - content_y, ROW_GAP / 2.0, "the space above the page");
-    assert_close(content_y + content_h - (page_y + page_h), ROW_GAP / 2.0, "the space below");
+    let row_gap = t.window.global::<PageLayout>().get_row_gap();
+    assert_close(page_y - content_y, row_gap / 2.0, "the space above the page");
+    assert_close(content_y + content_h - (page_y + page_h), row_gap / 2.0, "the space below");
 }
