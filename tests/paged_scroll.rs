@@ -118,20 +118,21 @@ fn reversing_direction_starts_the_push_over() {
 }
 
 #[test]
-fn a_fling_turns_one_page() {
+fn scrolling_right_after_a_page_turn_is_not_held_back() {
     let h = paged_fitting(20);
-    // A trackpad fling: steady events well past the flip distance, with its
-    // momentum still going long after the first page turn.
-    for _ in 0..60 {
+    h.viewer.paged_scroll(0.0, -60.0, false);
+    assert_eq!(h.current_page(), 2);
+    // Regression: a rest after each turn swallowed the next scroll, and a
+    // steady stream of events kept extending it indefinitely.
+    h.viewer.paged_scroll(0.0, -60.0, false);
+    assert_eq!(h.current_page(), 3, "the scroll straight after a page turn was ignored");
+
+    // A steady trackpad stream keeps turning a page per 60px it travels.
+    for _ in 0..8 {
         h.viewer.paged_scroll(0.0, -30.0, false);
         wait(16);
     }
-    assert_eq!(h.current_page(), 2, "one fling turned several pages");
-
-    // Once the wheel has rested, the next push turns the next page.
-    wait(200);
-    h.viewer.paged_scroll(0.0, -60.0, false);
-    assert_eq!(h.current_page(), 3);
+    assert_eq!(h.current_page(), 7);
 }
 
 #[test]
@@ -142,7 +143,7 @@ fn a_wheel_notch_turns_a_page_at_once() {
 }
 
 #[test]
-fn arrow_keys_turn_pages_without_resting() {
+fn arrow_keys_turn_a_page_each() {
     let h = paged_fitting(20);
     for _ in 0..3 {
         h.viewer.nav_line(1);
