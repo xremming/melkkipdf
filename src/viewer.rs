@@ -1344,14 +1344,24 @@ mod tests {
         specs.iter().map(|s| (s.left, s.right)).collect()
     }
 
+    /// A window on Slint's testing backend, installed once per test thread.
+    /// The platform's real backend would refuse to run off the main thread on
+    /// macOS and could not start without a display in CI.
+    fn window() -> MainWindow {
+        thread_local! {
+            static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        if !INSTALLED.replace(true) {
+            i_slint_backend_testing::init_no_event_loop();
+        }
+        MainWindow::new().expect("failed to create the window")
+    }
+
     /// Regression: a page arriving in paged mode used to re-enter a held borrow
     /// of `inner` via `refresh_current_row` and panic. Drive that exact path.
-    /// Skips silently if no windowing backend is available in the test runner.
     #[test]
     fn paged_render_does_not_reenter_borrow() {
-        let Ok(window) = MainWindow::new() else {
-            return;
-        };
+        let window = window();
         let (sender, _receiver) = std::sync::mpsc::channel();
         let pages = vec![(600.0, 800.0); 5];
         let viewer = Viewer::new(
@@ -1377,9 +1387,7 @@ mod tests {
     /// go_to_page parses, clamps, and reports the resulting page.
     #[test]
     fn go_to_page_parses_and_clamps() {
-        let Ok(window) = MainWindow::new() else {
-            return;
-        };
+        let window = window();
         let (sender, _receiver) = std::sync::mpsc::channel();
         let viewer = Viewer::new(
             &window,

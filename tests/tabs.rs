@@ -9,8 +9,7 @@ use melkkipdf::testing::Tabs;
 use slint::{ComponentHandle, Image, Model, Rgb8Pixel, SharedPixelBuffer};
 
 fn tabs() -> Tabs {
-    i_slint_backend_testing::init_no_event_loop();
-    Tabs::new().expect("failed to create the window")
+    Tabs::new()
 }
 
 /// A rendered page, told apart from an unrendered one by its nonzero size.

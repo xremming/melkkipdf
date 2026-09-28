@@ -9,20 +9,8 @@ use melkkipdf::testing::Tabs;
 use mupdf::Size;
 use mupdf::pdf::PdfDocument;
 
-/// Installs Slint's testing backend, which each test thread needs once and
-/// only once, while the restart tests create a second window on the same one.
-fn backend() {
-    thread_local! {
-        static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    if !INSTALLED.replace(true) {
-        i_slint_backend_testing::init_no_event_loop();
-    }
-}
-
 fn tabs() -> Tabs {
-    backend();
-    Tabs::new().expect("failed to create the window")
+    Tabs::new()
 }
 
 /// A fresh, empty directory for one test's files.
@@ -45,8 +33,7 @@ fn write_pdf(path: &Path, pages: usize) {
 
 /// A window remembering its settings in `file`, as one run of the app.
 fn run_with(file: &Path) -> Tabs {
-    backend();
-    Tabs::with_settings_file(file.to_path_buf()).expect("failed to create the window")
+    Tabs::with_settings_file(file.to_path_buf())
 }
 
 #[test]

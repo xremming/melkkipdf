@@ -4,17 +4,15 @@
 use melkkipdf::testing::Harness;
 
 /// A harness with a known viewport, so fit and scroll math are defined.
-fn setup(count: usize) -> Option<Harness> {
-    let harness = Harness::uniform(count, 600.0, 800.0)?;
+fn setup(count: usize) -> Harness {
+    let harness = Harness::uniform(count, 600.0, 800.0);
     harness.viewport(1000.0, 900.0);
-    Some(harness)
+    harness
 }
 
 #[test]
 fn home_goes_to_the_first_page() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.nav_page(1);
     h.viewer.nav_page(1);
     h.viewer.nav_home();
@@ -24,9 +22,7 @@ fn home_goes_to_the_first_page() {
 
 #[test]
 fn end_reaches_the_last_page_when_fit_to_width() {
-    let Some(h) = setup(449) else {
-        return;
-    };
+    let h = setup(449);
     h.viewer.fit_width();
     h.viewer.nav_end();
     assert_eq!(h.current_page(), 449);
@@ -34,9 +30,7 @@ fn end_reaches_the_last_page_when_fit_to_width() {
 
 #[test]
 fn end_reaches_the_last_page_when_fit_to_page() {
-    let Some(h) = setup(449) else {
-        return;
-    };
+    let h = setup(449);
     h.viewer.fit_page();
     h.viewer.nav_end();
     assert_eq!(h.current_page(), 449);
@@ -44,9 +38,7 @@ fn end_reaches_the_last_page_when_fit_to_page() {
 
 #[test]
 fn end_reaches_the_last_page_in_spread_modes() {
-    let Some(h) = setup(449) else {
-        return;
-    };
+    let h = setup(449);
     h.viewer.fit_width();
 
     h.viewer.set_spread(2); // even
@@ -60,9 +52,7 @@ fn end_reaches_the_last_page_in_spread_modes() {
 
 #[test]
 fn page_navigation_moves_one_page_at_a_time() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.nav_home();
     assert_eq!(h.current_page(), 1);
     h.viewer.nav_page(1);
@@ -75,9 +65,7 @@ fn page_navigation_moves_one_page_at_a_time() {
 
 #[test]
 fn page_navigation_clamps_at_both_ends() {
-    let Some(h) = setup(5) else {
-        return;
-    };
+    let h = setup(5);
     h.viewer.nav_home();
     h.viewer.nav_page(-1);
     assert_eq!(h.current_page(), 1, "cannot page before the first page");
@@ -88,9 +76,7 @@ fn page_navigation_clamps_at_both_ends() {
 
 #[test]
 fn continuous_arrows_scroll_and_do_not_change_page() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.fit_page(); // a whole page fits
     h.viewer.nav_home();
     assert_eq!(h.scroll_y(), 0.0);
@@ -103,9 +89,7 @@ fn continuous_arrows_scroll_and_do_not_change_page() {
 
 #[test]
 fn continuous_arrow_scroll_steps_are_uniform() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.nav_home();
     h.viewer.nav_line(1);
     let one = h.scroll_y();
@@ -118,9 +102,7 @@ fn continuous_arrow_scroll_steps_are_uniform() {
 
 #[test]
 fn paged_arrows_change_pages_when_the_page_fits() {
-    let Some(h) = Harness::uniform(20, 600.0, 800.0) else {
-        return;
-    };
+    let h = Harness::uniform(20, 600.0, 800.0);
     h.viewport(1000.0, 1400.0); // tall viewport: the whole page fits
     h.viewer.set_continuous(false);
     h.viewer.fit_page();
@@ -134,9 +116,7 @@ fn paged_arrows_change_pages_when_the_page_fits() {
 
 #[test]
 fn scrolling_reports_the_page_at_the_top() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.fit_width();
     // Jump to page 5, capture the offset, then reproduce it as a user scroll.
     h.viewer.go_to_page("5");

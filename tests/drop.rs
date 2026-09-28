@@ -13,8 +13,7 @@ use mupdf::pdf::PdfDocument;
 use slint::ComponentHandle;
 
 fn tabs() -> Tabs {
-    i_slint_backend_testing::init_no_event_loop();
-    Tabs::new().expect("failed to create the window")
+    Tabs::new()
 }
 
 /// A fresh, empty directory for one test's files.

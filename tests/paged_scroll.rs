@@ -5,20 +5,18 @@ use melkkipdf::testing::Harness;
 
 /// Paged mode with the page taller than the viewport (so there is room to
 /// scroll within it before paging).
-fn paged_tall(count: usize) -> Option<Harness> {
-    let harness = Harness::uniform(count, 600.0, 800.0)?;
+fn paged_tall(count: usize) -> Harness {
+    let harness = Harness::uniform(count, 600.0, 800.0);
     harness.viewport(1000.0, 400.0);
     harness.viewer.set_continuous(false);
     harness.viewer.fit_width(); // ~1300px tall page in a 400px viewport
     harness.viewer.nav_home();
-    Some(harness)
+    harness
 }
 
 #[test]
 fn scrolling_stays_within_the_page() {
-    let Some(h) = paged_tall(20) else {
-        return;
-    };
+    let h = paged_tall(20);
     assert_eq!(h.current_page(), 1);
     assert!((h.window.get_paged_offset_y() - 0.0).abs() < 0.5, "starts at the top");
 
@@ -30,9 +28,7 @@ fn scrolling_stays_within_the_page() {
 
 #[test]
 fn paging_forward_lands_at_the_top_of_the_next_page() {
-    let Some(h) = paged_tall(20) else {
-        return;
-    };
+    let h = paged_tall(20);
     // One huge scroll clamps at the page bottom without paging...
     h.viewer.paged_scroll(0.0, -100000.0, false);
     assert_eq!(h.current_page(), 1, "a single scroll clamps at the bottom, no page yet");
@@ -45,9 +41,7 @@ fn paging_forward_lands_at_the_top_of_the_next_page() {
 
 #[test]
 fn scrolling_up_at_the_top_lands_at_the_bottom_of_the_previous_page() {
-    let Some(h) = paged_tall(20) else {
-        return;
-    };
+    let h = paged_tall(20);
     h.viewer.nav_page(1); // page 2, at its top
     assert_eq!(h.current_page(), 2);
     // At the top of page 2, scrolling up goes back to page 1...
@@ -59,9 +53,7 @@ fn scrolling_up_at_the_top_lands_at_the_bottom_of_the_previous_page() {
 
 #[test]
 fn shift_wheel_scrolls_horizontally_without_paging() {
-    let Some(h) = Harness::uniform(20, 600.0, 800.0) else {
-        return;
-    };
+    let h = Harness::uniform(20, 600.0, 800.0);
     h.viewport(1000.0, 800.0);
     h.viewer.set_continuous(false);
     h.viewer.fit_width();
@@ -78,9 +70,7 @@ fn shift_wheel_scrolls_horizontally_without_paging() {
 
 #[test]
 fn a_page_that_fits_pages_immediately() {
-    let Some(h) = Harness::uniform(20, 600.0, 800.0) else {
-        return;
-    };
+    let h = Harness::uniform(20, 600.0, 800.0);
     h.viewport(1000.0, 1400.0); // tall viewport: the whole page fits
     h.viewer.set_continuous(false);
     h.viewer.fit_page();

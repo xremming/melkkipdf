@@ -2,23 +2,14 @@
 
 //! Changing how pages are laid out must not lose the reader's place: switching
 //! the spread, switching between continuous and paged, zooming, fitting and
-//! resizing all keep the page being read at the top of the view. Uses Slint's
-//! testing backend so the tests run without a display.
+//! resizing all keep the page being read at the top of the view.
 
 use melkkipdf::testing::Harness;
 
 const PAGES: usize = 60;
 
 fn setup() -> Harness {
-    // The backend can be installed once per thread, and some tests here build
-    // many windows on one.
-    thread_local! {
-        static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    if !INSTALLED.replace(true) {
-        i_slint_backend_testing::init_no_event_loop();
-    }
-    let h = Harness::uniform(PAGES, 600.0, 800.0).expect("failed to create the window");
+    let h = Harness::uniform(PAGES, 600.0, 800.0);
     h.viewport(1000.0, 900.0);
     h
 }
@@ -164,8 +155,7 @@ use slint::ComponentHandle;
 
 /// A shown window with the app wired up, sized like a small desktop window.
 fn live() -> Tabs {
-    setup();
-    let t = Tabs::new().expect("failed to create the window");
+    let t = Tabs::new();
     t.window.window().set_size(slint::LogicalSize::new(1000.0, 900.0));
     t.window.show().unwrap();
     t

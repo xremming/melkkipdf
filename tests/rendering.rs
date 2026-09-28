@@ -5,9 +5,7 @@ use melkkipdf::testing::Harness;
 
 #[test]
 fn scrolling_requests_visible_rows_top_first() {
-    let Some(h) = Harness::uniform(100, 600.0, 800.0) else {
-        return;
-    };
+    let h = Harness::uniform(100, 600.0, 800.0);
     h.viewport(1000.0, 900.0);
 
     // Position near page 50, then simulate the scroll callback the ListView fires.
@@ -32,9 +30,7 @@ fn scrolling_requests_visible_rows_top_first() {
 
 #[test]
 fn idle_prefetches_neighbors_at_lower_priority() {
-    let Some(h) = Harness::uniform(100, 600.0, 800.0) else {
-        return;
-    };
+    let h = Harness::uniform(100, 600.0, 800.0);
     h.viewport(1000.0, 900.0);
     h.viewer.go_to_page("50"); // row/page index 49
     let offset = -h.scroll_y();
@@ -54,9 +50,7 @@ fn idle_prefetches_neighbors_at_lower_priority() {
 
 #[test]
 fn paged_mode_prefetches_neighbors() {
-    let Some(h) = Harness::uniform(100, 600.0, 800.0) else {
-        return;
-    };
+    let h = Harness::uniform(100, 600.0, 800.0);
     h.viewport(1000.0, 900.0);
     h.viewer.set_continuous(false);
     let _ = h.take_render_requests_full();
@@ -78,9 +72,7 @@ fn paged_mode_prefetches_neighbors() {
 
 #[test]
 fn each_scroll_is_a_newer_epoch_so_stale_requests_are_dropped() {
-    let Some(h) = Harness::uniform(100, 600.0, 800.0) else {
-        return;
-    };
+    let h = Harness::uniform(100, 600.0, 800.0);
     h.viewport(1000.0, 900.0);
 
     h.viewer.go_to_page("10");
@@ -103,9 +95,7 @@ fn each_scroll_is_a_newer_epoch_so_stale_requests_are_dropped() {
 
 #[test]
 fn scrolling_does_not_rerequest_already_rendered_pages() {
-    let Some(h) = Harness::uniform(100, 600.0, 800.0) else {
-        return;
-    };
+    let h = Harness::uniform(100, 600.0, 800.0);
     h.viewport(1000.0, 900.0);
     h.viewer.go_to_page("10");
     let offset = -h.scroll_y();

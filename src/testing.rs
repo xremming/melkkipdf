@@ -6,7 +6,7 @@
 //! (the `scrolled` callback that a live ListView would fire is not needed), so
 //! assertions reflect the intended behavior.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
@@ -28,16 +28,33 @@ pub struct Harness {
     _thumb_requests: Receiver<i32>,
 }
 
+/// Installs Slint's testing backend on this thread, once. Windows made without
+/// it get the platform's real backend, which on macOS refuses to run anywhere
+/// but the main thread and on a machine without a display cannot start at all.
+pub fn install_backend() {
+    thread_local! {
+        static INSTALLED: Cell<bool> = const { Cell::new(false) };
+    }
+    if !INSTALLED.replace(true) {
+        i_slint_backend_testing::init_no_event_loop();
+    }
+}
+
+/// A window on the testing backend.
+fn new_window() -> MainWindow {
+    install_backend();
+    MainWindow::new().expect("failed to create the window")
+}
+
 impl Harness {
     /// Builds a harness with `count` identical pages of `width`×`height` points.
-    /// Returns `None` if no windowing backend is available in the test runner.
-    pub fn uniform(count: usize, width: f32, height: f32) -> Option<Self> {
+    pub fn uniform(count: usize, width: f32, height: f32) -> Self {
         Self::with_pages(vec![(width, height); count])
     }
 
     /// Builds a harness with the given per-page sizes in points.
-    pub fn with_pages(pages: Vec<(f32, f32)>) -> Option<Self> {
-        let window = MainWindow::new().ok()?;
+    pub fn with_pages(pages: Vec<(f32, f32)>) -> Self {
+        let window = new_window();
         let (sender, requests) = mpsc::channel();
         let (thumb_sender, _thumb_requests) = mpsc::channel();
         let viewer = Viewer::new(
@@ -49,7 +66,7 @@ impl Harness {
             RenderControl::inert(),
             &ViewSettings::default(),
         );
-        Some(Self { window, viewer, requests, _thumb_requests })
+        Self { window, viewer, requests, _thumb_requests }
     }
 
     /// Drains and returns the 0-based page indices the viewer has requested for
@@ -161,23 +178,28 @@ pub struct Tabs {
     receivers: RefCell<Vec<(Receiver<RenderRequest>, Receiver<i32>)>>,
 }
 
+impl Default for Tabs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tabs {
-    /// An empty window that remembers nothing on disk. Returns `None` if no
-    /// windowing backend is available.
-    pub fn new() -> Option<Self> {
+    /// An empty window that remembers nothing on disk.
+    pub fn new() -> Self {
         Self::with_store(Store::in_memory())
     }
 
     /// An empty window that remembers settings in `file`, as a real run does
     /// in its state directory. Nothing is restored until [`Tabs::restore`].
-    pub fn with_settings_file(file: PathBuf) -> Option<Self> {
+    pub fn with_settings_file(file: PathBuf) -> Self {
         Self::with_store(Store::load(file))
     }
 
-    fn with_store(store: Store) -> Option<Self> {
-        let window = MainWindow::new().ok()?;
+    fn with_store(store: Store) -> Self {
+        let window = new_window();
         let app = App::new(&window, store);
-        Some(Self { window, app, receivers: RefCell::new(Vec::new()) })
+        Self { window, app, receivers: RefCell::new(Vec::new()) }
     }
 
     /// Opens a document of `count` pages named `title` in a new tab, as opening

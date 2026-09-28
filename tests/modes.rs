@@ -5,26 +5,22 @@ use melkkipdf::testing::Harness;
 
 const BASE_DENSITY: f32 = 96.0 / 72.0;
 
-fn setup(count: usize) -> Option<Harness> {
-    let harness = Harness::uniform(count, 600.0, 800.0)?;
+fn setup(count: usize) -> Harness {
+    let harness = Harness::uniform(count, 600.0, 800.0);
     harness.viewport(1000.0, 900.0);
-    Some(harness)
+    harness
 }
 
 #[test]
 fn go_to_page_jumps_to_the_requested_page() {
-    let Some(h) = setup(50) else {
-        return;
-    };
+    let h = setup(50);
     h.viewer.go_to_page("25");
     assert_eq!(h.current_page(), 25);
 }
 
 #[test]
 fn go_to_page_clamps_out_of_range() {
-    let Some(h) = setup(50) else {
-        return;
-    };
+    let h = setup(50);
     h.viewer.go_to_page("999");
     assert_eq!(h.current_page(), 50);
     h.viewer.go_to_page("0");
@@ -35,9 +31,7 @@ fn go_to_page_clamps_out_of_range() {
 
 #[test]
 fn go_to_page_ignores_non_numeric_input() {
-    let Some(h) = setup(50) else {
-        return;
-    };
+    let h = setup(50);
     h.viewer.go_to_page("10");
     assert_eq!(h.current_page(), 10);
     h.viewer.go_to_page("abc");
@@ -48,9 +42,7 @@ fn go_to_page_ignores_non_numeric_input() {
 
 #[test]
 fn toggle_continuous_flips_the_mode() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     assert!(h.continuous());
     h.viewer.toggle_continuous();
     assert!(!h.continuous());
@@ -60,9 +52,7 @@ fn toggle_continuous_flips_the_mode() {
 
 #[test]
 fn switching_to_paged_keeps_the_position() {
-    let Some(h) = setup(50) else {
-        return;
-    };
+    let h = setup(50);
     h.viewer.fit_width();
     h.viewer.go_to_page("30");
     assert_eq!(h.current_page(), 30);
@@ -72,9 +62,7 @@ fn switching_to_paged_keeps_the_position() {
 
 #[test]
 fn switching_to_continuous_keeps_the_position() {
-    let Some(h) = setup(50) else {
-        return;
-    };
+    let h = setup(50);
     h.viewer.fit_width();
     h.viewer.set_continuous(false);
     h.viewer.go_to_page("30");
@@ -87,9 +75,7 @@ fn switching_to_continuous_keeps_the_position() {
 
 #[test]
 fn zoom_in_then_out_returns_to_the_start() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.zoom_reset();
     let base = h.density();
     h.viewer.zoom_in();
@@ -100,9 +86,7 @@ fn zoom_in_then_out_returns_to_the_start() {
 
 #[test]
 fn zoom_reset_is_base_density() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.zoom_in();
     h.viewer.zoom_in();
     h.viewer.zoom_reset();
@@ -111,9 +95,7 @@ fn zoom_reset_is_base_density() {
 
 #[test]
 fn fit_width_makes_the_page_span_the_viewport() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.fit_width();
     // Page is 600pt wide; view is 1000 logical px with a 24px gutter.
     let page_px = 600.0 * h.density();
@@ -122,9 +104,7 @@ fn fit_width_makes_the_page_span_the_viewport() {
 
 #[test]
 fn fit_page_makes_the_page_fit_the_height() {
-    let Some(h) = setup(20) else {
-        return;
-    };
+    let h = setup(20);
     h.viewer.fit_page();
     // Portrait page in a wider-than-tall viewport: height is the constraint.
     let page_h = 800.0 * h.density();

@@ -6,9 +6,10 @@ description = "A fast, minimal PDF viewer for Linux, inspired by SumatraPDF."
 license = "AGPL-3.0-or-later"
 
 [features]
-# Exposes the headless `testing::Harness` used by the integration tests.
-# Enable with `cargo test --features testing`.
-testing = []
+# Exposes the headless `testing::Harness` used by the integration tests,
+# running on Slint's testing backend so no display is needed. Enable with
+# `cargo test --features testing`.
+testing = ["dep:i-slint-backend-testing"]
 
 [dependencies]
 slint = { version = "1.18", features = ["unstable-winit-030"] }
@@ -17,6 +18,7 @@ rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
+i-slint-backend-testing = { version = "1.18", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
