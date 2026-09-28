@@ -717,7 +717,6 @@ impl Viewer {
     /// pass `force = true` to re-render everything visible. Also covers eviction:
     /// a delegate's `init` fires once and can't re-request a page cleared later.
     fn request_visible(&self, force: bool) {
-        self.advance_epoch();
         let (visible, prefetch, scale) = {
             let inner = self.inner.borrow();
             if !inner.continuous || inner.specs.is_empty() || row_height_px(&inner) <= 0.0 {
@@ -729,43 +728,43 @@ impl Viewer {
             let scale = render_scale(&inner);
             let needs = |row: usize| force || !row_rendered(&inner, row);
 
-            let visible: Vec<i32> =
-                (top..=visible_end).filter(|&r| needs(r)).map(|r| r as i32).collect();
+            let visible: Vec<usize> = (top..=visible_end).filter(|&r| needs(r)).collect();
 
             // Prefetch a few rows on either side of the visible range.
             let margin = prefetch_rows(&inner, visible_end - top + 1, scale);
             let below = (visible_end + margin).min(last);
             let above = top.saturating_sub(margin);
-            let mut prefetch: Vec<i32> = Vec::new();
-            for row in (visible_end + 1)..=below {
-                if needs(row) {
-                    prefetch.push(row as i32);
-                }
-            }
-            for row in above..top {
-                if needs(row) {
-                    prefetch.push(row as i32);
-                }
-            }
+            let prefetch: Vec<usize> =
+                ((visible_end + 1)..=below).chain(above..top).filter(|&r| needs(r)).collect();
 
             (visible, prefetch, scale)
         };
-        for row in visible {
-            self.send_row(row, scale, false);
-        }
-        for row in prefetch {
-            self.send_row(row, scale, true);
-        }
+        self.dispatch(&visible, &prefetch, scale);
     }
 
-    /// Sends render requests for a row's pages at an explicit scale.
-    fn send_row(&self, row: i32, scale: f32, prefetch: bool) {
-        let inner = self.inner.borrow();
-        if let Some(spec) = inner.specs.get(row.max(0) as usize) {
-            self.send(spec.left, scale, prefetch);
-            if let Some(right) = spec.right {
-                self.send(right, scale, prefetch);
-            }
+    /// Starts a new view and asks for the pages of the `visible` rows, then
+    /// of the `prefetch` rows at low priority, all at `scale`.
+    fn dispatch(&self, visible: &[usize], prefetch: &[usize], scale: f32) {
+        let requests: Vec<(usize, bool)> = {
+            let inner = self.inner.borrow();
+            let pages = |rows: &[usize], prefetch: bool| {
+                rows.iter()
+                    .flat_map(|&row| {
+                        let spec = inner.specs[row];
+                        std::iter::once(spec.left).chain(spec.right)
+                    })
+                    .map(move |page| (page, prefetch))
+                    .collect::<Vec<_>>()
+            };
+            let mut requests = pages(visible, false);
+            requests.extend(pages(prefetch, true));
+            requests
+        };
+        let wanted: Vec<(i32, f32)> =
+            requests.iter().map(|&(page, _)| (page as i32, scale)).collect();
+        self.advance_epoch(&wanted);
+        for (page, prefetch) in requests {
+            self.send(page, scale, prefetch);
         }
     }
 
@@ -1305,7 +1304,6 @@ impl Viewer {
     /// Requests the current row (high priority) plus a few neighbors on each
     /// side as prefetch. Used by paged mode and one-shot navigation.
     fn request_current_row(&self) {
-        self.advance_epoch();
         let (current, neighbors, scale) = {
             let inner = self.inner.borrow();
             if inner.specs.is_empty() {
@@ -1317,16 +1315,11 @@ impl Viewer {
             let margin = prefetch_rows(&inner, 1, scale);
             let start = current.saturating_sub(margin);
             let end = (current + margin).min(last);
-            let neighbors: Vec<i32> = (start..=end)
-                .filter(|&row| row != current && !row_rendered(&inner, row))
-                .map(|row| row as i32)
-                .collect();
-            (current as i32, neighbors, scale)
+            let neighbors: Vec<usize> =
+                (start..=end).filter(|&row| row != current && !row_rendered(&inner, row)).collect();
+            (current, neighbors, scale)
         };
-        self.send_row(current, scale, false);
-        for row in neighbors {
-            self.send_row(row, scale, true);
-        }
+        self.dispatch(&[current], &neighbors, scale);
     }
 
     fn request_current_row_if_paged(&self) {
@@ -1342,14 +1335,16 @@ impl Viewer {
     }
 
     /// Marks a new view: bumped before issuing a fresh set of render requests so
-    /// the worker drops (and aborts in-progress) renders from the previous view.
-    fn advance_epoch(&self) {
+    /// the worker drops pending renders from the previous view. A render in
+    /// progress is aborted only if the new view does not want its page at its
+    /// scale, given as `wanted`.
+    fn advance_epoch(&self, wanted: &[(i32, f32)]) {
         let epoch = {
             let mut inner = self.inner.borrow_mut();
             inner.generation += 1;
             inner.generation
         };
-        self.control.advance(epoch);
+        self.control.advance(epoch, wanted);
     }
 
     fn apply_density(&self) {

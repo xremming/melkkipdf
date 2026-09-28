@@ -23,6 +23,10 @@ use crate::MainWindow;
 struct AbortSlot {
     cookie: usize,
     epoch: u64,
+    /// The page and scale being rendered, so a view that still wants them
+    /// lets the render finish.
+    page: i32,
+    scale: f32,
     active: bool,
     /// Set when `advance` actually aborted the in-progress render, so the worker
     /// knows to discard its half-drawn result (rather than discarding merely
@@ -37,11 +41,20 @@ pub struct RenderControl {
 }
 
 impl RenderControl {
-    /// Aborts an in-progress render from an epoch older than `epoch` (its page
-    /// has scrolled off screen).
-    pub fn advance(&self, epoch: u64) {
+    /// Aborts an in-progress render from an epoch older than `epoch`, unless
+    /// the new view still wants its page at its scale, as one of the `wanted`
+    /// pairs of page and scale.
+    ///
+    /// The viewer starts a new epoch on every scroll event, and most of them
+    /// still want the page being rendered. Aborting it anyway would only have
+    /// it requested again and started over, so on a slow scroll a heavy page
+    /// would never finish.
+    pub fn advance(&self, epoch: u64, wanted: &[(i32, f32)]) {
         let mut slot = self.abort.lock().unwrap();
-        if slot.active && slot.epoch < epoch {
+        let still_wanted = wanted
+            .iter()
+            .any(|&(page, scale)| page == slot.page && scale_key(scale) == scale_key(slot.scale));
+        if slot.active && slot.epoch < epoch && !still_wanted {
             // SAFETY: while `active`, the worker keeps the cookie alive and will
             // not drop it until it re-takes this lock, so the address is valid.
             // Setting the abort flag while the worker reads it mid-render is the
@@ -101,7 +114,13 @@ type PageBuffer = SharedPixelBuffer<Rgb8Pixel>;
 type CacheKey = (i32, u32);
 
 fn cache_key(request: &RenderRequest) -> CacheKey {
-    (request.page, (request.scale * 1000.0).round() as u32)
+    (request.page, scale_key(request.scale))
+}
+
+/// A scale quantized to whole per-mille steps, so two scales that render the
+/// same pixels compare equal.
+fn scale_key(scale: f32) -> u32 {
+    (scale * 1000.0).round() as u32
 }
 
 /// The largest width or height, in pixels, a page is rendered at. A rendered
@@ -244,6 +263,8 @@ fn render_abortable(
         let mut slot = abort.lock().unwrap();
         slot.cookie = &mut cookie as *mut Cookie as usize;
         slot.epoch = request.generation;
+        slot.page = request.page;
+        slot.scale = request.scale;
         slot.active = true;
         slot.aborted = false;
     }
@@ -416,7 +437,50 @@ mod tests {
     use mupdf::pdf::PdfDocument;
     use mupdf::{Cookie, Size};
 
-    use super::{LruCache, MAX_RENDER_PX, capped_scale, render_page};
+    use super::{AbortSlot, LruCache, MAX_RENDER_PX, RenderControl, capped_scale, render_page};
+
+    /// A control whose slot says `page` is being rendered at `scale` for
+    /// epoch 1, under the given cookie.
+    fn rendering(cookie: &mut Cookie, page: i32, scale: f32) -> RenderControl {
+        let control = RenderControl::inert();
+        *control.abort.lock().unwrap() = AbortSlot {
+            cookie: cookie as *mut Cookie as usize,
+            epoch: 1,
+            page,
+            scale,
+            active: true,
+            aborted: false,
+        };
+        control
+    }
+
+    fn aborted(control: &RenderControl) -> bool {
+        control.abort.lock().unwrap().aborted
+    }
+
+    #[test]
+    fn a_render_still_wanted_by_the_new_view_carries_on() {
+        let mut cookie = Cookie::new().unwrap();
+        let control = rendering(&mut cookie, 4, 2.0);
+        control.advance(2, &[(3, 2.0), (4, 2.0), (5, 2.0)]);
+        assert!(!aborted(&control));
+    }
+
+    #[test]
+    fn a_render_the_new_view_does_not_want_is_aborted() {
+        let mut cookie = Cookie::new().unwrap();
+        let control = rendering(&mut cookie, 4, 2.0);
+        control.advance(2, &[(10, 2.0), (11, 2.0)]);
+        assert!(aborted(&control));
+    }
+
+    #[test]
+    fn a_render_at_an_old_scale_is_aborted() {
+        let mut cookie = Cookie::new().unwrap();
+        let control = rendering(&mut cookie, 4, 2.0);
+        control.advance(2, &[(4, 2.5)]);
+        assert!(aborted(&control));
+    }
 
     #[test]
     fn a_scale_within_the_limit_is_kept() {
