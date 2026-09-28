@@ -4,33 +4,14 @@
 //! the window. Its tab appears at once and says it is loading until then.
 //! Uses Slint's testing backend so the tests run without a display.
 
-use std::path::{Path, PathBuf};
+mod common;
 
+use common::{Scratch, write_pdf};
 use melkkipdf::testing::Tabs;
-use mupdf::Size;
-use mupdf::pdf::PdfDocument;
-
-/// A fresh, empty directory for one test's files.
-fn scratch(name: &str) -> PathBuf {
-    let directory =
-        std::env::temp_dir().join(format!("melkkipdf-loading-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
-/// Writes a PDF of `pages` blank A4 pages.
-fn write_pdf(path: &Path, pages: usize) {
-    let mut document = PdfDocument::new();
-    for _ in 0..pages {
-        document.new_page(Size::A4).unwrap();
-    }
-    document.save(path.to_str().unwrap()).unwrap();
-}
 
 #[test]
 fn a_loading_document_has_its_tab_at_once() {
-    let directory = scratch("at-once");
+    let directory = Scratch::new("at-once");
     let a = directory.join("a.pdf");
     write_pdf(&a, 3);
 
@@ -49,7 +30,7 @@ fn a_loading_document_has_its_tab_at_once() {
 
 #[test]
 fn a_document_loading_in_the_background_leaves_the_shown_tab_alone() {
-    let directory = scratch("background");
+    let directory = Scratch::new("background");
     let a = directory.join("a.pdf");
     write_pdf(&a, 3);
 
@@ -70,7 +51,7 @@ fn a_document_loading_in_the_background_leaves_the_shown_tab_alone() {
 
 #[test]
 fn opening_a_loading_document_again_shows_its_tab() {
-    let directory = scratch("again");
+    let directory = Scratch::new("again");
     let a = directory.join("a.pdf");
     write_pdf(&a, 2);
 

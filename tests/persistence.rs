@@ -3,33 +3,16 @@
 //! What is remembered between runs: each document's view, and the tabs that
 //! were open. Uses Slint's testing backend so the tests run without a display.
 
-use std::path::{Path, PathBuf};
+mod common;
 
+use std::path::Path;
+
+use common::{Scratch, write_pdf};
 use melkkipdf::Spread;
 use melkkipdf::testing::Tabs;
-use mupdf::Size;
-use mupdf::pdf::PdfDocument;
 
 fn tabs() -> Tabs {
     Tabs::new()
-}
-
-/// A fresh, empty directory for one test's files.
-fn scratch(name: &str) -> PathBuf {
-    let directory =
-        std::env::temp_dir().join(format!("melkkipdf-persistence-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
-/// Writes a PDF of `pages` blank A4 pages.
-fn write_pdf(path: &Path, pages: usize) {
-    let mut document = PdfDocument::new();
-    for _ in 0..pages {
-        document.new_page(Size::A4).unwrap();
-    }
-    document.save(path.to_str().unwrap()).unwrap();
 }
 
 /// A window remembering its settings in `file`, as one run of the app.
@@ -95,7 +78,7 @@ fn a_continuous_position_waits_for_the_viewport() {
 
 #[test]
 fn settings_and_tabs_survive_a_restart() {
-    let directory = scratch("restart");
+    let directory = Scratch::new("restart");
     let settings = directory.join("state").join("documents.json");
     let (a, b) = (directory.join("a.pdf"), directory.join("b.pdf"));
     write_pdf(&a, 6);
@@ -128,7 +111,7 @@ fn settings_and_tabs_survive_a_restart() {
 
 #[test]
 fn a_document_gone_since_last_time_is_not_reopened() {
-    let directory = scratch("gone");
+    let directory = Scratch::new("gone");
     let settings = directory.join("documents.json");
     let (a, b) = (directory.join("a.pdf"), directory.join("b.pdf"));
     write_pdf(&a, 2);
@@ -150,7 +133,7 @@ fn a_document_gone_since_last_time_is_not_reopened() {
 
 #[test]
 fn closing_every_tab_leaves_nothing_to_reopen() {
-    let directory = scratch("closed");
+    let directory = Scratch::new("closed");
     let settings = directory.join("documents.json");
     let a = directory.join("a.pdf");
     write_pdf(&a, 2);

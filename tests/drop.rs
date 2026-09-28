@@ -3,35 +3,18 @@
 //! Files dropped onto the window from another application open in new tabs.
 //! Uses Slint's testing backend so the tests run without a display.
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::PathBuf;
 use std::time::Duration;
 
+use common::{Scratch, write_pdf};
 use i_slint_backend_testing::ElementHandle;
 use melkkipdf::testing::Tabs;
-use mupdf::Size;
-use mupdf::pdf::PdfDocument;
 use slint::ComponentHandle;
 
 fn tabs() -> Tabs {
     Tabs::new()
-}
-
-/// A fresh, empty directory for one test's files.
-fn scratch(name: &str) -> PathBuf {
-    let directory =
-        std::env::temp_dir().join(format!("melkkipdf-drop-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
-/// Writes a PDF of `pages` blank A4 pages.
-fn write_pdf(path: &Path, pages: usize) {
-    let mut document = PdfDocument::new();
-    for _ in 0..pages {
-        document.new_page(Size::A4).unwrap();
-    }
-    document.save(path.to_str().unwrap()).unwrap();
 }
 
 /// Lets the event loop run what the drop scheduled, and the dropped documents
@@ -43,7 +26,7 @@ fn run_pending(t: &Tabs) {
 
 #[test]
 fn a_dropped_pdf_opens_in_a_new_tab() {
-    let directory = scratch("new-tab");
+    let directory = Scratch::new("new-tab");
     let (a, b) = (directory.join("a.pdf"), directory.join("b.pdf"));
     write_pdf(&a, 2);
     write_pdf(&b, 5);
@@ -60,7 +43,7 @@ fn a_dropped_pdf_opens_in_a_new_tab() {
 
 #[test]
 fn several_dropped_files_each_get_a_tab_in_order() {
-    let directory = scratch("several");
+    let directory = Scratch::new("several");
     let paths: Vec<PathBuf> =
         ["one.pdf", "two.pdf", "three.pdf"].iter().map(|name| directory.join(name)).collect();
     for path in &paths {
@@ -80,7 +63,7 @@ fn several_dropped_files_each_get_a_tab_in_order() {
 
 #[test]
 fn dropping_an_open_document_shows_its_tab() {
-    let directory = scratch("already-open");
+    let directory = Scratch::new("already-open");
     let (a, b) = (directory.join("a.pdf"), directory.join("b.pdf"));
     write_pdf(&a, 1);
     write_pdf(&b, 1);
@@ -97,7 +80,7 @@ fn dropping_an_open_document_shows_its_tab() {
 
 #[test]
 fn dropping_something_unreadable_leaves_the_tabs_alone() {
-    let directory = scratch("unreadable");
+    let directory = Scratch::new("unreadable");
     let (a, junk) = (directory.join("a.pdf"), directory.join("notes.pdf"));
     write_pdf(&a, 1);
     std::fs::write(&junk, "not a pdf").unwrap();
@@ -118,7 +101,7 @@ fn overlay_shown(t: &Tabs) -> bool {
 
 #[test]
 fn the_window_highlights_while_files_hover() {
-    let directory = scratch("hover");
+    let directory = Scratch::new("hover");
     let a = directory.join("a.pdf");
     write_pdf(&a, 1);
 

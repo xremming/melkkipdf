@@ -25,7 +25,7 @@ fn width_of(window: &MainWindow, id: &str) -> f32 {
 const WINDOW_WIDTH: f32 = 1600.0;
 
 fn toolbar_window() -> MainWindow {
-    i_slint_backend_testing::init_no_event_loop();
+    melkkipdf::testing::install_backend();
     let window = MainWindow::new().expect("failed to create the window");
     // The size only takes effect once the window is shown.
     window.window().set_size(slint::LogicalSize::new(WINDOW_WIDTH, 800.0));

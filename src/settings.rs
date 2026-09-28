@@ -276,13 +276,28 @@ mod tests {
     use super::{MAX_DOCUMENTS, Session, Store};
     use crate::{FitMode, Spread, ViewSettings};
 
-    /// A fresh, empty directory for one test's settings file.
-    fn scratch(name: &str) -> PathBuf {
+    /// A fresh, empty directory for one test's settings file, removed again
+    /// when the test is done with it.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn join(&self, path: &str) -> PathBuf {
+            self.0.join(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
         let directory =
             std::env::temp_dir().join(format!("melkkipdf-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
-        directory
+        Scratch(directory)
     }
 
     fn custom() -> ViewSettings {
@@ -297,7 +312,8 @@ mod tests {
 
     #[test]
     fn saved_settings_load_back() {
-        let file = scratch("round-trip").join("documents.json");
+        let directory = scratch("round-trip");
+        let file = directory.join("documents.json");
         let mut store = Store::load(file.clone());
         store.update(Path::new("/docs/a.pdf"), custom());
         store.set_session(Session { tabs: vec!["/docs/a.pdf".into()], active: Some(0) });
@@ -311,7 +327,8 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_an_empty_store() {
-        let store = Store::load(scratch("missing").join("documents.json"));
+        let directory = scratch("missing");
+        let store = Store::load(directory.join("documents.json"));
         assert_eq!(store.session(), Session::default());
     }
 
@@ -364,7 +381,8 @@ mod tests {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
-        let file = scratch("active").join("documents.json");
+        let directory = scratch("active");
+        let file = directory.join("documents.json");
         let unsaveable = PathBuf::from(OsStr::from_bytes(b"/docs/\xff.pdf"));
         let mut store = Store::load(file.clone());
         store
@@ -377,7 +395,8 @@ mod tests {
 
     #[test]
     fn saving_without_changes_does_not_write() {
-        let file = scratch("unchanged").join("documents.json");
+        let directory = scratch("unchanged");
+        let file = directory.join("documents.json");
         let mut store = Store::load(file.clone());
         store.update(Path::new("/docs/a.pdf"), custom());
         store.save().unwrap();
