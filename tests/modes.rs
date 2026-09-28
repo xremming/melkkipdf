@@ -107,7 +107,8 @@ fn fit_page_makes_the_page_fit_the_height() {
     let h = setup(20);
     h.viewer.fit_page();
     // Portrait page in a wider-than-tall viewport: height is the constraint.
+    // Continuous mode keeps the 16px gap between rows, so a fitted row is
+    // exactly the viewport's height.
     let page_h = 800.0 * h.density();
-    assert!(page_h <= 900.0, "page height {page_h} should fit the 900px viewport");
-    assert!((page_h - 876.0).abs() < 5.0, "page height was {page_h}, expected ~876");
+    assert!((page_h - 884.0).abs() < 0.5, "page height was {page_h}, expected 884");
 }

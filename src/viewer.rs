@@ -102,8 +102,10 @@ const MAX_ZOOM: f32 = 8.0;
 /// Logical pixels per point when zoom is "100%". 96/72 renders a point at one CSS
 /// pixel's worth of density, a comfortable default reading size.
 const BASE_DENSITY: f32 = 96.0 / 72.0;
-/// Room left for the scrollbar and a small gutter when fitting.
-const FIT_GUTTER: f32 = 24.0;
+/// Width held back when fitting in continuous mode, whose scrollbar lies over
+/// the right edge of the pages. Paged mode has no scrollbar and holds back
+/// nothing.
+const SCROLLBAR_GUTTER: f32 = 24.0;
 /// Vertical gap added to each row's height. Must match the `+ 16px` in the
 /// `PageRowView` delegate so scroll-offset math matches the on-screen layout.
 const ROW_GAP: f32 = 16.0;
@@ -1012,11 +1014,20 @@ impl Viewer {
             if inner.ref_w_pt <= 0.0 || inner.ref_h_pt <= 0.0 {
                 return;
             }
-            let width_zoom = (view_w - FIT_GUTTER).max(1.0) / (inner.ref_w_pt * BASE_DENSITY);
+            // A fit should leave no more room than the layout itself needs:
+            // nothing at all in paged mode, which shows one row alone, and in
+            // continuous mode the scrollbar's width and the gap between rows,
+            // so a fitted row fills the view exactly. The gap between the two
+            // pages of a spread is not part of the pages' own width either.
+            let (gutter_w, gutter_h) =
+                if inner.continuous { (SCROLLBAR_GUTTER, ROW_GAP) } else { (0.0, 0.0) };
+            let spacing = if inner.spread == Spread::None { 0.0 } else { SPREAD_SPACING };
+            let width_zoom =
+                (view_w - gutter_w - spacing).max(1.0) / (inner.ref_w_pt * BASE_DENSITY);
             match inner.fit {
                 FitMode::Width => width_zoom,
                 FitMode::Page => {
-                    width_zoom.min((view_h - FIT_GUTTER).max(1.0) / (inner.ref_h_pt * BASE_DENSITY))
+                    width_zoom.min((view_h - gutter_h).max(1.0) / (inner.ref_h_pt * BASE_DENSITY))
                 }
                 FitMode::Free => return,
             }
