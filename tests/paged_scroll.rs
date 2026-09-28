@@ -1,6 +1,8 @@
 //! Paged-mode within-page scrolling. Run with `cargo test --features testing`.
 #![cfg(feature = "testing")]
 
+use std::time::Duration;
+
 use melkkipdf::testing::Harness;
 
 /// Paged mode with the page taller than the viewport (so there is room to
@@ -78,4 +80,72 @@ fn a_page_that_fits_pages_immediately() {
     // Nothing to scroll within, so a downward wheel pages straight away.
     h.viewer.paged_scroll(0.0, -120.0, false);
     assert_eq!(h.current_page(), 2);
+}
+
+/// Paged mode with the whole page in view, so any push past it turns pages.
+fn paged_fitting(count: usize) -> Harness {
+    let harness = Harness::uniform(count, 600.0, 800.0);
+    harness.viewport(1000.0, 1400.0);
+    harness.viewer.set_continuous(false);
+    harness.viewer.fit_page();
+    harness.viewer.nav_home();
+    harness
+}
+
+fn wait(milliseconds: u64) {
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(milliseconds));
+}
+
+#[test]
+fn small_trackpad_steps_add_up_to_a_page_turn() {
+    let h = paged_fitting(20);
+    for _ in 0..5 {
+        h.viewer.paged_scroll(0.0, -10.0, false);
+    }
+    assert_eq!(h.current_page(), 1, "turned the page before the steps added up");
+    h.viewer.paged_scroll(0.0, -10.0, false);
+    assert_eq!(h.current_page(), 2);
+}
+
+#[test]
+fn reversing_direction_starts_the_push_over() {
+    let h = paged_fitting(20);
+    h.viewer.nav_page(1);
+    h.viewer.paged_scroll(0.0, -50.0, false);
+    h.viewer.paged_scroll(0.0, 20.0, false);
+    h.viewer.paged_scroll(0.0, -50.0, false);
+    assert_eq!(h.current_page(), 2, "pushes in opposite directions added up");
+}
+
+#[test]
+fn a_fling_turns_one_page() {
+    let h = paged_fitting(20);
+    // A trackpad fling: steady events well past the flip distance, with its
+    // momentum still going long after the first page turn.
+    for _ in 0..60 {
+        h.viewer.paged_scroll(0.0, -30.0, false);
+        wait(16);
+    }
+    assert_eq!(h.current_page(), 2, "one fling turned several pages");
+
+    // Once the wheel has rested, the next push turns the next page.
+    wait(200);
+    h.viewer.paged_scroll(0.0, -60.0, false);
+    assert_eq!(h.current_page(), 3);
+}
+
+#[test]
+fn a_wheel_notch_turns_a_page_at_once() {
+    let h = paged_fitting(20);
+    h.viewer.paged_scroll(0.0, -60.0, false);
+    assert_eq!(h.current_page(), 2);
+}
+
+#[test]
+fn arrow_keys_turn_pages_without_resting() {
+    let h = paged_fitting(20);
+    for _ in 0..3 {
+        h.viewer.nav_line(1);
+    }
+    assert_eq!(h.current_page(), 4);
 }

@@ -132,6 +132,14 @@ const RETAIN_BUDGET: usize = 256 * 1024 * 1024;
 /// and each one would otherwise render the visible pages at a scale that is
 /// thrown away a moment later.
 const RESIZE_SETTLE: Duration = Duration::from_millis(150);
+/// How far, in logical pixels, the wheel has to push past the top or bottom of
+/// a page in paged mode to turn the page. One notch of a mouse wheel is 60, so
+/// a notch turns it, while a trackpad's small steps have to add up to one.
+const FLIP_OVERSCROLL: f32 = 60.0;
+/// How long the wheel has to rest after turning a page before pushing past an
+/// edge can turn another. A trackpad fling keeps sending events well after the
+/// fingers lift, and without the rest one fling would turn page after page.
+const FLIP_QUIET: Duration = Duration::from_millis(150);
 
 /// The 0/1/2 index used by the toolbar's spread radios.
 fn spread_index(spread: Spread) -> i32 {
@@ -336,6 +344,9 @@ struct Inner {
     /// Scroll offset within the current page in paged mode (logical pixels).
     paged_scroll_x: f32,
     paged_scroll_y: f32,
+    /// How far the wheel has pushed past the edge of the page in paged mode,
+    /// positive past the bottom, towards [`FLIP_OVERSCROLL`].
+    overscroll: f32,
     /// View epoch, bumped whenever the visible set changes, so the render worker
     /// can drop requests from earlier views.
     generation: u64,
@@ -375,6 +386,9 @@ pub struct Viewer {
     control: RenderControl,
     /// Renders the view once the viewport has stopped changing size.
     resize_timer: Timer,
+    /// Runs while the wheel is still settling after turning a page in paged
+    /// mode (see [`FLIP_QUIET`]).
+    flip_quiet: Timer,
 }
 
 impl Viewer {
@@ -408,6 +422,7 @@ impl Viewer {
                 scroll_px: 0.0,
                 paged_scroll_x: 0.0,
                 paged_scroll_y: 0.0,
+                overscroll: 0.0,
                 generation: 0,
                 specs: Vec::new(),
                 page_loc: Vec::new(),
@@ -427,6 +442,7 @@ impl Viewer {
             thumb_sender,
             control,
             resize_timer: Timer::default(),
+            flip_quiet: Timer::default(),
         });
 
         viewer.build_layout();
@@ -937,8 +953,9 @@ impl Viewer {
         if self.inner.borrow().continuous {
             self.scroll_by(dir as f32 * SCROLL_STEP);
         } else {
-            // A downward step (dir +1) carries a negative wheel delta.
-            self.paged_scroll(0.0, -(dir as f32) * SCROLL_STEP, false);
+            // A downward step (dir +1) carries a negative wheel delta. Each key
+            // press is meant, so it turns the page without waiting for a rest.
+            self.scroll_paged(0.0, -(dir as f32) * SCROLL_STEP, false, false);
         }
     }
 
@@ -983,14 +1000,22 @@ impl Viewer {
     }
 
     /// Paged-mode wheel handling: scroll within the current page, and move to the
-    /// previous/next page only once the top/bottom edge is reached. Shift makes a
-    /// vertical wheel scroll horizontally.
+    /// previous/next page only once the wheel pushes far enough past the
+    /// top/bottom edge (see [`FLIP_OVERSCROLL`] and [`FLIP_QUIET`]). Shift makes
+    /// a vertical wheel scroll horizontally.
     pub fn paged_scroll(&self, delta_x: f32, delta_y: f32, shift: bool) {
+        self.scroll_paged(delta_x, delta_y, shift, true);
+    }
+
+    /// Scrolls in paged mode as [`Viewer::paged_scroll`] describes, where only
+    /// a `wheel` has to rest between turning pages.
+    fn scroll_paged(&self, delta_x: f32, delta_y: f32, shift: bool, wheel: bool) {
         // A downward/rightward wheel carries a negative delta; scrolling in that
         // direction increases the offset.
         let (horizontal, vertical) = if shift { (-delta_y, 0.0) } else { (-delta_x, -delta_y) };
+        let settling = wheel && self.flip_quiet.running();
 
-        let jump = {
+        let (jump, absorbed) = {
             let mut inner = self.inner.borrow_mut();
             let (content_w, content_h) = paged_content_size(&inner);
             let (view_w, view_h) = inner.view.unwrap_or((0.0, 0.0));
@@ -999,16 +1024,34 @@ impl Viewer {
 
             inner.paged_scroll_x = (inner.paged_scroll_x + horizontal).clamp(0.0, max_x);
 
-            if vertical > 0.0 && inner.paged_scroll_y >= max_y - 0.5 {
-                1 // at the bottom, scrolling down: next page
-            } else if vertical < 0.0 && inner.paged_scroll_y <= 0.5 {
-                -1 // at the top, scrolling up: previous page
-            } else {
+            let at_edge = (vertical > 0.0 && inner.paged_scroll_y >= max_y - 0.5)
+                || (vertical < 0.0 && inner.paged_scroll_y <= 0.5);
+            if !at_edge {
+                inner.overscroll = 0.0;
                 inner.paged_scroll_y = (inner.paged_scroll_y + vertical).clamp(0.0, max_y);
-                0
+                (0, false)
+            } else if settling {
+                inner.overscroll = 0.0;
+                (0, true)
+            } else {
+                // Pushing the other way starts over.
+                if inner.overscroll * vertical < 0.0 {
+                    inner.overscroll = 0.0;
+                }
+                inner.overscroll += vertical;
+                if inner.overscroll.abs() >= FLIP_OVERSCROLL {
+                    (inner.overscroll.signum() as i32, false)
+                } else {
+                    (0, false)
+                }
             }
         };
 
+        // The rest lasts until the wheel stops pushing, however long a fling
+        // keeps going.
+        if wheel && (jump != 0 || absorbed) {
+            self.flip_quiet.start(TimerMode::SingleShot, FLIP_QUIET, || {});
+        }
         if jump != 0 {
             self.paged_step_page(jump);
         } else {
@@ -1029,6 +1072,7 @@ impl Viewer {
             }
             inner.current_row = target;
             inner.paged_scroll_x = 0.0;
+            inner.overscroll = 0.0;
             let (_, content_h) = paged_content_size(&inner);
             let view_h = inner.view.map_or(0.0, |(_, h)| h);
             inner.paged_scroll_y = if dir < 0 { (content_h - view_h).max(0.0) } else { 0.0 };
