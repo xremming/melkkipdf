@@ -250,6 +250,38 @@ fn ctrl_f_opens_the_sidebar_with_the_cursor_in_its_field() {
 }
 
 #[test]
+fn the_clear_button_empties_the_query_and_keeps_the_cursor_in_the_field() {
+    let directory = Scratch::new("search-clear");
+    let path = directory.join("book.pdf");
+    write_text_pdf(&path, &[&["Once upon a time"]]);
+    let t = Tabs::new();
+    t.open_file(&path);
+    t.finish_indexing();
+    t.window.window().set_size(slint::LogicalSize::new(1200.0, 800.0));
+    t.window.show().unwrap();
+
+    let clear_button =
+        || ElementHandle::find_by_element_id(&t.window, "MainWindow::search-clear").next();
+    press(&t, "f", true);
+    assert!(clear_button().is_none(), "an empty field has a clear button");
+
+    press(&t, "o", false);
+    assert_eq!(t.window.get_search_results().row_count(), 2);
+    let button = clear_button().expect("no clear button once there is a query");
+    button.invoke_accessible_default_action();
+    assert_eq!(t.window.get_search_text(), "");
+    assert!(clear_button().is_none(), "the clear button stayed after clearing");
+    // Clearing is an edit like any other, so it waits out the interval since
+    // the search before it.
+    wait(100);
+    assert_eq!(t.window.get_search_results().row_count(), 0);
+    assert_eq!(t.window.get_search_status(), "");
+
+    press(&t, "k", false);
+    assert_eq!(t.window.get_search_text(), "k", "typing did not go on in the field");
+}
+
+#[test]
 fn the_sidebar_sits_on_the_right_and_takes_its_width_from_the_pages() {
     let t = shown();
     let element = |id: &str| {
