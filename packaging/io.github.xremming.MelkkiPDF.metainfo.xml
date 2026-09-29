@@ -46,6 +46,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.6.0" date="2026-09-29">
+      <description>
+        <p>
+          The up and down arrows in the search field step through the hits,
+          and the results list keeps the current one in view. Long results
+          no longer make the list scroll sideways. Ctrl and a number shows
+          that tab, with Ctrl+9 showing the last one.
+        </p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-09-29">
       <description>
         <p>
