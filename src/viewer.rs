@@ -160,14 +160,19 @@ const RETAIN_BUDGET: usize = 256 * 1024 * 1024;
 /// thrown away a moment later.
 const RESIZE_SETTLE: Duration = Duration::from_millis(150);
 /// How far, in logical pixels, the wheel has to push past the top or bottom of
-/// a page in paged mode to turn the page. One notch of a mouse wheel is 60, so
-/// a notch turns it, while a trackpad's small steps have to add up to one.
+/// a page in paged mode to turn the page, once it is already scrolling (see
+/// [`WHEEL_PAUSE`]). A trackpad's stream of small steps has to add up to this,
+/// rather than turning a page per event.
 ///
-/// Nothing holds page turns back beyond this. The window cannot tell a
-/// fling's momentum from a new swipe, as winit reports both as the same
-/// kind of event, so a rest after each turn also swallowed the next swipe,
-/// and every event of it extended the rest.
+/// Nothing ever holds page turns back. The window cannot tell a fling's
+/// momentum from a new swipe, as winit reports both as the same kind of
+/// event, so a rest after each turn also swallowed the next swipe.
 const FLIP_OVERSCROLL: f32 = 60.0;
+/// How long the wheel has to be still for its next event to start a new
+/// scroll. The first push past the edge of a new scroll turns the page at
+/// once, however small, so each notch of a mouse wheel turns one page even
+/// though macOS reports a slow notch as a fraction of a line.
+const WHEEL_PAUSE: Duration = Duration::from_millis(150);
 
 impl Spread {
     /// The spread for the toolbar's 0/1/2 index; anything else is single pages.
@@ -541,6 +546,9 @@ pub struct Viewer {
     control: RenderControl,
     /// Renders the view once the viewport has stopped changing size.
     resize_timer: Timer,
+    /// Runs while the wheel is scrolling in paged mode, until it has been
+    /// still for [`WHEEL_PAUSE`].
+    wheel_scrolling: Timer,
 }
 
 impl Viewer {
@@ -596,6 +604,7 @@ impl Viewer {
             thumb_sender,
             control,
             resize_timer: Timer::default(),
+            wheel_scrolling: Timer::default(),
         });
 
         viewer.build_layout();
@@ -1121,13 +1130,16 @@ impl Viewer {
     }
 
     /// Paged-mode wheel handling: scroll within the current page, and move to the
-    /// previous/next page only once the wheel pushes far enough past the
-    /// top/bottom edge (see [`FLIP_OVERSCROLL`]). Shift makes a vertical wheel
+    /// previous/next page once the wheel pushes past the top/bottom edge, at
+    /// once when the push starts a new scroll and otherwise once it adds up to
+    /// [`FLIP_OVERSCROLL`] (see [`WHEEL_PAUSE`]). Shift makes a vertical wheel
     /// scroll horizontally.
     pub fn paged_scroll(&self, delta_x: f32, delta_y: f32, shift: bool) {
         // A downward/rightward wheel carries a negative delta; scrolling in that
         // direction increases the offset.
         let (horizontal, vertical) = if shift { (-delta_y, 0.0) } else { (-delta_x, -delta_y) };
+        let fresh = !self.wheel_scrolling.running();
+        self.wheel_scrolling.start(TimerMode::SingleShot, WHEEL_PAUSE, || {});
 
         let jump = {
             let mut inner = self.inner.borrow_mut();
@@ -1144,6 +1156,8 @@ impl Viewer {
                 inner.overscroll = 0.0;
                 inner.paged_scroll_y = (inner.paged_scroll_y + vertical).clamp(0.0, max_y);
                 0
+            } else if fresh {
+                vertical.signum() as i32
             } else {
                 // Pushing the other way starts over.
                 if inner.overscroll * vertical < 0.0 {

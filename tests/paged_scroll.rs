@@ -97,24 +97,59 @@ fn wait(milliseconds: u64) {
 }
 
 #[test]
-fn small_trackpad_steps_add_up_to_a_page_turn() {
+fn each_mouse_wheel_notch_turns_a_page_however_small() {
     let h = paged_fitting(20);
-    for _ in 0..5 {
-        h.viewer.paged_scroll(0.0, -10.0, false);
+    // macOS reports a slow notch as a fraction of a line.
+    for page in 2..=4 {
+        h.viewer.paged_scroll(0.0, -6.0, false);
+        assert_eq!(h.current_page(), page, "a notch did not turn the page");
+        wait(300);
     }
-    assert_eq!(h.current_page(), 1, "turned the page before the steps added up");
+    h.viewer.paged_scroll(0.0, 6.0, false);
+    assert_eq!(h.current_page(), 3, "a notch back did not turn the page");
+}
+
+#[test]
+fn a_stream_of_small_steps_adds_up_to_each_page_turn() {
+    let h = paged_fitting(20);
+    // The first step of a new scroll turns the page, and the rest of the
+    // stream turns one more for every 60px it travels.
     h.viewer.paged_scroll(0.0, -10.0, false);
     assert_eq!(h.current_page(), 2);
+    for _ in 0..5 {
+        h.viewer.paged_scroll(0.0, -10.0, false);
+        wait(16);
+    }
+    assert_eq!(h.current_page(), 2, "turned the page before the steps added up");
+    h.viewer.paged_scroll(0.0, -10.0, false);
+    assert_eq!(h.current_page(), 3);
 }
 
 #[test]
 fn reversing_direction_starts_the_push_over() {
     let h = paged_fitting(20);
     h.viewer.nav_page(1);
+    h.viewer.paged_scroll(0.0, -60.0, false);
+    assert_eq!(h.current_page(), 3);
     h.viewer.paged_scroll(0.0, -50.0, false);
     h.viewer.paged_scroll(0.0, 20.0, false);
     h.viewer.paged_scroll(0.0, -50.0, false);
-    assert_eq!(h.current_page(), 2, "pushes in opposite directions added up");
+    assert_eq!(h.current_page(), 3, "pushes in opposite directions added up");
+}
+
+#[test]
+fn reaching_the_edge_while_scrolling_does_not_turn_the_page_at_once() {
+    let h = paged_tall(20);
+    // A scroll that arrives at the bottom of a tall page keeps going for a
+    // moment, and a small push then is still part of it.
+    h.viewer.paged_scroll(0.0, -100000.0, false);
+    h.viewer.paged_scroll(0.0, -10.0, false);
+    assert_eq!(h.current_page(), 1, "the page turned the moment the scroll reached its bottom");
+
+    // After a pause, the same small push is a new notch and turns the page.
+    wait(300);
+    h.viewer.paged_scroll(0.0, -10.0, false);
+    assert_eq!(h.current_page(), 2);
 }
 
 #[test]
