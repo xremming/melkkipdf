@@ -96,6 +96,11 @@ fn paged_page_fit_fits_a_spread_and_its_gap_exactly() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the macOS widget style insets the list's contents by 2px a side, which this \
+              measures against the page area's edges"
+)]
 fn continuous_page_fit_leaves_only_the_gap_between_pages() {
     let t = window_with(600.0, 800.0);
     t.viewer(0).fit_page();
@@ -132,6 +137,11 @@ fn top_page(content: Rect, pages: &[Rect]) -> Rect {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the macOS widget style insets the list's contents by 2px a side, which this \
+              measures against the page area's edges"
+)]
 fn continuous_page_fit_ignores_an_outsized_page() {
     let t = window_with_a_map();
     t.viewer(0).fit_page();
