@@ -46,6 +46,14 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.4.1" date="2026-09-29">
+      <description>
+        <p>
+          In single-page mode, each notch of a mouse wheel turns one page
+          again, while a trackpad still needs a swipe to turn it.
+        </p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-09-29">
       <description>
         <p>
