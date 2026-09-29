@@ -41,10 +41,12 @@ export struct PageEntry {
 // One search hit in the results list: its 0-based page, and the text found
 // with some of the text before and after it. `page-hits` is how many hits its
 // page has on the page's first hit, and 0 on the rest, so the list heads each
-// page's hits once.
+// page's hits once. `headings` is how many page headings the list has down to
+// and including this hit's own, so the list can tell where the hit sits.
 export struct SearchResult {
     page: int,
     page-hits: int,
+    headings: int,
     before: string,
     found: string,
     after: string,
@@ -504,6 +506,31 @@ export component MainWindow inherits Window {
         root.search-text = "";
         root.search-edited("");
         search-input.focus();
+    }
+
+    // The heights of a hit's row in the results list, of a page's heading
+    // above its first hit, and of the gap above every heading but the first.
+    property <length> search-row-height: 24px;
+    property <length> search-heading-height: 16px;
+    property <length> search-heading-gap: 6px;
+
+    // Keeps the current hit, with its page's heading if it has one, in view
+    // in the results list. The list only builds the rows it shows, so where
+    // the hit sits is worked out from the headings above it.
+    changed search-current => {
+        if (root.search-current >= 0 && root.search-current < root.search-results.length) {
+            let result = root.search-results[root.search-current];
+            let bottom = (root.search-current + 1) * root.search-row-height
+                + result.headings * root.search-heading-height
+                + (result.headings - 1) * root.search-heading-gap;
+            let top = bottom - root.search-row-height
+                - (result.page-hits > 0 ? root.search-heading-height : 0px);
+            if (top < -search-list.content-y) {
+                search-list.content-y = -top;
+            } else if (bottom > search-list.visible-height - search-list.content-y) {
+                search-list.content-y = search-list.visible-height - bottom;
+            }
+        }
     }
 
     // Opening the search sidebar puts the cursor in its field, and closing
@@ -1105,11 +1132,19 @@ export component MainWindow inherits Window {
                                     root.search-edited(self.text);
                                 }
                                 key-pressed(event) => {
-                                    // Enter goes to the next hit, Shift+Enter
-                                    // to the previous one, and Esc back to the
-                                    // document.
+                                    // Enter and Down go to the next hit,
+                                    // Shift+Enter and Up to the previous one,
+                                    // and Esc back to the document.
                                     if (event.text == Key.Return) {
                                         root.search-step(event.modifiers.shift ? -1 : 1);
+                                        return accept;
+                                    }
+                                    if (event.text == Key.DownArrow) {
+                                        root.search-step(1);
+                                        return accept;
+                                    }
+                                    if (event.text == Key.UpArrow) {
+                                        root.search-step(-1);
                                         return accept;
                                     }
                                     if (event.text == Key.Escape) {
@@ -1172,10 +1207,11 @@ export component MainWindow inherits Window {
                             wrap: word-wrap;
                         }
 
-                        ListView {
+                        search-list := ListView {
                             for result[index] in root.search-results: VerticalLayout {
-                                padding-top: result.page-hits > 0 && index > 0 ? 6px : 0px;
+                                padding-top: result.page-hits > 0 && index > 0 ? root.search-heading-gap : 0px;
                                 if result.page-hits > 0: HorizontalLayout {
+                                    height: root.search-heading-height;
                                     padding-left: 6px;
                                     padding-right: 6px;
                                     padding-bottom: 2px;
@@ -1191,9 +1227,12 @@ export component MainWindow inherits Window {
                                         font-size: 11px;
                                     }
                                 }
-                                Rectangle {
-                                    height: 24px;
+                                search-result := Rectangle {
+                                    height: root.search-row-height;
                                     border-radius: 3px;
+                                    accessible-role: list-item;
+                                    accessible-label: result.before + result.found + result.after;
+                                    accessible-item-selected: index == root.search-current;
                                     background: index == root.search-current
                                         ? #3a4a60
                                         : (result-touch.has-hover ? #333333 : transparent);

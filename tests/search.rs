@@ -306,6 +306,71 @@ fn the_clear_button_empties_the_query_and_keeps_the_cursor_in_the_field() {
     assert_eq!(t.window.get_search_text(), "k", "typing did not go on in the field");
 }
 
+/// Opens a real document with `pages` of text and shows it, with its text
+/// indexed for search.
+fn shown_with_text(name: &str, pages: &[&[&str]]) -> (Scratch, Tabs) {
+    let directory = Scratch::new(name);
+    let path = directory.join("book.pdf");
+    write_text_pdf(&path, pages);
+    let t = Tabs::new();
+    t.open_file(&path);
+    t.finish_indexing();
+    t.window.window().set_size(slint::LogicalSize::new(1200.0, 800.0));
+    t.window.show().unwrap();
+    (directory, t)
+}
+
+#[test]
+fn arrow_keys_in_the_field_step_between_hits() {
+    let (_directory, t) =
+        shown_with_text("search-arrows", &[&["Chapter one"], &["The end"], &["Another end"]]);
+    press(&t, "f", true);
+    for key in ["e", "n", "d"] {
+        press(&t, key, false);
+    }
+    assert_eq!(t.window.get_search_current(), 0);
+
+    press(&t, Key::DownArrow, false);
+    assert_eq!(t.window.get_search_current(), 1);
+    press(&t, Key::UpArrow, false);
+    assert_eq!(t.window.get_search_current(), 0);
+    assert_eq!(t.window.get_search_text(), "end", "the arrows changed the query");
+}
+
+#[test]
+fn stepping_keeps_the_current_hit_in_view_in_the_list() {
+    let pages: Vec<[&str; 1]> = vec!["A line to find"; 60].into_iter().map(|line| [line]).collect();
+    let pages: Vec<&[&str]> = pages.iter().map(|page| page.as_slice()).collect();
+    let (_directory, t) = shown_with_text("search-list-scroll", &pages);
+    press(&t, "f", true);
+    press(&t, "f", false);
+    assert_eq!(t.window.get_search_results().row_count(), 60);
+
+    let list = ElementHandle::find_by_element_id(&t.window, "MainWindow::search-list")
+        .next()
+        .expect("no results list");
+    let list_top = list.absolute_position().y;
+    let list_bottom = list_top + list.size().height;
+    let current_row_in_view = || {
+        ElementHandle::find_by_element_id(&t.window, "MainWindow::search-result")
+            .filter(|row| row.accessible_item_selected() == Some(true))
+            .any(|row| {
+                let top = row.absolute_position().y;
+                top >= list_top && top + row.size().height <= list_bottom
+            })
+    };
+    assert!(current_row_in_view(), "the first hit is not in view");
+
+    // Up from the first hit goes round to the last, far down the list, and
+    // Down from there back to the top.
+    press(&t, Key::UpArrow, false);
+    assert_eq!(t.window.get_search_current(), 59);
+    assert!(current_row_in_view(), "the list did not scroll down to the last hit");
+    press(&t, Key::DownArrow, false);
+    assert_eq!(t.window.get_search_current(), 0);
+    assert!(current_row_in_view(), "the list did not scroll back up to the first hit");
+}
+
 #[test]
 fn the_sidebar_sits_on_the_right_and_takes_its_width_from_the_pages() {
     let t = shown();

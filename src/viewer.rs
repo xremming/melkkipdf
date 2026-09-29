@@ -1705,6 +1705,7 @@ impl Viewer {
         let rows: Vec<SearchResult> = {
             let search = self.search.borrow();
             let hits = &search.hits;
+            let mut headings = 0;
             hits.iter()
                 .enumerate()
                 .map(|(index, hit)| {
@@ -1713,6 +1714,7 @@ impl Viewer {
                     // together and only its first carries the count.
                     let first_on_page = index == 0 || hits[index - 1].page != hit.page;
                     let page_hits = if first_on_page {
+                        headings += 1;
                         hits[index..].iter().take_while(|h| h.page == hit.page).count()
                     } else {
                         0
@@ -1720,6 +1722,7 @@ impl Viewer {
                     SearchResult {
                         page: hit.page as i32,
                         page_hits: page_hits as i32,
+                        headings,
                         before: snippet.before.into(),
                         found: snippet.found.into(),
                         after: snippet.after.into(),
