@@ -7,6 +7,7 @@
 #[cfg(target_os = "macos")]
 mod macos;
 mod render;
+mod search;
 mod settings;
 mod viewer;
 
@@ -21,6 +22,7 @@ use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
 use render::{Loaded, RenderControl, WorkerMessage};
+use search::{IndexHandle, Indexed};
 use settings::{Session, Store};
 
 pub use viewer::{FitMode, Spread, ViewSettings, Viewer};
@@ -82,6 +84,9 @@ struct Tab {
     outline: ModelRc<OutlineItem>,
     /// The worker reading the document, until it has.
     loading: Option<Loading>,
+    /// The indexer reading the document's text for search, which stops when
+    /// the tab closes.
+    indexer: Option<IndexHandle>,
 }
 
 /// Holds the live window and a tab per open document. There is one window and
@@ -108,6 +113,9 @@ pub(crate) struct App {
     /// Where each document's worker reports that it has read the document.
     loads: Receiver<Loaded>,
     load_sender: Sender<Loaded>,
+    /// Where each document's indexer sends the text it has read.
+    indexes: Receiver<Indexed>,
+    index_sender: Sender<Indexed>,
 }
 
 impl App {
@@ -115,6 +123,7 @@ impl App {
         let titles = Rc::new(VecModel::default());
         window.set_tabs(ModelRc::from(titles.clone()));
         let (load_sender, loads) = mpsc::channel();
+        let (index_sender, indexes) = mpsc::channel();
         let app = Rc::new(Self {
             window: window.as_weak(),
             tabs: RefCell::new(Vec::new()),
@@ -127,6 +136,8 @@ impl App {
             notice_timer: Timer::default(),
             loads,
             load_sender,
+            indexes,
+            index_sender,
         });
         app.show_empty();
         wire_callbacks(window, &app);
@@ -187,6 +198,7 @@ impl App {
             viewer: None,
             outline: ModelRc::default(),
             loading: Some(Loading { path, pages, control }),
+            indexer: None,
         }))
     }
 
@@ -229,6 +241,14 @@ impl App {
             .into_iter()
             .map(|(title, page, depth)| OutlineItem { title: title.into(), page, depth })
             .collect();
+        // Indexing starts as soon as the document is open, so its text is
+        // ready by the time the reader searches.
+        let indexer = search::spawn_indexer(
+            loading.path.clone(),
+            loaded.doc,
+            window.as_weak(),
+            self.index_sender.clone(),
+        );
         let thumbnails = render::spawn_thumbnails(loading.path, loaded.doc, window.as_weak());
         let workers = Workers { pages: loading.pages, thumbnails, control: loading.control };
         let path = self.tabs.borrow()[index].path.clone();
@@ -237,6 +257,7 @@ impl App {
             let mut tabs = self.tabs.borrow_mut();
             tabs[index].viewer = Some(viewer);
             tabs[index].outline = ModelRc::new(VecModel::from(outline));
+            tabs[index].indexer = Some(indexer);
         }
         if self.active.get() == Some(index) {
             self.show(index);
@@ -263,7 +284,29 @@ impl App {
         let window = self.window.upgrade()?;
         let id = self.allocate_id();
         let viewer = self.make_viewer(&window, &path, pages_pt, spawn(id));
-        Some(self.add_tab(Tab { id, path, title, viewer: Some(viewer), outline, loading: None }))
+        Some(self.add_tab(Tab {
+            id,
+            path,
+            title,
+            viewer: Some(viewer),
+            outline,
+            loading: None,
+            indexer: None,
+        }))
+    }
+
+    /// Takes in the text every document's indexer has read since last time.
+    pub(crate) fn receive_indexes(&self) {
+        while let Ok(indexed) = self.indexes.try_recv() {
+            self.take_indexed(indexed);
+        }
+    }
+
+    /// Hands pages an indexer has read to its document's viewer. A tab closed
+    /// since has nothing to take them.
+    pub(crate) fn take_indexed(&self, indexed: Indexed) {
+        let Indexed { doc, first_page, pages } = indexed;
+        self.with_document(doc, |viewer| viewer.on_text_indexed(first_page, pages));
     }
 
     /// A viewer for the document at `path`, in the view it was last left in.
@@ -472,13 +515,17 @@ impl App {
         Self::clear_document(&window, "Open a PDF to get started.");
     }
 
-    /// Shows no pages, only `status` in their place.
+    /// Shows no pages, only `status` in their place, and nothing to search.
     fn clear_document(window: &MainWindow, status: &str) {
         window.set_rows(ModelRc::default());
         window.set_thumb_rows(ModelRc::default());
         window.set_page_count(0);
         window.set_current_page(0);
         window.set_status(status.into());
+        window.set_search_results(ModelRc::default());
+        window.set_search_text(SharedString::new());
+        window.set_search_status(SharedString::new());
+        window.set_search_current(-1);
     }
 
     /// Highlights the window while files are dragged over it, and opens each
@@ -755,6 +802,26 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         move |doc, page| {
             if let Some(page) = index(page) {
                 app.with_document(doc, |v| v.on_thumbnail_failed(page));
+            }
+        }
+    });
+    window.on_text_indexed({
+        let app = app.clone();
+        move || app.receive_indexes()
+    });
+    window.on_search_edited({
+        let app = app.clone();
+        move |query| app.with_viewer(|v| v.search_edited(query.as_str()))
+    });
+    window.on_search_step({
+        let app = app.clone();
+        move |dir| app.with_viewer(|v| v.search_step(dir))
+    });
+    window.on_go_to_search_result({
+        let app = app.clone();
+        move |result| {
+            if let Some(result) = index(result) {
+                app.with_viewer(|v| v.go_to_search_result(result));
             }
         }
     });

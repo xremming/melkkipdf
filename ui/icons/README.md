@@ -10,6 +10,7 @@ the Apache License 2.0, and are used here under those terms.
 | `menu.svg`         | `toolbarButton-viewsManagerToggle.svg`      |
 | `open.svg`         | `toolbarButton-openFile.svg`                |
 | `paged.svg`        | `secondaryToolbarButton-scrollPage.svg`     |
+| `search.svg`       | `toolbarButton-search.svg`                  |
 | `spread-even.svg`  | `secondaryToolbarButton-spreadEven.svg`     |
 | `spread-odd.svg`   | `secondaryToolbarButton-spreadOdd.svg`      |
 | `spread-single.svg`| `secondaryToolbarButton-spreadNone.svg`     |

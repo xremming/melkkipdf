@@ -16,6 +16,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc};
 
 use crate::render::{RenderControl, WorkerMessage};
+use crate::search::{PageText, PageTextBuilder};
 use crate::settings::Store;
 use crate::{App, FileDrag, MainWindow, PageLayout, ViewSettings, Viewer, Workers};
 
@@ -100,6 +101,41 @@ impl Harness {
         })
     }
 
+    /// Gives the viewer the text of every page as its indexer would, each page
+    /// a list of lines (see [`text_pages`]).
+    pub fn index_text(&self, pages: &[&[&str]]) {
+        self.index_text_from(0, pages);
+    }
+
+    /// Like [`Harness::index_text`], for the pages from `first_page` on, as
+    /// one of the batches the indexer sends.
+    pub fn index_text_from(&self, first_page: usize, pages: &[&[&str]]) {
+        self.viewer.on_text_indexed(first_page, text_pages(pages));
+    }
+
+    /// The hits the search outlines on the 0-based `page`, as `(y, current)`
+    /// pairs.
+    pub fn highlights(&self, page: usize) -> Vec<(f32, bool)> {
+        let model = self.window.get_rows();
+        (0..model.row_count())
+            .filter_map(|index| model.row_data(index))
+            .flat_map(|row| [row.left, row.right])
+            .filter(|entry| entry.page == page as i32)
+            .flat_map(|entry| {
+                (0..entry.highlights.row_count())
+                    .filter_map(|index| entry.highlights.row_data(index))
+                    .map(|highlight| (highlight.y, highlight.current))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The 0-based pages of the listed search results, in order.
+    pub fn result_pages(&self) -> Vec<i32> {
+        let model = self.window.get_search_results();
+        (0..model.row_count()).filter_map(|index| model.row_data(index)).map(|r| r.page).collect()
+    }
+
     /// Delivers a rendered image for the 0-based `page`, as the worker does,
     /// rendered at the scale the viewer asks for now.
     pub fn deliver(&self, page: usize, image: slint::Image) {
@@ -165,6 +201,27 @@ impl Harness {
             .map(|row| (row.left.page, row.has_right.then_some(row.right.page)))
             .collect()
     }
+}
+
+/// Page text as the indexer would read it, each page a list of lines. Lines
+/// start 72pt from the top and are 14pt tall and 20pt apart, and each
+/// character is 7pt wide from 72pt in.
+fn text_pages(pages: &[&[&str]]) -> Vec<PageText> {
+    pages
+        .iter()
+        .map(|lines| {
+            let mut builder = PageTextBuilder::default();
+            for (index, line) in lines.iter().enumerate() {
+                let top = 72.0 + index as f32 * 20.0;
+                builder.start_line(top, top + 14.0);
+                for (column, character) in line.chars().enumerate() {
+                    let x = 72.0 + column as f32 * 7.0;
+                    builder.push(character, x, x + 7.0);
+                }
+            }
+            builder.finish()
+        })
+        .collect()
 }
 
 /// The 0-based pages in the row at the top of `window`'s view, worked out
@@ -295,6 +352,25 @@ impl Tabs {
     /// to it, so advance the mock time before looking for its tab.
     pub fn drop_file(&self, path: &Path) {
         self.app.file_drag(FileDrag::Dropped(path.to_path_buf()));
+    }
+
+    /// Waits for every open document's indexer to read all of its text, and
+    /// takes it in as the event loop would.
+    pub fn finish_indexing(&self) {
+        let pending = || {
+            self.app.tabs.borrow().iter().any(|tab| {
+                tab.indexer.is_some()
+                    && tab.viewer.as_ref().is_some_and(|viewer| !viewer.text_indexed())
+            })
+        };
+        while pending() {
+            let indexed = self
+                .app
+                .indexes
+                .recv_timeout(Duration::from_secs(30))
+                .expect("a document took too long to index");
+            self.app.take_indexed(indexed);
+        }
     }
 
     /// Writes out what the app remembers, as it does when a tab closes, the

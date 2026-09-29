@@ -49,6 +49,7 @@ cargo test --features testing
 - Single, odd, and even page spreads
 - Zoom, fit-width, and fit-page
 - Bookmark sidebar with page thumbnails
+- Full-text search, with every hit listed in a sidebar and outlined on its page
 - Keyboard-driven navigation
 
 ## Keyboard shortcuts
@@ -64,6 +65,9 @@ Ctrl is ⌘ on macOS.
 | F, P                                   | Fit the page width, fit the whole page        |
 | C                                      | Switch between continuous and paged           |
 | 1, 2, 3                                | Single pages, odd spreads, even spreads       |
+| Ctrl+F                                 | Search                                        |
+| Enter, Shift+Enter in the search field | Next or previous hit                          |
+| Esc in the search field                | Back to the document                          |
 | Ctrl+Tab, Ctrl+Shift+Tab               | Next or previous tab                          |
 | Ctrl+W                                 | Close the tab                                 |
 

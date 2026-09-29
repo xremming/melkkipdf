@@ -23,7 +23,8 @@ use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, 
 use crate::render::{
     RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale, scale_key,
 };
-use crate::{MainWindow, PageEntry, PageLayout, PageRow};
+use crate::search::{self, Hit, PageText};
+use crate::{Highlight, MainWindow, PageEntry, PageLayout, PageRow, SearchResult};
 
 /// How pages are grouped into rows.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -148,6 +149,13 @@ const USUAL_SHARE: f32 = 0.9;
 /// such as a fold-out map in a book of scanned pages, is shrunk to that size
 /// in continuous mode instead of making every other row as large as itself.
 const OUTLIER_FACTOR: f32 = 1.25;
+/// How often a search runs while the query is being typed. The first
+/// keystroke searches at once, and the rest at most this often, always ending
+/// with the latest query. Unlike waiting for typing to stop, a longer query
+/// already shows hits for its first letters.
+const SEARCH_INTERVAL: Duration = Duration::from_millis(100);
+/// The most hits a search lists and outlines. Every hit is still counted.
+const MAX_HITS: usize = 2000;
 /// Rows to prefetch on either side of the visible range while idle.
 const PREFETCH_ROWS: usize = 4;
 /// Bytes of rendered page images a viewer keeps at once. A budget in bytes
@@ -450,10 +458,34 @@ fn reference_dims(specs: &[RowSpec], pages_pt: &[(f32, f32)]) -> (f32, f32) {
         .fold((0.0, 0.0), |(max_w, max_h), (width, height)| (max_w.max(width), max_h.max(height)))
 }
 
+/// The search hits outlined on `page`, as its slot in a row carries them.
+fn highlights_of(inner: &Inner, page: usize) -> ModelRc<Highlight> {
+    inner.highlights.get(&page).map_or_else(ModelRc::default, |highlights| {
+        ModelRc::new(VecModel::from(highlights.clone()))
+    })
+}
+
 /// The page being read when `spec` is the row at the top: the page last asked
 /// for if the row holds it, otherwise the row's first page.
 fn reading_page_in(inner: &Inner, spec: &RowSpec) -> usize {
     if spec.right == Some(inner.reading_page) { inner.reading_page } else { spec.left }
+}
+
+/// A document's search: its text, as much as has been indexed, and what the
+/// current query found in it.
+#[derive(Default)]
+struct SearchState {
+    /// Each page's text, from the first page on, as far as it is indexed.
+    index: Vec<PageText>,
+    query: String,
+    hits: Vec<Hit>,
+    /// How many hits there are in all, including those past [`MAX_HITS`].
+    total: usize,
+    /// The index in `hits` of the hit the reader is on.
+    current: Option<usize>,
+    /// Whether the query changed since the view last moved to one of its
+    /// hits, so the next search that finds any moves to the first.
+    jump: bool,
 }
 
 /// Everything the viewer knows about its document and how it is shown. Kept
@@ -480,6 +512,8 @@ struct Inner {
     failed: HashSet<usize>,
     /// The pages whose thumbnail failed to render.
     thumb_failed: HashSet<usize>,
+    /// The search hits outlined on each page.
+    highlights: HashMap<usize, Vec<Highlight>>,
     spread: Spread,
     /// Continuous scrolling, rather than one row at a time.
     continuous: bool,
@@ -546,6 +580,16 @@ pub struct Viewer {
     control: RenderControl,
     /// Renders the view once the viewport has stopped changing size.
     resize_timer: Timer,
+    /// The document's text as far as it has been indexed, and the search
+    /// over it.
+    search: RefCell<SearchState>,
+    /// The hits of the search, as the results list shows them.
+    results: Rc<VecModel<SearchResult>>,
+    /// Runs for [`SEARCH_INTERVAL`] after each search, holding the next one
+    /// back until it ends.
+    search_timer: Timer,
+    /// Whether a search is waiting for the timer.
+    search_pending: Cell<bool>,
     /// Runs while the wheel is scrolling in paged mode, until it has been
     /// still for [`WHEEL_PAUSE`].
     wheel_scrolling: Timer,
@@ -578,6 +622,7 @@ impl Viewer {
                 retained: HashMap::new(),
                 failed: HashSet::new(),
                 thumb_failed: HashSet::new(),
+                highlights: HashMap::new(),
                 spread: settings.spread,
                 continuous: settings.continuous,
                 current_row: 0,
@@ -604,6 +649,10 @@ impl Viewer {
             thumb_sender,
             control,
             resize_timer: Timer::default(),
+            search: RefCell::new(SearchState::default()),
+            results: Rc::new(VecModel::default()),
+            search_timer: Timer::default(),
+            search_pending: Cell::new(false),
             wheel_scrolling: Timer::default(),
         });
 
@@ -659,7 +708,10 @@ impl Viewer {
             window.set_spread_mode(inner.spread.index());
             window.set_continuous(inner.continuous);
             window.set_row_height_pt(inner.ref_h_pt);
+            window.set_search_results(ModelRc::from(self.results.clone()));
+            window.set_search_text(self.search.borrow().query.as_str().into());
         }
+        self.publish_search();
         let scroll_px = self.inner.borrow().scroll_px;
         self.show_offset(scroll_px);
         self.apply_density();
@@ -742,7 +794,9 @@ impl Viewer {
             (row_index, is_right, width_pt, height_pt, is_current_paged, evicted)
         };
 
-        let entry = PageEntry { page: index as i32, width_pt, height_pt, image, failed: false };
+        let highlights = highlights_of(&self.inner.borrow(), index);
+        let entry =
+            PageEntry { page: index as i32, width_pt, height_pt, image, failed: false, highlights };
         self.set_row_entry(row_index, is_right, entry);
         if is_current_paged {
             self.refresh_current_row();
@@ -1008,7 +1062,14 @@ impl Viewer {
             let (width_pt, height_pt) = inner.pages_pt[index];
             (row, is_right, width_pt, height_pt)
         };
-        let entry = PageEntry { page: index as i32, width_pt, height_pt, image, failed: false };
+        let entry = PageEntry {
+            page: index as i32,
+            width_pt,
+            height_pt,
+            image,
+            failed: false,
+            highlights: ModelRc::default(),
+        };
         self.set_thumb_entry(row, is_right, entry);
     }
 
@@ -1100,6 +1161,7 @@ impl Viewer {
             height_pt,
             image: inner.thumb_images[page].clone(),
             failed: inner.thumb_failed.contains(&page),
+            highlights: ModelRc::default(),
         }
     }
 
@@ -1507,6 +1569,7 @@ impl Viewer {
             height_pt,
             image: Image::default(),
             failed: inner.failed.contains(&page),
+            highlights: highlights_of(inner, page),
         }
     }
 
@@ -1518,6 +1581,292 @@ impl Viewer {
             height_pt: 0.0,
             image: Image::default(),
             failed: false,
+            highlights: ModelRc::default(),
+        }
+    }
+
+    /// Takes in `pages`, the text of the pages from `first_page` on that the
+    /// document's indexer has read, and searches again with them.
+    pub(crate) fn on_text_indexed(&self, first_page: usize, pages: Vec<PageText>) {
+        let searching = {
+            let mut search = self.search.borrow_mut();
+            if first_page != search.index.len() {
+                return;
+            }
+            search.index.extend(pages);
+            !search.query.trim().is_empty()
+        };
+        if searching {
+            self.request_search();
+        } else {
+            self.publish_search();
+        }
+    }
+
+    /// Whether every page's text has been indexed.
+    pub fn text_indexed(&self) -> bool {
+        self.search.borrow().index.len() >= self.inner.borrow().pages_pt.len()
+    }
+
+    /// The reader edited the search query. The view moves to the first hit
+    /// from the page being read once the search finds one.
+    pub fn search_edited(&self, query: &str) {
+        {
+            let mut search = self.search.borrow_mut();
+            search.query = query.to_string();
+            search.jump = true;
+        }
+        self.request_search();
+    }
+
+    /// Moves to the next (`dir` +1) or previous (-1) hit, round from the last
+    /// to the first. Without a current hit, starts from the page being read.
+    pub fn search_step(&self, dir: i32) {
+        let reading = self.settings().page;
+        let next = {
+            let mut search = self.search.borrow_mut();
+            let count = search.hits.len();
+            if count == 0 {
+                return;
+            }
+            let next = match search.current {
+                Some(current) => (current as i64 + dir as i64).rem_euclid(count as i64) as usize,
+                None if dir < 0 => {
+                    search.hits.iter().rposition(|hit| hit.page <= reading).unwrap_or(count - 1)
+                }
+                None => search.hits.iter().position(|hit| hit.page >= reading).unwrap_or(0),
+            };
+            search.current = Some(next);
+            search.jump = false;
+            next
+        };
+        self.show_current_hit();
+        self.go_to_hit(next);
+    }
+
+    /// Moves to the hit at `index` in the results list.
+    pub fn go_to_search_result(&self, index: usize) {
+        {
+            let mut search = self.search.borrow_mut();
+            if index >= search.hits.len() {
+                return;
+            }
+            search.current = Some(index);
+            search.jump = false;
+        }
+        self.show_current_hit();
+        self.go_to_hit(index);
+    }
+
+    /// Searches now, or once [`SEARCH_INTERVAL`] has passed since the last
+    /// search, so typing searches as it goes without searching on every key.
+    fn request_search(&self) {
+        if self.search_timer.running() {
+            self.search_pending.set(true);
+            return;
+        }
+        self.run_search();
+        let me = self.me.clone();
+        self.search_timer.start(TimerMode::SingleShot, SEARCH_INTERVAL, move || {
+            if let Some(viewer) = me.upgrade()
+                && viewer.search_pending.replace(false)
+            {
+                viewer.request_search();
+            }
+        });
+    }
+
+    /// Searches the indexed text for the query and shows what it found. A hit
+    /// the reader was on stays current if it is still found.
+    fn run_search(&self) {
+        let reading = self.settings().page;
+        let jump_to = {
+            let mut search = self.search.borrow_mut();
+            let found = search::search(&search.index, &search.query, MAX_HITS);
+            let previous = search.current.and_then(|current| search.hits.get(current).copied());
+            search.current = if search.jump {
+                found
+                    .hits
+                    .iter()
+                    .position(|hit| hit.page >= reading)
+                    .or((!found.hits.is_empty()).then_some(0))
+            } else {
+                previous.and_then(|previous| found.hits.iter().position(|hit| *hit == previous))
+            };
+            let jump_to = if search.jump { search.current } else { None };
+            if jump_to.is_some() || search.query.trim().is_empty() {
+                search.jump = false;
+            }
+            search.hits = found.hits;
+            search.total = found.total;
+            jump_to
+        };
+
+        let rows: Vec<SearchResult> = {
+            let search = self.search.borrow();
+            search
+                .hits
+                .iter()
+                .map(|hit| {
+                    let snippet = search.index[hit.page].snippet(hit.start, hit.end);
+                    SearchResult {
+                        page: hit.page as i32,
+                        before: snippet.before.into(),
+                        found: snippet.found.into(),
+                        after: snippet.after.into(),
+                    }
+                })
+                .collect()
+        };
+        self.results.set_vec(rows);
+        self.show_current_hit();
+        if let Some(index) = jump_to {
+            self.go_to_hit(index);
+        }
+    }
+
+    /// Outlines every hit on its page, the current one stronger, and tells
+    /// the window how the search went.
+    fn show_current_hit(&self) {
+        let highlights = {
+            let search = self.search.borrow();
+            let mut highlights: HashMap<usize, Vec<Highlight>> = HashMap::new();
+            for (index, hit) in search.hits.iter().enumerate() {
+                let current = search.current == Some(index);
+                for area in search.index[hit.page].areas(hit.start, hit.end) {
+                    highlights.entry(hit.page).or_default().push(Highlight {
+                        x: area.x,
+                        y: area.y,
+                        width: area.width,
+                        height: area.height,
+                        current,
+                    });
+                }
+            }
+            highlights
+        };
+        self.set_highlights(highlights);
+        self.publish_search();
+    }
+
+    /// Replaces the outlined hits, updating only the pages whose outlines
+    /// changed.
+    fn set_highlights(&self, highlights: HashMap<usize, Vec<Highlight>>) {
+        let changed: Vec<(usize, usize, bool, ModelRc<Highlight>)> = {
+            let mut inner = self.inner.borrow_mut();
+            let pages: HashSet<usize> =
+                inner.highlights.keys().chain(highlights.keys()).copied().collect();
+            let changed: Vec<usize> = pages
+                .into_iter()
+                .filter(|page| inner.highlights.get(page) != highlights.get(page))
+                .collect();
+            inner.highlights = highlights;
+            changed
+                .into_iter()
+                .filter_map(|page| {
+                    let &(row, is_right) = inner.page_loc.get(page)?;
+                    Some((row, page, is_right, highlights_of(&inner, page)))
+                })
+                .collect()
+        };
+        let current_row = self.inner.borrow().current_row;
+        let mut current_changed = false;
+        for (row, _, is_right, highlights) in changed {
+            let Some(mut page_row) = self.model.row_data(row) else {
+                continue;
+            };
+            if is_right {
+                page_row.right.highlights = highlights;
+            } else {
+                page_row.left.highlights = highlights;
+            }
+            self.model.set_row_data(row, page_row);
+            current_changed |= row == current_row;
+        }
+        if current_changed && !self.inner.borrow().continuous {
+            self.refresh_current_row();
+        }
+    }
+
+    /// Tells the window how the search went and which hit is current.
+    fn publish_search(&self) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let pages = self.inner.borrow().pages_pt.len();
+        let search = self.search.borrow();
+        let indexed = search.index.len().min(pages);
+        let indexing = indexed < pages;
+        let so_far = if indexing { " so far" } else { "" };
+        let status = if !indexing && search.index.iter().all(PageText::is_empty) {
+            "This document has no searchable text.".to_string()
+        } else if search.query.trim().is_empty() {
+            if indexing {
+                format!("Indexing for search, {indexed} of {pages} pages.")
+            } else {
+                String::new()
+            }
+        } else {
+            match search.total {
+                0 => format!("No matches{so_far}."),
+                1 => format!("1 match{so_far}."),
+                total if total > search.hits.len() => {
+                    format!("{total} matches{so_far}, showing the first {}.", search.hits.len())
+                }
+                total => format!("{total} matches{so_far}."),
+            }
+        };
+        window.set_search_status(status.into());
+        window.set_search_current(search.current.map_or(-1, |current| current as i32));
+    }
+
+    /// Scrolls so the hit at `index` is in view, a third of the way down the
+    /// view where there is room, with its page as the one being read.
+    fn go_to_hit(&self, index: usize) {
+        let (page, top_pt) = {
+            let search = self.search.borrow();
+            let Some(hit) = search.hits.get(index) else {
+                return;
+            };
+            let areas = search.index[hit.page].areas(hit.start, hit.end);
+            (hit.page, areas.first().map_or(0.0, |area| area.y))
+        };
+        let (row, continuous) = {
+            let mut inner = self.inner.borrow_mut();
+            let Some(&(row, _)) = inner.page_loc.get(page) else {
+                return;
+            };
+            inner.reading_page = page;
+            (row, inner.continuous)
+        };
+        if continuous {
+            let target = {
+                let mut inner = self.inner.borrow_mut();
+                let row_px = row_height_px(&inner);
+                let density = BASE_DENSITY * row_zoom(&inner, row);
+                let row_top = row as f32 * row_px;
+                // Each page sits in the middle of its row's height.
+                let page_top = row_top + (row_px - inner.pages_pt[page].1 * density) / 2.0;
+                let view_h = inner.view.map_or(0.0, |(_, height)| height);
+                let target = (page_top + top_pt * density - view_h / 3.0)
+                    .max(row_top)
+                    .clamp(0.0, max_scroll_px(&inner));
+                inner.current_row = row;
+                inner.scroll_px = target;
+                target
+            };
+            self.show_offset(target);
+            self.request_visible();
+            self.update_current_page();
+        } else {
+            self.scroll_to_row(row);
+            {
+                let mut inner = self.inner.borrow_mut();
+                let density = BASE_DENSITY * inner.zoom;
+                let view_h = inner.view.map_or(0.0, |(_, height)| height);
+                inner.paged_scroll_y = (top_pt * density - view_h / 3.0).max(0.0);
+            }
+            self.push_paged_offsets();
         }
     }
 

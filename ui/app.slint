@@ -17,6 +17,16 @@ export global PageLayout {
     out property <length> spread-spacing: 4px;
 }
 
+// An area of a page to highlight, such as a search hit, in points from the
+// page's top-left corner. `current` marks the hit the reader is on.
+export struct Highlight {
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    current: bool,
+}
+
 // One page's fixed size (in PDF points) and its rendered image. The image is
 // empty until the page has been rendered, and stays empty if rendering failed.
 export struct PageEntry {
@@ -25,6 +35,16 @@ export struct PageEntry {
     height-pt: float,
     image: image,
     failed: bool,
+    highlights: [Highlight],
+}
+
+// One search hit in the results list: its 0-based page, and the text found
+// with some of the text before and after it.
+export struct SearchResult {
+    page: int,
+    before: string,
+    found: string,
+    after: string,
 }
 
 // A row in the document: a single page, or two pages side by side (a spread).
@@ -57,6 +77,15 @@ component PageImageView inherits Rectangle {
         source: entry.image;
         width: 100%;
         height: 100%;
+    }
+
+    // Search hits, drawn over the page, the one the reader is on stronger.
+    for highlight in entry.highlights: Rectangle {
+        x: highlight.x * density * 1px;
+        y: highlight.y * density * 1px;
+        width: highlight.width * density * 1px;
+        height: highlight.height * density * 1px;
+        background: highlight.current ? #ff8c0080 : #ffd24d66;
     }
 
     // A spinner while the page has not been rendered yet (empty image). It
@@ -385,6 +414,24 @@ export component MainWindow inherits Window {
     // Whether files dragged from another application are over the window.
     in property <bool> drop-hover;
 
+    // The search sidebar on the right: whether it is open, the query, a line
+    // saying how the search went, the hits, and the index of the one the
+    // reader is on (-1 for none).
+    in-out property <bool> search-open;
+    in-out property <string> search-text;
+    in property <string> search-status;
+    in property <[SearchResult]> search-results;
+    in property <int> search-current: -1;
+    // The query was edited.
+    callback search-edited(string);
+    // Move to the next (+1) or previous (-1) hit.
+    callback search-step(int);
+    // Move to a hit picked from the results list, by its index there.
+    callback go-to-search-result(int);
+    // Invoked from Rust when a document's indexer has read more pages, so
+    // the app can take them in.
+    callback text-indexed();
+
     // One title per open document, in tab order, and the index of the tab
     // shown (-1 while nothing is open).
     in property <[string]> tabs;
@@ -470,6 +517,12 @@ export component MainWindow inherits Window {
             }
             if (event.modifiers.control && event.text == "0") {
                 root.zoom-reset();
+                return accept;
+            }
+            // Ctrl+F opens the search sidebar and puts the cursor in its field.
+            if (event.modifiers.control && (event.text == "f" || event.text == "F")) {
+                root.search-open = true;
+                search-input.focus();
                 return accept;
             }
             // Browser tab shortcuts: Ctrl+W closes the tab, Ctrl+Tab and
@@ -678,6 +731,37 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+
+                    // Search sidebar toggle, mirroring the one on the left.
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: Toolbar.icon-size + 2 * Toolbar.h-padding;
+                            height: 28px;
+                            border-width: 1px;
+                            border-color: #5a5a5a;
+                            border-radius: 5px;
+                            background: (root.search-open || search-toggle.pressed)
+                                ? #252525
+                                : (search-toggle.has-hover ? #505050 : #454545);
+                            Image {
+                                source: @image-url("icons/search.svg");
+                                width: Toolbar.icon-size;
+                                height: self.width;
+                                colorize: (root.search-open || search-toggle.pressed) ? #ffffff : #dddddd;
+                            }
+                            search-toggle := TouchArea {
+                                clicked => {
+                                    root.search-open = !root.search-open;
+                                    if (root.search-open) {
+                                        search-input.focus();
+                                    } else {
+                                        key-handler.focus();
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -847,6 +931,116 @@ export component MainWindow inherits Window {
                                     if root.current-row-content.has-right: PageImageView {
                                         entry: root.current-row-content.right;
                                         density: root.density;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Search sidebar: the query at the top and the hits below it.
+                // Always there and only hidden, so Ctrl+F can focus its field.
+                search-sidebar := Rectangle {
+                    visible: root.search-open;
+                    width: root.search-open ? 300px : 0px;
+                    background: #2a2a2a;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 6px;
+
+                        Rectangle {
+                            height: 28px;
+                            border-width: 1px;
+                            border-color: search-input.has-focus ? #6ea8fe : #5a5a5a;
+                            border-radius: 4px;
+                            background: #2b2b2b;
+
+                            search-input := TextInput {
+                                x: 8px;
+                                width: parent.width - 16px;
+                                height: 100%;
+                                text <=> root.search-text;
+                                color: #eeeeee;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                                single-line: true;
+                                edited => {
+                                    root.search-edited(self.text);
+                                }
+                                key-pressed(event) => {
+                                    // Enter goes to the next hit, Shift+Enter
+                                    // to the previous one, and Esc back to the
+                                    // document.
+                                    if (event.text == Key.Return) {
+                                        root.search-step(event.modifiers.shift ? -1 : 1);
+                                        return accept;
+                                    }
+                                    if (event.text == Key.Escape) {
+                                        key-handler.focus();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                            }
+                            if root.search-text == "": Text {
+                                x: 8px;
+                                text: "Search";
+                                color: #808080;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                                height: 100%;
+                            }
+                        }
+
+                        Text {
+                            text: root.search-status;
+                            color: #999999;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+
+                        ListView {
+                            for result[index] in root.search-results: Rectangle {
+                                height: 46px;
+                                background: index == root.search-current
+                                    ? #3a4a60
+                                    : (result-touch.has-hover ? #333333 : transparent);
+                                VerticalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    padding-top: 4px;
+                                    padding-bottom: 4px;
+                                    spacing: 2px;
+                                    Text {
+                                        text: "Page \{result.page + 1}";
+                                        color: #999999;
+                                        font-size: 11px;
+                                    }
+                                    HorizontalLayout {
+                                        Text {
+                                            text: result.before;
+                                            color: #cccccc;
+                                            font-size: 12px;
+                                        }
+                                        Text {
+                                            text: result.found;
+                                            color: #ffffff;
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                        }
+                                        Text {
+                                            text: result.after;
+                                            color: #cccccc;
+                                            font-size: 12px;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                }
+                                result-touch := TouchArea {
+                                    clicked => {
+                                        root.go-to-search-result(index);
                                     }
                                 }
                             }
