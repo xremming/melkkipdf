@@ -9,7 +9,7 @@ mod common;
 use std::time::Duration;
 
 use common::{Scratch, write_text_pdf};
-use i_slint_backend_testing::ElementHandle;
+use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use melkkipdf::testing::{Harness, Tabs};
 use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, Model};
@@ -369,6 +369,39 @@ fn stepping_keeps_the_current_hit_in_view_in_the_list() {
     press(&t, Key::DownArrow, false);
     assert_eq!(t.window.get_search_current(), 0);
     assert!(current_row_in_view(), "the list did not scroll back up to the first hit");
+}
+
+#[test]
+fn a_long_hit_fits_the_width_of_the_list() {
+    let (_directory, t) = shown_with_text(
+        "search-long",
+        &[&[
+            "Somewhere in an exceedingly long sentence the remarkable expression wanted here sits",
+        ]],
+    );
+    press(&t, "f", true);
+    for key in "remarkable expression wanted".chars() {
+        press(&t, key.to_string(), false);
+    }
+    wait(150);
+    assert_eq!(t.window.get_search_results().row_count(), 1);
+
+    // The text before the hit gives way, so the hit shows within the list
+    // rather than pushed past its right edge.
+    let list = ElementHandle::find_by_element_id(&t.window, "MainWindow::search-list")
+        .next()
+        .expect("no results list");
+    let list_left = list.absolute_position().x;
+    let list_right = list_left + list.size().width;
+    let found = ElementHandle::find_by_accessible_label(&t.window, "remarkable expression wanted")
+        .find(|text| text.accessible_role() == Some(AccessibleRole::Text))
+        .expect("the hit is not shown");
+    let left = found.absolute_position().x;
+    assert!(found.size().width > 0.0, "the hit has no room");
+    assert!(
+        left >= list_left && left + found.size().width <= list_right,
+        "the hit runs past the list"
+    );
 }
 
 #[test]

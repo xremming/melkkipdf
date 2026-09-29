@@ -1236,30 +1236,49 @@ export component MainWindow inherits Window {
                                     background: index == root.search-current
                                         ? #3a4a60
                                         : (result-touch.has-hover ? #333333 : transparent);
-                                    HorizontalLayout {
-                                        padding-left: 6px;
-                                        padding-right: 6px;
-                                        Text {
+                                    // A row too narrow for its text keeps the
+                                    // hit in full if it can, then as much of
+                                    // the text just before it as fits, cut
+                                    // from the start, and the text after gives
+                                    // way first. Laid out by hand, as a layout
+                                    // would widen the list to fit the text.
+                                    property <length> room: self.width - 12px;
+                                    property <length> found-width: min(found-text.preferred-width, self.room);
+                                    property <length> before-width: min(before-text.preferred-width, self.room - self.found-width);
+                                    Rectangle {
+                                        x: 6px;
+                                        width: parent.before-width;
+                                        clip: true;
+                                        before-text := Text {
+                                            x: parent.width - self.width;
+                                            width: self.preferred-width;
+                                            height: 100%;
                                             text: result.before;
                                             color: #cccccc;
                                             font-size: 12px;
                                             vertical-alignment: center;
                                         }
-                                        Text {
-                                            text: result.found;
-                                            color: #ffffff;
-                                            font-size: 12px;
-                                            font-weight: 700;
-                                            vertical-alignment: center;
-                                        }
-                                        Text {
-                                            text: result.after;
-                                            color: #cccccc;
-                                            font-size: 12px;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                            horizontal-stretch: 1;
-                                        }
+                                    }
+                                    found-text := Text {
+                                        x: 6px + parent.before-width;
+                                        width: parent.found-width;
+                                        height: 100%;
+                                        text: result.found;
+                                        color: #ffffff;
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        x: 6px + parent.before-width + parent.found-width;
+                                        width: max(0px, parent.room - parent.before-width - parent.found-width);
+                                        height: 100%;
+                                        text: result.after;
+                                        color: #cccccc;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
                                     }
                                     result-touch := TouchArea {
                                         clicked => {
