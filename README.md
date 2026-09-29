@@ -49,7 +49,8 @@ cargo test --features testing
 - Single, odd, and even page spreads
 - Zoom, fit-width, and fit-page
 - Bookmark sidebar with page thumbnails
-- Full-text search, with every hit listed in a sidebar and outlined on its page
+- Full-text search that ignores case, accents, and most punctuation, with every
+  hit listed in a sidebar and outlined on its page
 - Keyboard-driven navigation
 
 ## Keyboard shortcuts

@@ -2498,6 +2498,32 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/icu_casemap/icu_casemap-2.3.0.crate",
+        "sha256": "f2edfd120d8445de853cf53a1abec916f638f933a70a6f4bf8f7e2d7b7f884e9",
+        "dest": "cargo/vendor/icu_casemap-2.3.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"f2edfd120d8445de853cf53a1abec916f638f933a70a6f4bf8f7e2d7b7f884e9\", \"files\": {}}",
+        "dest": "cargo/vendor/icu_casemap-2.3.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/icu_casemap_data/icu_casemap_data-2.3.0.crate",
+        "sha256": "059fcda0fc8d33effc6633a8cf0d8a3c17caf7d7c91918fba9918744f501e4e8",
+        "dest": "cargo/vendor/icu_casemap_data-2.3.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"059fcda0fc8d33effc6633a8cf0d8a3c17caf7d7c91918fba9918744f501e4e8\", \"files\": {}}",
+        "dest": "cargo/vendor/icu_casemap_data-2.3.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/icu_collections/icu_collections-2.3.0.crate",
         "sha256": "fa68d21081c4a05d5a901a1c62add574c77048b6a1c67be3b50ce0b60d4ca513",
         "dest": "cargo/vendor/icu_collections-2.3.0"
