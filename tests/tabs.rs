@@ -6,8 +6,8 @@
 
 use i_slint_backend_testing::ElementHandle;
 use melkkipdf::testing::Tabs;
-use slint::platform::{PointerEventButton, WindowEvent};
-use slint::{ComponentHandle, Image, Model, Rgb8Pixel, SharedPixelBuffer};
+use slint::platform::{Key, PointerEventButton, WindowEvent};
+use slint::{ComponentHandle, Image, Model, Rgb8Pixel, SharedPixelBuffer, SharedString};
 
 fn tabs() -> Tabs {
     Tabs::new()
@@ -157,6 +157,73 @@ fn closing_every_tab_returns_to_the_empty_window() {
     // A render the closed tab's worker finished late has nowhere to go.
     t.window.invoke_page_rendered(a, 0, 1.0, rendered());
     assert_eq!(t.window.get_rows().row_count(), 0);
+}
+
+/// Presses and releases `key` with `modifiers` held.
+fn press(t: &Tabs, modifiers: &[Key], key: impl Into<SharedString> + Clone) {
+    let window = t.window.window();
+    for modifier in modifiers {
+        window.dispatch_event(WindowEvent::KeyPressed { text: (*modifier).into() });
+    }
+    window.dispatch_event(WindowEvent::KeyPressed { text: key.clone().into() });
+    window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+    for modifier in modifiers.iter().rev() {
+        window.dispatch_event(WindowEvent::KeyReleased { text: (*modifier).into() });
+    }
+}
+
+/// Four documents open, with the last one shown.
+fn four_tabs() -> Tabs {
+    let t = tabs();
+    for name in ["a.pdf", "b.pdf", "c.pdf", "d.pdf"] {
+        t.open(name, 3);
+    }
+    show(&t, 1200.0);
+    t
+}
+
+/// The key tab shortcuts are pressed with: Cmd on macOS, which Slint reports
+/// as Control, and Control elsewhere.
+const COMMAND: Key = Key::Control;
+
+/// The key that cycles through the tabs with Tab: Control everywhere, which
+/// Slint reports as Meta on macOS.
+const CYCLE: Key = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
+
+#[test]
+fn a_number_with_command_shows_that_tab_and_nine_the_last() {
+    let t = four_tabs();
+    press(&t, &[COMMAND], "1");
+    assert_eq!(t.active_tab(), 0);
+    press(&t, &[COMMAND], "3");
+    assert_eq!(t.active_tab(), 2);
+    // A number past the last tab changes nothing.
+    press(&t, &[COMMAND], "5");
+    assert_eq!(t.active_tab(), 2);
+    press(&t, &[COMMAND], "9");
+    assert_eq!(t.active_tab(), 3);
+    // Without the modifier, the number still picks a spread mode.
+    press(&t, &[], "1");
+    assert_eq!(t.active_tab(), 3);
+}
+
+#[test]
+fn control_tab_cycles_through_the_tabs_both_ways() {
+    let t = four_tabs();
+    press(&t, &[CYCLE], Key::Tab);
+    assert_eq!(t.active_tab(), 0, "Ctrl+Tab did not go round to the first tab");
+    press(&t, &[CYCLE, Key::Shift], Key::Tab);
+    assert_eq!(t.active_tab(), 3, "Ctrl+Shift+Tab did not go round to the last tab");
+    press(&t, &[CYCLE, Key::Shift], Key::Tab);
+    assert_eq!(t.active_tab(), 2);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn command_tab_is_left_to_the_system_on_macos() {
+    let t = four_tabs();
+    press(&t, &[COMMAND], Key::Tab);
+    assert_eq!(t.active_tab(), 3);
 }
 
 /// Shows the window at `width` so the tab strip is laid out.
