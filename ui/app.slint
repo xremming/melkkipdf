@@ -560,6 +560,9 @@ export component MainWindow inherits Window {
     // Invoked from Rust when a document's worker has finished reading it, so
     // the app can take in what it read.
     callback document-loaded();
+    // Invoked from Rust when another instance has been asked to open
+    // documents, so the app can open them here instead.
+    callback documents-requested();
     callback viewport-resized(length, length);
     // Continuous scroll offset changed (logical pixels from the top).
     callback scrolled(float);

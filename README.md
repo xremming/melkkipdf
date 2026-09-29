@@ -43,7 +43,8 @@ cargo test --features testing
 
 ## Features
 
-- Tabs for keeping several documents open
+- Tabs for keeping several documents open, with documents opened while the
+  viewer runs added as tabs to its window
 - Reopens your tabs and each document's view where you left off
 - Continuous and single-page reading modes
 - Single, odd, and even page spreads

@@ -4,6 +4,8 @@
 //! [`Viewer`]; the `testing` feature exposes a headless [`testing::Harness`] that
 //! drives it without an event loop for integration tests.
 
+#[cfg(unix)]
+mod instance;
 #[cfg(target_os = "macos")]
 mod macos;
 mod render;
@@ -598,6 +600,19 @@ impl App {
         }
     }
 
+    /// Opens each document another instance was asked to open in a new tab,
+    /// and brings the window forward, since the reader has just asked for it.
+    /// Asking with no documents only brings the window forward.
+    pub(crate) fn open_requested(&self, paths: Vec<String>) {
+        for path in paths {
+            self.open(path);
+        }
+        if let Some(window) = self.window.upgrade() {
+            window.window().set_minimized(false);
+            window.window().with_winit_window(|window| window.focus_window());
+        }
+    }
+
     /// Prompts for a PDF with a native file dialog and opens the chosen one. The
     /// picker runs as a future on Slint's event loop so the UI stays responsive.
     fn pick_and_open(self: &Rc<Self>) {
@@ -617,8 +632,16 @@ impl App {
 
 /// Opens the window with the tabs left open last time plus one for each of
 /// `paths` (or an empty window with the open button when there are none) and
-/// runs the event loop until the window closes.
+/// runs the event loop until the window closes. When the viewer is already
+/// running, `paths` open as tabs in its window instead.
 pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
+    #[cfg(unix)]
+    let listener = match instance::claim(&paths) {
+        instance::Claim::First(listener) => Some(listener),
+        instance::Claim::Forwarded => return Ok(()),
+        instance::Claim::Alone => None,
+    };
+
     let window = MainWindow::new()?;
 
     // Without an app ID matching the desktop entry, compositors cannot tie the
@@ -653,6 +676,23 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
     app.restore_session();
     for path in paths {
         app.open(path);
+    }
+
+    #[cfg(unix)]
+    if let Some(listener) = listener {
+        let (requests, received) = mpsc::channel();
+        window.on_documents_requested({
+            let app = app.clone();
+            move || {
+                while let Ok(paths) = received.try_recv() {
+                    app.open_requested(paths);
+                }
+            }
+        });
+        let window = window.as_weak();
+        listener.serve(requests, move || {
+            let _ = window.upgrade_in_event_loop(|window| window.invoke_documents_requested());
+        });
     }
 
     let autosave = slint::Timer::default();
