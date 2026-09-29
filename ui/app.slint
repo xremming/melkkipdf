@@ -443,6 +443,17 @@ export component MainWindow inherits Window {
         search-input.focus();
     }
 
+    // Opening the search sidebar puts the cursor in its field, and closing
+    // it hands the keys back to the document.
+    function toggle-search() {
+        root.search-open = !root.search-open;
+        if (root.search-open) {
+            search-input.focus();
+        } else {
+            key-handler.focus();
+        }
+    }
+
     // One title per open document, in tab order, and the index of the tab
     // shown (-1 while nothing is open).
     in property <[string]> tabs;
@@ -530,10 +541,16 @@ export component MainWindow inherits Window {
                 root.zoom-reset();
                 return accept;
             }
-            // Ctrl+F opens the search sidebar and puts the cursor in its field.
+            // Ctrl+F puts the cursor in the search field, opening the sidebar
+            // if need be, and closes the sidebar again from the field. Once
+            // Esc has left the field, it goes back to it rather than closing.
             if (event.modifiers.control && (event.text == "f" || event.text == "F")) {
-                root.search-open = true;
-                search-input.focus();
+                if (search-input.has-focus) {
+                    root.toggle-search();
+                } else {
+                    root.search-open = true;
+                    search-input.focus();
+                }
                 return accept;
             }
             // Browser tab shortcuts: Ctrl+W closes the tab, Ctrl+Tab and
@@ -763,12 +780,7 @@ export component MainWindow inherits Window {
                             }
                             search-toggle := TouchArea {
                                 clicked => {
-                                    root.search-open = !root.search-open;
-                                    if (root.search-open) {
-                                        search-input.focus();
-                                    } else {
-                                        key-handler.focus();
-                                    }
+                                    root.toggle-search();
                                 }
                             }
                         }

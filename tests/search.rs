@@ -250,6 +250,31 @@ fn ctrl_f_opens_the_sidebar_with_the_cursor_in_its_field() {
 }
 
 #[test]
+fn ctrl_f_in_the_field_closes_the_sidebar() {
+    let t = shown();
+    press(&t, "f", true);
+    press(&t, "f", true);
+    assert!(!t.window.get_search_open(), "Ctrl+F in the field left the sidebar open");
+
+    // The keys are back with the document, where C switches modes.
+    press(&t, "c", false);
+    assert!(!t.window.get_continuous());
+    assert_eq!(t.window.get_search_text(), "");
+}
+
+#[test]
+fn ctrl_f_after_esc_goes_back_to_the_field() {
+    let t = shown();
+    press(&t, "f", true);
+    press(&t, Key::Escape, false);
+    press(&t, "f", true);
+    assert!(t.window.get_search_open(), "Ctrl+F in the document closed the sidebar");
+
+    press(&t, "o", false);
+    assert_eq!(t.window.get_search_text(), "o", "typing did not reach the search field");
+}
+
+#[test]
 fn the_clear_button_empties_the_query_and_keeps_the_cursor_in_the_field() {
     let directory = Scratch::new("search-clear");
     let path = directory.join("book.pdf");
