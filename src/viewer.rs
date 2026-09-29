@@ -1704,13 +1704,22 @@ impl Viewer {
 
         let rows: Vec<SearchResult> = {
             let search = self.search.borrow();
-            search
-                .hits
-                .iter()
-                .map(|hit| {
+            let hits = &search.hits;
+            hits.iter()
+                .enumerate()
+                .map(|(index, hit)| {
                     let snippet = search.index[hit.page].snippet(hit.start, hit.end);
+                    // Hits come in document order, so a page's hits are
+                    // together and only its first carries the count.
+                    let first_on_page = index == 0 || hits[index - 1].page != hit.page;
+                    let page_hits = if first_on_page {
+                        hits[index..].iter().take_while(|h| h.page == hit.page).count()
+                    } else {
+                        0
+                    };
                     SearchResult {
                         page: hit.page as i32,
+                        page_hits: page_hits as i32,
                         before: snippet.before.into(),
                         found: snippet.found.into(),
                         after: snippet.after.into(),

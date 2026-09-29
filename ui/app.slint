@@ -39,9 +39,12 @@ export struct PageEntry {
 }
 
 // One search hit in the results list: its 0-based page, and the text found
-// with some of the text before and after it.
+// with some of the text before and after it. `page-hits` is how many hits its
+// page has on the page's first hit, and 0 on the rest, so the list heads each
+// page's hits once.
 export struct SearchResult {
     page: int,
+    page-hits: int,
     before: string,
     found: string,
     after: string,
@@ -1001,46 +1004,59 @@ export component MainWindow inherits Window {
                         }
 
                         ListView {
-                            for result[index] in root.search-results: Rectangle {
-                                height: 46px;
-                                background: index == root.search-current
-                                    ? #3a4a60
-                                    : (result-touch.has-hover ? #333333 : transparent);
-                                VerticalLayout {
+                            for result[index] in root.search-results: VerticalLayout {
+                                padding-top: result.page-hits > 0 && index > 0 ? 6px : 0px;
+                                if result.page-hits > 0: HorizontalLayout {
                                     padding-left: 6px;
                                     padding-right: 6px;
-                                    padding-top: 4px;
-                                    padding-bottom: 4px;
-                                    spacing: 2px;
+                                    padding-bottom: 2px;
                                     Text {
                                         text: "Page \{result.page + 1}";
                                         color: #999999;
                                         font-size: 11px;
+                                        horizontal-stretch: 1;
                                     }
+                                    if result.page-hits > 1: Text {
+                                        text: "\{result.page-hits} matches";
+                                        color: #808080;
+                                        font-size: 11px;
+                                    }
+                                }
+                                Rectangle {
+                                    height: 24px;
+                                    border-radius: 3px;
+                                    background: index == root.search-current
+                                        ? #3a4a60
+                                        : (result-touch.has-hover ? #333333 : transparent);
                                     HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
                                         Text {
                                             text: result.before;
                                             color: #cccccc;
                                             font-size: 12px;
+                                            vertical-alignment: center;
                                         }
                                         Text {
                                             text: result.found;
                                             color: #ffffff;
                                             font-size: 12px;
                                             font-weight: 700;
+                                            vertical-alignment: center;
                                         }
                                         Text {
                                             text: result.after;
                                             color: #cccccc;
                                             font-size: 12px;
+                                            vertical-alignment: center;
                                             overflow: elide;
                                             horizontal-stretch: 1;
                                         }
                                     }
-                                }
-                                result-touch := TouchArea {
-                                    clicked => {
-                                        root.go-to-search-result(index);
+                                    result-touch := TouchArea {
+                                        clicked => {
+                                            root.go-to-search-result(index);
+                                        }
                                     }
                                 }
                             }

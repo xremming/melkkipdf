@@ -89,6 +89,25 @@ fn hits_are_outlined_on_their_pages() {
 }
 
 #[test]
+fn hits_on_the_same_page_are_listed_under_one_heading() {
+    let h = indexed(&book());
+    h.viewer.search_edited("line");
+    // One hit on page 8, then 30 on page 13, where only the first carries
+    // the page's heading and count.
+    let results = h.window.get_search_results();
+    let page_hits: Vec<i32> = results.iter().map(|r| r.page_hits).collect();
+    let mut expected = vec![1, 30];
+    expected.resize(31, 0);
+    assert_eq!(page_hits, expected);
+    assert_eq!(h.result_pages()[1..], [12; 30]);
+
+    // The rows still stand for single hits, so picking one goes to that hit.
+    h.viewer.go_to_search_result(5);
+    assert_eq!(h.window.get_search_current(), 5);
+    assert_eq!(h.current_page(), 13);
+}
+
+#[test]
 fn stepping_goes_round_the_hits_both_ways() {
     let h = indexed(&book());
     h.viewer.search_edited("orient");
