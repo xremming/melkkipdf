@@ -6,6 +6,7 @@
 
 use i_slint_backend_testing::ElementHandle;
 use melkkipdf::testing::Tabs;
+use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Image, Model, Rgb8Pixel, SharedPixelBuffer};
 
 fn tabs() -> Tabs {
@@ -243,4 +244,168 @@ fn a_negative_tab_index_closes_and_selects_nothing() {
     t.window.invoke_select_tab(-1);
     assert_eq!(t.titles(), ["a.pdf", "b.pdf"]);
     assert_eq!(t.active_tab(), 1);
+}
+
+#[test]
+fn moving_a_tab_keeps_the_shown_one_shown() {
+    let t = tabs();
+    for title in ["a.pdf", "b.pdf", "c.pdf", "d.pdf"] {
+        t.open(title, 1);
+    }
+    t.window.invoke_select_tab(2);
+
+    // Moving the shown tab takes it along.
+    t.window.invoke_move_tab(2, 0);
+    assert_eq!(t.titles(), ["c.pdf", "a.pdf", "b.pdf", "d.pdf"]);
+    assert_eq!(t.active_tab(), 0);
+
+    // Moving a tab past the shown one shifts it over by one.
+    t.window.invoke_move_tab(3, 0);
+    assert_eq!(t.titles(), ["d.pdf", "c.pdf", "a.pdf", "b.pdf"]);
+    assert_eq!(t.active_tab(), 1);
+    t.window.invoke_move_tab(0, 3);
+    assert_eq!(t.titles(), ["c.pdf", "a.pdf", "b.pdf", "d.pdf"]);
+    assert_eq!(t.active_tab(), 0);
+    assert_eq!(t.window.get_doc_title(), "c.pdf");
+
+    // Closing still closes the tab now at that place.
+    t.window.invoke_close_tab(1);
+    assert_eq!(t.titles(), ["c.pdf", "b.pdf", "d.pdf"]);
+}
+
+#[test]
+fn moving_a_tab_out_of_range_does_nothing() {
+    let t = tabs();
+    t.open("a.pdf", 1);
+    t.open("b.pdf", 1);
+    t.window.invoke_move_tab(0, 2);
+    t.window.invoke_move_tab(-1, 0);
+    assert_eq!(t.titles(), ["a.pdf", "b.pdf"]);
+    assert_eq!(t.active_tab(), 1);
+}
+
+/// Presses the left button at `from`, moves the pointer to each of `through`
+/// in turn and lets go at the last.
+fn drag(t: &Tabs, from: (f32, f32), through: &[(f32, f32)]) {
+    let window = t.window.window();
+    let at = |(x, y): (f32, f32)| slint::LogicalPosition::new(x, y);
+    window.dispatch_event(WindowEvent::PointerMoved { position: at(from) });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: at(from),
+        button: PointerEventButton::Left,
+    });
+    for &point in through {
+        window.dispatch_event(WindowEvent::PointerMoved { position: at(point) });
+    }
+    let last = *through.last().unwrap_or(&from);
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: at(last),
+        button: PointerEventButton::Left,
+    });
+}
+
+/// The middle of the tab at `index` in the strip.
+fn tab_middle(t: &Tabs, index: usize) -> (f32, f32) {
+    let tab = &document_tabs(t)[index];
+    let (position, size) = (tab.absolute_position(), tab.size());
+    (position.x + size.width / 2.0, position.y + size.height / 2.0)
+}
+
+#[test]
+fn dragging_a_tab_along_the_strip_reorders_it() {
+    let t = tabs();
+    for title in ["a.pdf", "b.pdf", "c.pdf", "d.pdf"] {
+        t.open(title, 1);
+    }
+    t.window.invoke_select_tab(3);
+    show(&t, 1600.0);
+
+    // Dragged past the middle of the tab two places over, it lands there.
+    let (x, y) = tab_middle(&t, 0);
+    let (target, _) = tab_middle(&t, 2);
+    drag(&t, (x, y), &[(x + 20.0, y), (target + 20.0, y + 10.0)]);
+    assert_eq!(t.titles(), ["b.pdf", "c.pdf", "a.pdf", "d.pdf"]);
+    assert_eq!(t.active_tab(), 2, "the dragged tab was not the one shown");
+    assert_eq!(t.window.get_doc_title(), "a.pdf");
+
+    // And back to the start, however far past the end of the strip it goes.
+    let (x, y) = tab_middle(&t, 2);
+    drag(&t, (x, y), &[(x - 20.0, y), (0.0, y)]);
+    assert_eq!(t.titles(), ["a.pdf", "b.pdf", "c.pdf", "d.pdf"]);
+    assert_eq!(t.active_tab(), 0);
+}
+
+#[test]
+fn a_tab_let_go_short_of_its_neighbours_middle_stays_put() {
+    let t = tabs();
+    for title in ["a.pdf", "b.pdf", "c.pdf"] {
+        t.open(title, 1);
+    }
+    show(&t, 1600.0);
+
+    let (x, y) = tab_middle(&t, 1);
+    drag(&t, (x, y), &[(x + 20.0, y), (x + 100.0, y)]);
+    assert_eq!(t.titles(), ["a.pdf", "b.pdf", "c.pdf"]);
+    assert_eq!(t.active_tab(), 1, "pressing a tab did not select it");
+
+    // A click that wobbles a little is only a click, and the tabs are
+    // still dragged normally after it.
+    let (x, y) = tab_middle(&t, 0);
+    drag(&t, (x, y), &[(x + 3.0, y)]);
+    assert_eq!(t.titles(), ["a.pdf", "b.pdf", "c.pdf"]);
+    assert_eq!(t.active_tab(), 0);
+    let (target, _) = tab_middle(&t, 1);
+    drag(&t, (x, y), &[(x + 20.0, y), (target + 20.0, y)]);
+    assert_eq!(t.titles(), ["b.pdf", "a.pdf", "c.pdf"]);
+}
+
+#[test]
+fn the_dragged_tab_follows_the_pointer_and_the_others_make_room() {
+    let t = tabs();
+    for title in ["a.pdf", "b.pdf", "c.pdf"] {
+        t.open(title, 1);
+    }
+    show(&t, 1600.0);
+    // Where each tab is drawn, by title in tab order, since a raised tab
+    // comes up in a different order.
+    let faces = || -> Vec<f32> {
+        let mut titles: Vec<(String, f32)> =
+            ElementHandle::find_by_element_id(&t.window, "DocumentTab::tab-title")
+                .map(|title| {
+                    let label = title.accessible_label().unwrap_or_default().to_string();
+                    (label, title.absolute_position().x)
+                })
+                .collect();
+        titles.sort_by(|a, b| a.0.cmp(&b.0));
+        titles.into_iter().map(|(_, x)| x).collect()
+    };
+    let before = faces();
+    let stride = before[1] - before[0];
+
+    let window = t.window.window();
+    let (x, y) = tab_middle(&t, 0);
+    let at = |x: f32| slint::LogicalPosition::new(x, y);
+    window.dispatch_event(WindowEvent::PointerMoved { position: at(x) });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: at(x),
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerMoved { position: at(x + 20.0) });
+    window.dispatch_event(WindowEvent::PointerMoved { position: at(x + stride) });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_secs(1));
+
+    let during = faces();
+    assert_eq!(during[0], before[0] + stride, "the dragged tab did not follow the pointer");
+    assert_eq!(during[1], before[0], "the passed tab did not make room");
+    assert_eq!(during[2], before[2], "a tab not passed moved");
+    // Nothing is reordered until the tab is let go.
+    assert_eq!(t.titles(), ["a.pdf", "b.pdf", "c.pdf"]);
+
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: at(x + stride),
+        button: PointerEventButton::Left,
+    });
+    assert_eq!(t.titles(), ["b.pdf", "a.pdf", "c.pdf"]);
+    let after = faces();
+    assert_eq!(after, [before[1], before[0], before[2]], "the tabs were not in their new places");
 }

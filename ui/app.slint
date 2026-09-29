@@ -310,11 +310,28 @@ component PageField inherits Rectangle {
 // One browser-style tab: the document's name and a button that closes it. The
 // active tab takes the toolbar's colour, so it reads as joined to the toolbar
 // below it, as a browser's tab does to its address bar.
+//
+// A tab can be dragged along the strip to reorder it. The strip decides where
+// it lands, so the tab only reports how far it has been dragged and when it is
+// let go, and draws itself `offset` away from its place while the others make
+// room for it.
 component DocumentTab inherits Rectangle {
     in property <string> title;
     in property <bool> active;
+    // How far the tab is drawn from its place in the strip.
+    in property <length> offset;
+    // Whether the offset follows the pointer, rather than easing into place
+    // as a tab making room for a dragged one does.
+    in property <bool> lifted;
+    // Whether any tab of the strip is being dragged. Only then do tabs ease
+    // into place: once one is dropped, they are already where they belong.
+    in property <bool> reordering;
     callback clicked();
     callback close();
+    // How far the pointer has moved along the strip since the tab was pressed.
+    callback dragged(length);
+    callback dropped();
+    callback drag-cancelled();
 
     // Tabs share the strip like a browser's: as wide as a title needs up to a
     // cap, then narrowing together as more open. No minimum, so a long row of
@@ -323,58 +340,104 @@ component DocumentTab inherits Rectangle {
     preferred-width: 220px;
     max-width: 220px;
     horizontal-stretch: 1;
-    clip: true;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    background: root.active ? #333333 : (touch.has-hover ? #2e2e2e : transparent);
 
-    // Declared before the close button so the button, drawn on top, gets its
-    // own clicks.
+    // Stays in the tab's place while the face moves, so the distance dragged
+    // is measured from where the tab was pressed. Declared before the face so
+    // the close button, drawn on top, gets its own clicks.
     touch := TouchArea {
-        clicked => {
-            root.clicked();
-        }
+        // Only the left button drags, and only once it has moved far enough
+        // that a click with a shaky hand still just selects the tab.
+        property <bool> left-down;
+        property <bool> dragging;
+
         pointer-event(event) => {
+            if (event.kind == PointerEventKind.cancel) {
+                if (self.dragging) {
+                    root.drag-cancelled();
+                }
+                self.left-down = false;
+                self.dragging = false;
+            }
+            if (event.button == PointerEventButton.left) {
+                // A tab is selected as soon as it is pressed, as in a
+                // browser, so the one being dragged is the one shown.
+                if (event.kind == PointerEventKind.down) {
+                    self.left-down = true;
+                    root.clicked();
+                }
+                if (event.kind == PointerEventKind.up) {
+                    if (self.dragging) {
+                        root.dropped();
+                    }
+                    self.left-down = false;
+                    self.dragging = false;
+                }
+            }
             // A middle click closes a tab in every browser.
             if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.up) {
                 root.close();
             }
         }
+        moved => {
+            if (self.left-down && !self.dragging && abs(self.mouse-x - self.pressed-x) > 5px) {
+                self.dragging = true;
+            }
+            if (self.dragging) {
+                root.dragged(self.mouse-x - self.pressed-x);
+            }
+        }
     }
 
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 6px;
-        spacing: 4px;
+    face := Rectangle {
+        x: root.lifted ? root.offset : eased-offset;
+        width: root.width;
+        height: root.height;
+        clip: true;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
+        background: root.active ? #333333 : (touch.has-hover ? #2e2e2e : transparent);
 
-        tab-title := Text {
-            text: root.title;
-            color: root.active ? #eeeeee : #aaaaaa;
-            font-size: 13px;
-            vertical-alignment: center;
-            overflow: elide;
-            horizontal-stretch: 1;
+        property <length> eased-offset: root.offset;
+        animate eased-offset {
+            duration: 150ms;
+            easing: ease-out;
+            enabled: root.reordering;
         }
 
-        VerticalLayout {
-            alignment: center;
-            close-button := Rectangle {
-                width: 18px;
-                height: 18px;
-                border-radius: 3px;
-                background: close-touch.has-hover ? #555555 : transparent;
-                Path {
-                    width: 8px;
-                    height: 8px;
-                    viewbox-width: 8;
-                    viewbox-height: 8;
-                    commands: "M 0 0 L 8 8 M 8 0 L 0 8";
-                    stroke: root.active || close-touch.has-hover ? #dddddd : #999999;
-                    stroke-width: 1.5px;
-                }
-                close-touch := TouchArea {
-                    clicked => {
-                        root.close();
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 6px;
+            spacing: 4px;
+
+            tab-title := Text {
+                text: root.title;
+                color: root.active ? #eeeeee : #aaaaaa;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                close-button := Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 3px;
+                    background: close-touch.has-hover ? #555555 : transparent;
+                    Path {
+                        width: 8px;
+                        height: 8px;
+                        viewbox-width: 8;
+                        viewbox-height: 8;
+                        commands: "M 0 0 L 8 8 M 8 0 L 0 8";
+                        stroke: root.active || close-touch.has-hover ? #dddddd : #999999;
+                        stroke-width: 1.5px;
+                    }
+                    close-touch := TouchArea {
+                        clicked => {
+                            root.close();
+                        }
                     }
                 }
             }
@@ -459,10 +522,23 @@ export component MainWindow inherits Window {
     in property <[string]> tabs;
     in property <int> active-tab: -1;
 
+    // The tab being dragged along the strip (-1 while none is), how far it
+    // has been dragged, the distance from one tab to the next, and the place
+    // it would land if let go now.
+    property <int> dragged-tab: -1;
+    property <length> tab-drag-x;
+    property <length> tab-stride;
+    property <int> tab-drop-index: root.dragged-tab < 0 || root.tab-stride <= 0
+        ? root.dragged-tab
+        : max(0, min(root.tabs.length - 1, root.dragged-tab + round(root.tab-drag-x / root.tab-stride)));
+
     // Open a new PDF in a new tab (prompts for a file with a native picker).
     callback open-document();
     callback select-tab(int);
     callback close-tab(int);
+    // Moves the tab at the first index to the second, shifting the ones
+    // between over by one.
+    callback move-tab(int, int);
     callback toggle-sidebar();
     // Jump to a 0-based page (from the outline or a thumbnail).
     callback go-to-page-index(int);
@@ -596,7 +672,7 @@ export component MainWindow inherits Window {
                 height: 38px;
                 background: #262626;
 
-                HorizontalLayout {
+                tab-strip := HorizontalLayout {
                     padding-top: 6px;
                     padding-left: 8px;
                     padding-right: 8px;
@@ -630,11 +706,44 @@ export component MainWindow inherits Window {
                     for title[index] in root.tabs: DocumentTab {
                         title: title;
                         active: index == root.active-tab;
+                        lifted: index == root.dragged-tab;
+                        reordering: root.dragged-tab >= 0;
+                        // Drawn over the tabs it passes.
+                        z: self.lifted ? 1 : 0;
+                        // The dragged tab follows the pointer, but no further
+                        // than the ends of the strip, and the tabs it has
+                        // passed each move over by one place to make room.
+                        offset: self.lifted
+                            ? max(-index * root.tab-stride, min((root.tabs.length - 1 - index) * root.tab-stride, root.tab-drag-x))
+                            : root.dragged-tab < 0 ? 0px
+                            : index > root.dragged-tab && index <= root.tab-drop-index ? -root.tab-stride
+                            : index < root.dragged-tab && index >= root.tab-drop-index ? root.tab-stride
+                            : 0px;
                         clicked => {
                             root.select-tab(index);
                         }
                         close => {
                             root.close-tab(index);
+                        }
+                        dragged(distance) => {
+                            root.dragged-tab = index;
+                            // Every tab is as wide as the others, so one
+                            // tab's width and the gap after it is the
+                            // distance between any two neighbours.
+                            root.tab-stride = self.width + tab-strip.spacing;
+                            root.tab-drag-x = distance;
+                        }
+                        dropped => {
+                            let to = root.tab-drop-index;
+                            root.dragged-tab = -1;
+                            root.tab-drag-x = 0;
+                            if (to != index) {
+                                root.move-tab(index, to);
+                            }
+                        }
+                        drag-cancelled => {
+                            root.dragged-tab = -1;
+                            root.tab-drag-x = 0;
                         }
                     }
 

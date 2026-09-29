@@ -442,6 +442,39 @@ impl App {
         self.save();
     }
 
+    /// Moves the tab at `from` to `to`, shifting the tabs between them over by
+    /// one, as dragging a tab along the strip does. The shown tab stays shown
+    /// wherever it ends up.
+    pub(crate) fn move_tab(&self, from: usize, to: usize) {
+        {
+            let mut tabs = self.tabs.borrow_mut();
+            if from == to || from >= tabs.len() || to >= tabs.len() {
+                return;
+            }
+            let tab = tabs.remove(from);
+            tabs.insert(to, tab);
+        }
+        let title = self.titles.remove(from);
+        self.titles.insert(to, title);
+
+        let Some(active) = self.active.get() else {
+            return;
+        };
+        let active = if active == from {
+            to
+        } else if from < active && active <= to {
+            active - 1
+        } else if to <= active && active < from {
+            active + 1
+        } else {
+            active
+        };
+        self.active.set(Some(active));
+        if let Some(window) = self.window.upgrade() {
+            window.set_active_tab(active as i32);
+        }
+    }
+
     /// Records every open tab's view and the tabs themselves, then writes them
     /// out if anything changed since the last save.
     pub(crate) fn save(&self) {
@@ -667,6 +700,15 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         move |tab| {
             if let Some(tab) = index(tab) {
                 app.close(tab);
+            }
+        }
+    });
+    // Like switching, the new order is left for the autosave to write.
+    window.on_move_tab({
+        let app = app.clone();
+        move |from, to| {
+            if let (Some(from), Some(to)) = (index(from), index(to)) {
+                app.move_tab(from, to);
             }
         }
     });
