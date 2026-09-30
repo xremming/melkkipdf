@@ -14,8 +14,10 @@ release needs is in this file; `packaging/README.md` has the background.
 ## Where things stand
 
 - Branch: !`git branch --show-current`
-- Uncommitted: !`git status --short`
-- Unpushed: !`git log --oneline @{upstream}..HEAD 2>/dev/null`
+- HEAD: !`git rev-parse --short HEAD`
+- Uncommitted: !`git status --short | grep . || echo none`
+- Unpushed: !`git fetch --quiet origin main && git log --oneline origin/main..HEAD | grep . || echo none`
+- Last CI run on main: !`gh run list --workflow CI --branch main --limit 1 --json headSha,status,conclusion --jq '.[] | "\(.headSha[0:7]) \(.status) \(.conclusion)"'`
 - Version now: !`cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version'`
 - Last release: !`git describe --tags --abbrev=0 --match 'v*'`
 - Since then: !`git log --format='- %s' "$(git describe --tags --abbrev=0 --match 'v*')..HEAD"`
@@ -27,7 +29,10 @@ Stop and say why at the first thing that is not right; a release is nothing
 to push through.
 
 1. **Check the ground.** The branch must be `main`, with nothing uncommitted
-   and nothing unpushed. If `Cargo.lock` changed since the last release, run
+   and nothing unpushed. The last CI run on `main` must be for HEAD and have
+   succeeded: if it is still running, wait for it with `gh run watch`
+   rather than releasing what CI has not yet passed; if it failed, or is
+   for another commit, stop. If `Cargo.lock` changed since the last release, run
    `mise run flatpak:sources` and make sure `packaging/cargo-sources.json`
    comes out unchanged; if it changes, that is a missing commit, so stop and
    say so. A version that is not `major`, `minor`, `patch` or `x.y.z` is a
