@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+use crate::clipboard::Clipboard;
 use crate::render::{RenderControl, WorkerMessage};
 use crate::search::{PageText, PageTextBuilder};
 use crate::settings::Store;
@@ -130,6 +131,12 @@ impl Harness {
             .collect()
     }
 
+    /// The areas of the selected text on the 0-based `page`, as
+    /// `(x, y, width, height)` in points.
+    pub fn selection(&self, page: usize) -> Vec<(f32, f32, f32, f32)> {
+        selection_areas(&self.window, page)
+    }
+
     /// The 0-based pages of the listed search results, in order.
     pub fn result_pages(&self) -> Vec<i32> {
         let model = self.window.get_search_results();
@@ -224,6 +231,23 @@ fn text_pages(pages: &[&[&str]]) -> Vec<PageText> {
         .collect()
 }
 
+/// The areas of the selected text on the 0-based `page` of `window`'s rows,
+/// as `(x, y, width, height)` in points.
+pub fn selection_areas(window: &MainWindow, page: usize) -> Vec<(f32, f32, f32, f32)> {
+    let model = window.get_rows();
+    (0..model.row_count())
+        .filter_map(|index| model.row_data(index))
+        .flat_map(|row| [row.left, row.right])
+        .filter(|entry| entry.page == page as i32)
+        .flat_map(|entry| {
+            (0..entry.selection.row_count())
+                .filter_map(|index| entry.selection.row_data(index))
+                .map(|area| (area.x, area.y, area.width, area.height))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// The 0-based pages in the row at the top of `window`'s view, worked out
 /// from what it shows: the scroll offset and row height in continuous mode, or
 /// the row on display in paged mode.
@@ -276,7 +300,7 @@ impl Tabs {
 
     fn with_store(store: Store) -> Self {
         let window = new_window();
-        let app = App::new(&window, store);
+        let app = App::new(&window, store, Clipboard::detached());
         Self { window, app, receivers: RefCell::new(Vec::new()) }
     }
 
@@ -387,6 +411,11 @@ impl Tabs {
                 .expect("a document took too long to index");
             self.app.take_indexed(indexed);
         }
+    }
+
+    /// The text last copied.
+    pub fn copied(&self) -> String {
+        self.app.clipboard.copied()
     }
 
     /// Writes out what the app remembers, as it does when a tab closes, the

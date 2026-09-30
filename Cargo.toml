@@ -21,7 +21,15 @@ dirs = "6"
 icu_casemap = "2.3"
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 icu_properties = "2.3"
+# Slint gives the clipboard only to its own text fields, so copying goes
+# through arboard directly, which Slint's winit backend links anyway.
+arboard = { version = "3.6", default-features = false }
 i-slint-backend-testing = { version = "1.18", optional = true }
+
+[target.'cfg(all(unix, not(target_vendor = "apple")))'.dependencies]
+# The same protocol Slint's backend uses on Wayland; without it arboard
+# falls back to the X11 clipboard through XWayland, as Slint does.
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -26,7 +26,7 @@ use crate::MainWindow;
 
 /// Marks a byte of the index's text that no character on the page produced:
 /// the space put between two lines.
-const BETWEEN_LINES: u32 = u32::MAX;
+pub(crate) const BETWEEN_LINES: u32 = u32::MAX;
 
 /// Characters of context shown before and after a hit in the results list.
 const CONTEXT_BEFORE: usize = 24;
@@ -41,7 +41,7 @@ const INDEX_BATCH: Duration = Duration::from_millis(100);
 pub struct PageText {
     /// The text with every run of whitespace, line breaks included, as one
     /// space, so a phrase matches however the page wraps it.
-    text: String,
+    pub(crate) text: String,
     /// `text` as search matches it: each character through [`fold_into`],
     /// with runs of whitespace again as one space, since punctuation that
     /// folds away can leave two in a row, and none where a line ends in a
@@ -52,19 +52,25 @@ pub struct PageText {
     /// hit in `folded` needs this to find its text.
     origin: Vec<u32>,
     /// For each byte of `text`, the glyph it came from, or [`BETWEEN_LINES`].
-    glyph_of_byte: Vec<u32>,
+    pub(crate) glyph_of_byte: Vec<u32>,
+    /// For each glyph, the byte of `text` its character starts at, or where
+    /// the next character will start for a glyph that added none, as a space
+    /// after a space. Selection finds glyphs by where they are and needs
+    /// their text, the other way round from [`Self::areas`].
+    pub(crate) byte_of_glyph: Vec<u32>,
     /// Each glyph's left and right edge in points from the page's left, and
-    /// the line it is on.
-    glyphs: Vec<Glyph>,
+    /// the line it is on. Glyphs come in reading order, so a line's glyphs
+    /// are together and lines never go back.
+    pub(crate) glyphs: Vec<Glyph>,
     /// Each line's top and bottom in points from the page's top.
-    lines: Vec<(f32, f32)>,
+    pub(crate) lines: Vec<(f32, f32)>,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Glyph {
-    x0: f32,
-    x1: f32,
-    line: u32,
+pub(crate) struct Glyph {
+    pub(crate) x0: f32,
+    pub(crate) x1: f32,
+    pub(crate) line: u32,
 }
 
 /// A rectangle on a page in points from its top-left corner.
@@ -111,6 +117,7 @@ impl PageTextBuilder {
         let line = self.page.lines.len().saturating_sub(1) as u32;
         let glyph = self.page.glyphs.len() as u32;
         self.page.glyphs.push(Glyph { x0, x1, line });
+        self.page.byte_of_glyph.push(self.page.text.len() as u32);
         if character.is_whitespace() {
             self.push_space(glyph);
         } else {
@@ -163,6 +170,9 @@ impl PageTextBuilder {
         // Searching slices `text` at these offsets and tells characters apart
         // by them, so a mistake here would panic or lose hits far from it.
         debug_assert_eq!(page.glyph_of_byte.len(), page.text.len());
+        debug_assert_eq!(page.byte_of_glyph.len(), page.glyphs.len());
+        debug_assert!(page.byte_of_glyph.windows(2).all(|pair| pair[0] <= pair[1]));
+        debug_assert!(page.byte_of_glyph.iter().all(|&start| start as usize <= page.text.len()));
         debug_assert_eq!(page.origin.len(), page.folded.len());
         debug_assert!(page.origin.windows(2).all(|pair| pair[0] <= pair[1]));
         debug_assert!(page.origin.iter().all(|&start| {
@@ -172,7 +182,7 @@ impl PageTextBuilder {
     }
 }
 
-const SOFT_HYPHEN: char = '\u{AD}';
+pub(crate) const SOFT_HYPHEN: char = '\u{AD}';
 
 const NFKD: DecomposingNormalizerBorrowed<'static> = DecomposingNormalizerBorrowed::new_nfkd();
 const CASE: CaseMapperBorrowed<'static> = CaseMapper::new();

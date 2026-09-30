@@ -29,6 +29,8 @@ export struct Highlight {
 
 // One page's fixed size (in PDF points) and its rendered image. The image is
 // empty until the page has been rendered, and stays empty if rendering failed.
+// `highlights` are the search hits on the page and `selection` the parts of
+// the text the reader has selected, both in points.
 export struct PageEntry {
     page: int,
     width-pt: float,
@@ -36,6 +38,7 @@ export struct PageEntry {
     image: image,
     failed: bool,
     highlights: [Highlight],
+    selection: [Highlight],
 }
 
 // One search hit in the results list: its 0-based page, and the text found
@@ -83,6 +86,18 @@ export struct BookmarkFlag {
 component PageImageView inherits Rectangle {
     in property <PageEntry> entry;
     in property <float> density;
+    // The reader pressed on, dragged over, or let go of the page's text.
+    // The point is in points from the page's top-left corner, and while a
+    // drag goes on it is measured from the page it began on, which can put
+    // it outside that page.
+    callback select-from(/* page */ int, /* x-pt */ float, /* y-pt */ float);
+    callback select-to(int, float, float);
+    callback select-done();
+    // The wheel turned while a drag was going on, which the drag would
+    // otherwise swallow (delta-x, delta-y, shift).
+    callback select-scroll(float, float, bool);
+    callback copy-selection();
+    callback select-all();
     width: entry.width-pt * density * 1px;
     height: entry.height-pt * density * 1px;
     background: white;
@@ -99,6 +114,64 @@ component PageImageView inherits Rectangle {
         width: highlight.width * density * 1px;
         height: highlight.height * density * 1px;
         background: highlight.current ? #ff8c0080 : #ffd24d66;
+    }
+
+    // The selected text.
+    for area in entry.selection: Rectangle {
+        x: area.x * density * 1px;
+        y: area.y * density * 1px;
+        width: area.width * density * 1px;
+        height: area.height * density * 1px;
+        background: #3390ff66;
+    }
+
+    page-menu := ContextMenuArea {
+        Menu {
+            MenuItem {
+                title: "Copy";
+                activated => {
+                    root.copy-selection();
+                }
+            }
+            MenuItem {
+                title: "Select all";
+                activated => {
+                    root.select-all();
+                }
+            }
+        }
+    }
+
+    // Sits over the menu area, so it opens the menu itself on a right
+    // click. Wheel events it has no use for go on to the view underneath,
+    // except while a drag holds the pointer, when they are passed on by hand.
+    touch := TouchArea {
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                root.select-from(entry.page, self.mouse-x / (root.density * 1px), self.mouse-y / (root.density * 1px));
+            }
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                root.select-done();
+            }
+            if (event.kind == PointerEventKind.cancel) {
+                root.select-done();
+            }
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                page-menu.show({ x: self.mouse-x, y: self.mouse-y });
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.select-to(entry.page, self.mouse-x / (root.density * 1px), self.mouse-y / (root.density * 1px));
+            }
+        }
+        scroll-event(event) => {
+            if (self.pressed) {
+                root.select-scroll(event.delta-x / 1px, event.delta-y / 1px, event.modifiers.shift);
+                return accept;
+            }
+            return reject;
+        }
     }
 
     // A spinner while the page has not been rendered yet (empty image). It
@@ -161,6 +234,13 @@ component PageRowView inherits Rectangle {
     in property <PageRow> page-row;
     in property <float> density;
     in property <float> row-height-pt;
+    // Passed up from the pages (see PageImageView).
+    callback select-from(int, float, float);
+    callback select-to(int, float, float);
+    callback select-done();
+    callback select-scroll(float, float, bool);
+    callback copy-selection();
+    callback select-all();
     height: row-height-pt * density * 1px + PageLayout.row-gap;
     background: #2b2b2b;
 
@@ -173,6 +253,12 @@ component PageRowView inherits Rectangle {
             PageImageView {
                 entry: page-row.left;
                 density: root.density * page-row.scale;
+                select-from(page, x, y) => { root.select-from(page, x, y); }
+                select-to(page, x, y) => { root.select-to(page, x, y); }
+                select-done => { root.select-done(); }
+                select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
+                copy-selection => { root.copy-selection(); }
+                select-all => { root.select-all(); }
             }
         }
         if page-row.has-right: VerticalLayout {
@@ -180,6 +266,12 @@ component PageRowView inherits Rectangle {
             PageImageView {
                 entry: page-row.right;
                 density: root.density * page-row.scale;
+                select-from(page, x, y) => { root.select-from(page, x, y); }
+                select-to(page, x, y) => { root.select-to(page, x, y); }
+                select-done => { root.select-done(); }
+                select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
+                copy-selection => { root.copy-selection(); }
+                select-all => { root.select-all(); }
             }
         }
     }
@@ -744,6 +836,25 @@ export component MainWindow inherits Window {
     // and pages at the edges.
     callback paged-scroll(float, float, bool);
 
+    // Selecting text: the reader pressed on a 0-based page at a point in
+    // points from its corner, dragged to a point measured from that same
+    // page, and let go; the wheel turned during the drag (delta-x, delta-y,
+    // shift); and the selection is to be copied, cleared, or made the whole
+    // document.
+    callback select-from(int, float, float);
+    callback select-to(int, float, float);
+    callback select-done();
+    callback select-scroll(float, float, bool);
+    callback copy-selection();
+    callback clear-selection();
+    callback select-all();
+    // A press on a page starts a selection, and hands the keys back to the
+    // document from the search field the way a click on the view does.
+    function page-pressed(page: int, x: float, y: float) {
+        key-handler.focus();
+        root.select-from(page, x, y);
+    }
+
     // Paged view geometry, computed by Rust: where to place the current page's
     // content within the viewport, and the content's size.
     in property <length> paged-offset-x;
@@ -774,6 +885,20 @@ export component MainWindow inherits Window {
                 if (event.text == Key.Escape) {
                     root.help-open = false;
                 }
+                return accept;
+            }
+            // Selected text: Ctrl+C copies it, Ctrl+A selects the whole
+            // document, and Esc lets it go.
+            if (event.modifiers.control && (event.text == "c" || event.text == "C")) {
+                root.copy-selection();
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "a" || event.text == "A")) {
+                root.select-all();
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                root.clear-selection();
                 return accept;
             }
             if (event.modifiers.control && (event.text == "+" || event.text == "=")) {
@@ -1358,6 +1483,12 @@ export component MainWindow inherits Window {
                                 init => {
                                     root.request-render-row(idx);
                                 }
+                                select-from(page, x, y) => { root.page-pressed(page, x, y); }
+                                select-to(page, x, y) => { root.select-to(page, x, y); }
+                                select-done => { root.select-done(); }
+                                select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
+                                copy-selection => { root.copy-selection(); }
+                                select-all => { root.select-all(); }
                             }
                         }
 
@@ -1386,10 +1517,22 @@ export component MainWindow inherits Window {
                                         PageImageView {
                                             entry: root.current-row-content.left;
                                             density: root.density;
+                                            select-from(page, x, y) => { root.page-pressed(page, x, y); }
+                                            select-to(page, x, y) => { root.select-to(page, x, y); }
+                                            select-done => { root.select-done(); }
+                                            select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
+                                            copy-selection => { root.copy-selection(); }
+                                            select-all => { root.select-all(); }
                                         }
                                         if root.current-row-content.has-right: PageImageView {
                                             entry: root.current-row-content.right;
                                             density: root.density;
+                                            select-from(page, x, y) => { root.page-pressed(page, x, y); }
+                                            select-to(page, x, y) => { root.select-to(page, x, y); }
+                                            select-done => { root.select-done(); }
+                                            select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
+                                            copy-selection => { root.copy-selection(); }
+                                            select-all => { root.select-all(); }
                                         }
                                     }
                                 }
@@ -1802,6 +1945,14 @@ export component MainWindow inherits Window {
                                 HelpRow { keys: "N, Shift+N"; action: "Next or previous hit"; }
                                 HelpRow { keys: "Enter, Shift+Enter"; action: "Next or previous hit, in the field"; }
                                 HelpRow { keys: "Esc"; action: "Back to the document from a field"; }
+                            }
+
+                            HelpSection {
+                                title: "Text";
+                                HelpRow { keys: "Drag, double-click, triple-click"; action: "Select text, a word, a line"; }
+                                HelpRow { keys: "\{root.command-key}C"; action: "Copy the selected text"; }
+                                HelpRow { keys: "\{root.command-key}A"; action: "Select the whole document"; }
+                                HelpRow { keys: "Esc"; action: "Let the selection go"; }
                             }
 
                             HelpSection {

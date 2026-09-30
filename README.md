@@ -64,6 +64,8 @@ mise run test    # cargo test --features testing
   marked page is in view and one press flips there and back
 - Full-text search that ignores case, accents, and most punctuation, with every
   hit listed in a sidebar and outlined on its page
+- Text selection with the pointer, across pages and spreads, with a double
+  or triple click for a word or a line, and Ctrl+C to copy
 - Keyboard-driven navigation
 
 ## Keyboard shortcuts
@@ -88,6 +90,9 @@ alone. Ctrl is ⌘ on macOS.
 | N, Shift+N                             | Next or previous hit                          |
 | Enter, Shift+Enter in the search field | Next or previous hit                          |
 | Esc in a field                         | Back to the document                          |
+| Ctrl+C                                 | Copy the selected text                        |
+| Ctrl+A                                 | Select the whole document                     |
+| Esc                                    | Let the selection go                          |
 | D                                      | Flag the page, or take its flag away          |
 | B, Shift+B                             | Next or previous flag                         |
 | M                                      | Dog-ear the page, to flip back to it          |

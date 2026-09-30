@@ -5,11 +5,13 @@
 //! drives it without an event loop for integration tests.
 
 #[cfg(unix)]
+mod clipboard;
 mod instance;
 #[cfg(target_os = "macos")]
 mod macos;
 mod render;
 mod search;
+mod selection;
 mod settings;
 mod viewer;
 
@@ -23,6 +25,7 @@ use std::time::Duration;
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
+use clipboard::Clipboard;
 use render::{Loaded, RenderControl, WorkerMessage};
 use search::{IndexHandle, Indexed};
 use settings::{Bookmark, Session, Store};
@@ -122,10 +125,12 @@ pub(crate) struct App {
     /// Where each document's indexer sends the text it has read.
     indexes: Receiver<Indexed>,
     index_sender: Sender<Indexed>,
+    /// Where copied text goes.
+    clipboard: Clipboard,
 }
 
 impl App {
-    pub(crate) fn new(window: &MainWindow, store: Store) -> Rc<Self> {
+    pub(crate) fn new(window: &MainWindow, store: Store, clipboard: Clipboard) -> Rc<Self> {
         let titles = Rc::new(VecModel::default());
         window.set_tabs(ModelRc::from(titles.clone()));
         let (load_sender, loads) = mpsc::channel();
@@ -144,6 +149,7 @@ impl App {
             load_sender,
             indexes,
             index_sender,
+            clipboard,
         });
         app.show_empty();
         wire_callbacks(window, &app);
@@ -798,7 +804,7 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
     // when the window is actually shown, so setting it here is in time.
     slint::set_xdg_app_id("io.github.xremming.MelkkiPDF")?;
 
-    let app = App::new(&window, Store::open_default());
+    let app = App::new(&window, Store::open_default(), Clipboard::system());
 
     #[cfg(target_os = "macos")]
     macos::on_open_document({
@@ -1039,6 +1045,46 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_paged_scroll({
         let app = app.clone();
         move |delta_x, delta_y, shift| app.with_viewer(|v| v.paged_scroll(delta_x, delta_y, shift))
+    });
+    window.on_select_from({
+        let app = app.clone();
+        move |page, x, y| {
+            if let Some(page) = index(page) {
+                app.with_viewer(|v| v.select_from(page, x, y));
+            }
+        }
+    });
+    window.on_select_to({
+        let app = app.clone();
+        move |page, x, y| {
+            if let Some(page) = index(page) {
+                app.with_viewer(|v| v.select_to(page, x, y));
+            }
+        }
+    });
+    window.on_select_done({
+        let app = app.clone();
+        move || app.with_viewer(|v| v.select_done())
+    });
+    window.on_select_scroll({
+        let app = app.clone();
+        move |delta_x, delta_y, shift| app.with_viewer(|v| v.select_scroll(delta_x, delta_y, shift))
+    });
+    window.on_copy_selection({
+        let app = app.clone();
+        move || {
+            if let Some(text) = app.active_viewer().and_then(|v| v.selected_text()) {
+                app.clipboard.set_text(&text);
+            }
+        }
+    });
+    window.on_clear_selection({
+        let app = app.clone();
+        move || app.with_viewer(|v| v.clear_selection())
+    });
+    window.on_select_all({
+        let app = app.clone();
+        move || app.with_viewer(|v| v.select_all())
     });
     window.on_go_to_page_index({
         let app = app.clone();

@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::RangeInclusive;
 use std::rc::{self, Rc};
 use std::sync::mpsc::Sender;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
@@ -24,6 +24,7 @@ use crate::render::{
     RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale, scale_key,
 };
 use crate::search::{self, Hit, PageText};
+use crate::selection::{TextPos, Unit};
 use crate::{Highlight, MainWindow, PageEntry, PageLayout, PageRow, SearchResult};
 
 /// How pages are grouped into rows.
@@ -176,6 +177,14 @@ const RESIZE_SETTLE: Duration = Duration::from_millis(150);
 /// momentum from a new swipe, as winit reports both as the same kind of
 /// event, so a rest after each turn also swallowed the next swipe.
 const FLIP_OVERSCROLL: f32 = 60.0;
+/// How long after a click another on the same place counts as the next of
+/// a double or triple click.
+const MULTI_CLICK: Duration = Duration::from_millis(400);
+/// How often a drag held past the top or bottom of the view scrolls it, and
+/// the most it scrolls each time in logical pixels. The further past the
+/// edge the pointer is, up to that, the faster it goes.
+const DRAG_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
+const DRAG_SCROLL_MAX: f32 = 40.0;
 /// How long the wheel has to be still for its next event to start a new
 /// scroll. The first push past the edge of a new scroll turns the page at
 /// once, however small, so each notch of a mouse wheel turns one page even
@@ -458,11 +467,86 @@ fn reference_dims(specs: &[RowSpec], pages_pt: &[(f32, f32)]) -> (f32, f32) {
         .fold((0.0, 0.0), |(max_w, max_h), (width, height)| (max_w.max(width), max_h.max(height)))
 }
 
-/// The search hits outlined on `page`, as its slot in a row carries them.
-fn highlights_of(inner: &Inner, page: usize) -> ModelRc<Highlight> {
-    inner.highlights.get(&page).map_or_else(ModelRc::default, |highlights| {
-        ModelRc::new(VecModel::from(highlights.clone()))
-    })
+/// The areas of `page` in `areas`, as its slot in a row carries them.
+fn areas_of(areas: &HashMap<usize, Vec<Highlight>>, page: usize) -> ModelRc<Highlight> {
+    areas
+        .get(&page)
+        .map_or_else(ModelRc::default, |areas| ModelRc::new(VecModel::from(areas.clone())))
+}
+
+/// Logical pixels per point that `page` is drawn at: its row's zoom in
+/// continuous mode, and the view's in paged mode, where the row shown sets
+/// the zoom (see [`Viewer::fit_paged_row`]).
+fn page_density(inner: &Inner, page: usize) -> f32 {
+    let zoom = match inner.page_loc.get(page) {
+        Some(&(row, _)) if inner.continuous => row_zoom(inner, row),
+        _ => inner.zoom,
+    };
+    BASE_DENSITY * zoom
+}
+
+/// Where `page`'s top-left corner is, in logical pixels from the top-left of
+/// the continuous list's content or of the paged view's content box, as the
+/// window lays the rows out: each row centred across the view, its pages
+/// side by side and each centred in the row's height. Selection needs this
+/// to follow a drag from one page onto another, since the drag reports where
+/// it is from the page it began on.
+fn page_origin_px(inner: &Inner, page: usize) -> Option<(f32, f32)> {
+    let &(row, is_right) = inner.page_loc.get(page)?;
+    let spec = &inner.specs[row];
+    let density = page_density(inner, page);
+    let spacing = if spec.right.is_some() { inner.spread_spacing } else { 0.0 };
+    let page_x = if is_right { inner.pages_pt[spec.left].0 * density + spacing } else { 0.0 };
+    if !inner.continuous {
+        return Some((page_x, 0.0));
+    }
+    let (row_w, _) = row_dims(&inner.pages_pt, spec);
+    let view_w = inner.view.map_or(0.0, |(width, _)| width);
+    let row_px = row_height_px(inner);
+    let page_h = inner.pages_pt[page].1 * density;
+    Some((
+        (view_w - (row_w * density + spacing)) / 2.0 + page_x,
+        row as f32 * row_px + (row_px - page_h) / 2.0,
+    ))
+}
+
+/// The page under a point in the frame of [`page_origin_px`], or the nearest
+/// one: the row the point is level with, or the row shown in paged mode, and
+/// of a spread the page it is nearer to.
+fn page_at(inner: &Inner, x: f32, y: f32) -> Option<usize> {
+    let row = if inner.continuous { row_at(inner, y).0 } else { inner.current_row };
+    let spec = inner.specs.get(row)?;
+    let Some(right) = spec.right else {
+        return Some(spec.left);
+    };
+    let (left_x, _) = page_origin_px(inner, spec.left)?;
+    let left_w = inner.pages_pt[spec.left].0 * page_density(inner, spec.left);
+    let boundary = left_x + left_w + inner.spread_spacing / 2.0;
+    Some(if x < boundary { spec.left } else { right })
+}
+
+/// Which areas a page's slot is overlaid with.
+#[derive(Clone, Copy)]
+enum Overlay {
+    Hits,
+    Selection,
+}
+
+/// The reader's selection: where it began and where it reaches, in the
+/// document's text, and the drag that is making it.
+#[derive(Default)]
+struct SelectionState {
+    /// The anchor and the focus: where the press was and where the drag has
+    /// reached, in either order.
+    range: Option<(TextPos, TextPos)>,
+    /// What the selection grows by, from how many times the reader clicked.
+    unit: Unit,
+    /// While a drag goes on, the page it began on and the last point it
+    /// reported, in points from that page's corner.
+    drag: Option<(usize, f32, f32)>,
+    /// When and where the last press was, for telling a double click.
+    last_press: Option<(Instant, TextPos)>,
+    clicks: u32,
 }
 
 /// The page being read when `spec` is the row at the top: the page last asked
@@ -514,6 +598,8 @@ struct Inner {
     thumb_failed: HashSet<usize>,
     /// The search hits outlined on each page.
     highlights: HashMap<usize, Vec<Highlight>>,
+    /// The selected text's areas on each page.
+    selection: HashMap<usize, Vec<Highlight>>,
     spread: Spread,
     /// Continuous scrolling, rather than one row at a time.
     continuous: bool,
@@ -593,6 +679,11 @@ pub struct Viewer {
     /// Runs while the wheel is scrolling in paged mode, until it has been
     /// still for [`WHEEL_PAUSE`].
     wheel_scrolling: Timer,
+    /// The selected text and the drag making it.
+    selection: RefCell<SelectionState>,
+    /// Runs while a drag is held past the top or bottom of the view, scrolling
+    /// it every [`DRAG_SCROLL_INTERVAL`].
+    drag_scroll: Timer,
 }
 
 impl Viewer {
@@ -623,6 +714,7 @@ impl Viewer {
                 failed: HashSet::new(),
                 thumb_failed: HashSet::new(),
                 highlights: HashMap::new(),
+                selection: HashMap::new(),
                 spread: settings.spread,
                 continuous: settings.continuous,
                 current_row: 0,
@@ -654,6 +746,8 @@ impl Viewer {
             search_timer: Timer::default(),
             search_pending: Cell::new(false),
             wheel_scrolling: Timer::default(),
+            selection: RefCell::new(SelectionState::default()),
+            drag_scroll: Timer::default(),
         });
 
         viewer.build_layout();
@@ -798,9 +892,18 @@ impl Viewer {
             (row_index, is_right, width_pt, height_pt, is_current_paged, evicted)
         };
 
-        let highlights = highlights_of(&self.inner.borrow(), index);
-        let entry =
-            PageEntry { page: index as i32, width_pt, height_pt, image, failed: false, highlights };
+        let entry = {
+            let inner = self.inner.borrow();
+            PageEntry {
+                page: index as i32,
+                width_pt,
+                height_pt,
+                image,
+                failed: false,
+                highlights: areas_of(&inner.highlights, index),
+                selection: areas_of(&inner.selection, index),
+            }
+        };
         self.set_row_entry(row_index, is_right, entry);
         if is_current_paged {
             self.refresh_current_row();
@@ -1073,6 +1176,7 @@ impl Viewer {
             image,
             failed: false,
             highlights: ModelRc::default(),
+            selection: ModelRc::default(),
         };
         self.set_thumb_entry(row, is_right, entry);
     }
@@ -1166,6 +1270,7 @@ impl Viewer {
             image: inner.thumb_images[page].clone(),
             failed: inner.thumb_failed.contains(&page),
             highlights: ModelRc::default(),
+            selection: ModelRc::default(),
         }
     }
 
@@ -1573,7 +1678,8 @@ impl Viewer {
             height_pt,
             image: Image::default(),
             failed: inner.failed.contains(&page),
-            highlights: highlights_of(inner, page),
+            highlights: areas_of(&inner.highlights, page),
+            selection: areas_of(&inner.selection, page),
         }
     }
 
@@ -1586,6 +1692,7 @@ impl Viewer {
             image: Image::default(),
             failed: false,
             highlights: ModelRc::default(),
+            selection: ModelRc::default(),
         }
     }
 
@@ -1761,40 +1868,42 @@ impl Viewer {
             }
             highlights
         };
-        self.set_highlights(highlights);
+        self.set_areas(Overlay::Hits, highlights);
         self.publish_search();
     }
 
-    /// Replaces the outlined hits, updating only the pages whose outlines
-    /// changed.
-    fn set_highlights(&self, highlights: HashMap<usize, Vec<Highlight>>) {
-        let changed: Vec<(usize, usize, bool, ModelRc<Highlight>)> = {
+    /// Replaces the areas of one overlay, updating only the pages whose
+    /// areas changed.
+    fn set_areas(&self, overlay: Overlay, areas: HashMap<usize, Vec<Highlight>>) {
+        let changed: Vec<(usize, bool, ModelRc<Highlight>)> = {
             let mut inner = self.inner.borrow_mut();
-            let pages: HashSet<usize> =
-                inner.highlights.keys().chain(highlights.keys()).copied().collect();
-            let changed: Vec<usize> = pages
-                .into_iter()
-                .filter(|page| inner.highlights.get(page) != highlights.get(page))
-                .collect();
-            inner.highlights = highlights;
+            let inner = &mut *inner;
+            let current = match overlay {
+                Overlay::Hits => &mut inner.highlights,
+                Overlay::Selection => &mut inner.selection,
+            };
+            let pages: HashSet<usize> = current.keys().chain(areas.keys()).copied().collect();
+            let changed: Vec<usize> =
+                pages.into_iter().filter(|page| current.get(page) != areas.get(page)).collect();
+            *current = areas;
             changed
                 .into_iter()
                 .filter_map(|page| {
                     let &(row, is_right) = inner.page_loc.get(page)?;
-                    Some((row, page, is_right, highlights_of(&inner, page)))
+                    Some((row, is_right, areas_of(current, page)))
                 })
                 .collect()
         };
         let current_row = self.inner.borrow().current_row;
         let mut current_changed = false;
-        for (row, _, is_right, highlights) in changed {
+        for (row, is_right, areas) in changed {
             let Some(mut page_row) = self.model.row_data(row) else {
                 continue;
             };
-            if is_right {
-                page_row.right.highlights = highlights;
-            } else {
-                page_row.left.highlights = highlights;
+            let entry = if is_right { &mut page_row.right } else { &mut page_row.left };
+            match overlay {
+                Overlay::Hits => entry.highlights = areas,
+                Overlay::Selection => entry.selection = areas,
             }
             self.model.set_row_data(row, page_row);
             current_changed |= row == current_row;
@@ -1834,6 +1943,303 @@ impl Viewer {
         };
         window.set_search_status(status.into());
         window.set_search_current(search.current.map_or(-1, |current| current as i32));
+    }
+
+    /// The reader pressed on `page` at `x`, `y` points from its corner,
+    /// starting a selection there. A second or third press on the same place
+    /// within [`MULTI_CLICK`] selects the word or the line.
+    pub fn select_from(&self, page: usize, x: f32, y: f32) {
+        let Some(position) = self.resolve(page, x, y) else {
+            self.clear_selection();
+            return;
+        };
+        let now = Instant::now();
+        {
+            let mut selection = self.selection.borrow_mut();
+            let again = selection.last_press.is_some_and(|(at, there)| {
+                now.duration_since(at) < MULTI_CLICK
+                    && there.page == position.page
+                    && there.byte.abs_diff(position.byte) <= 1
+            });
+            selection.clicks = if again { selection.clicks + 1 } else { 1 };
+            selection.unit = Unit::from_clicks(selection.clicks);
+            selection.last_press = Some((now, position));
+            selection.range = Some((position, position));
+            selection.drag = Some((page, x, y));
+        }
+        self.show_selection();
+    }
+
+    /// The drag that began on `page` is at `x`, `y` points from that page's
+    /// corner, which may be off it, and the selection reaches there.
+    pub fn select_to(&self, page: usize, x: f32, y: f32) {
+        if self.selection.borrow().drag.is_none() {
+            return;
+        }
+        self.selection.borrow_mut().drag = Some((page, x, y));
+        self.follow_drag();
+        self.scroll_for_drag();
+    }
+
+    /// The drag ended.
+    pub fn select_done(&self) {
+        self.selection.borrow_mut().drag = None;
+        self.drag_scroll.stop();
+    }
+
+    /// The wheel turned by `delta_x`, `delta_y` during a drag, which holds the
+    /// pointer, so the view scrolls here instead and the drag goes on from
+    /// where the pointer now is over the moved pages. In paged mode only
+    /// the page scrolls: turning to another page would leave the drag's
+    /// origin off screen.
+    pub fn select_scroll(&self, delta_x: f32, delta_y: f32, shift: bool) {
+        let vertical = if shift { 0.0 } else { -delta_y };
+        let horizontal = if shift { -delta_y } else { -delta_x };
+        let scrolled = self.scroll_view_by(vertical);
+        if !self.inner.borrow().continuous && horizontal != 0.0 {
+            {
+                let mut inner = self.inner.borrow_mut();
+                inner.paged_scroll_x += horizontal;
+            }
+            self.push_paged_offsets();
+        }
+        self.drag_moved_by(scrolled);
+    }
+
+    /// Lets the selection go.
+    pub fn clear_selection(&self) {
+        {
+            let mut selection = self.selection.borrow_mut();
+            selection.range = None;
+            selection.drag = None;
+        }
+        self.drag_scroll.stop();
+        self.show_selection();
+    }
+
+    /// Selects every page's text, as far as it has been indexed.
+    pub fn select_all(&self) {
+        {
+            let search = self.search.borrow();
+            let Some(last) = search.index.len().checked_sub(1) else {
+                return;
+            };
+            let mut selection = self.selection.borrow_mut();
+            selection.unit = Unit::Char;
+            selection.drag = None;
+            selection.range = Some((
+                TextPos { page: 0, byte: 0 },
+                TextPos { page: last, byte: search.index[last].len() },
+            ));
+        }
+        self.drag_scroll.stop();
+        self.show_selection();
+    }
+
+    /// The selected text as it goes on the clipboard, with each page's text
+    /// on lines of its own, or `None` while nothing is selected.
+    pub fn selected_text(&self) -> Option<String> {
+        let search = self.search.borrow();
+        let (start, end) = self.bounds(&search.index)?;
+        let mut text = String::new();
+        for page in start.page..=end.page {
+            let page_text = &search.index[page];
+            let from = if page == start.page { start.byte } else { 0 };
+            let to = if page == end.page { end.byte } else { page_text.len() };
+            if page > start.page {
+                text.push('\n');
+            }
+            text.push_str(&page_text.copied_text(from, to));
+        }
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// The selection in document order, grown to whole words or lines when
+    /// the reader clicked for them, or `None` while nothing is selected.
+    fn bounds(&self, index: &[PageText]) -> Option<(TextPos, TextPos)> {
+        let selection = self.selection.borrow();
+        let (anchor, focus) = selection.range?;
+        let (mut start, mut end) = if anchor <= focus { (anchor, focus) } else { (focus, anchor) };
+        if index.len() <= end.page {
+            return None;
+        }
+        let grow = |text: &PageText, byte: usize| match selection.unit {
+            Unit::Char => (byte, byte),
+            Unit::Word => text.word_at(byte),
+            Unit::Line => text.line_at(byte),
+        };
+        start.byte = grow(&index[start.page], start.byte).0;
+        // The focus of a drag sits just past what it reached, so the unit
+        // it ends in is the one before it, unless the selection is empty.
+        let last = if end > start { end.byte.saturating_sub(1) } else { end.byte };
+        end.byte = grow(&index[end.page], last).1.max(end.byte);
+        (start < end).then_some((start, end))
+    }
+
+    /// Outlines the selected text on its pages.
+    fn show_selection(&self) {
+        let areas = {
+            let search = self.search.borrow();
+            let mut areas: HashMap<usize, Vec<Highlight>> = HashMap::new();
+            if let Some((start, end)) = self.bounds(&search.index) {
+                for page in start.page..=end.page {
+                    let page_text = &search.index[page];
+                    let from = if page == start.page { start.byte } else { 0 };
+                    let to = if page == end.page { end.byte } else { page_text.len() };
+                    let page_areas: Vec<Highlight> = page_text
+                        .areas(from, to)
+                        .into_iter()
+                        .map(|area| Highlight {
+                            x: area.x,
+                            y: area.y,
+                            width: area.width,
+                            height: area.height,
+                            current: false,
+                        })
+                        .collect();
+                    if !page_areas.is_empty() {
+                        areas.insert(page, page_areas);
+                    }
+                }
+            }
+            areas
+        };
+        self.set_areas(Overlay::Selection, areas);
+    }
+
+    /// The place in the text at `x`, `y` points from the corner of `page`,
+    /// or the nearest place when the point is off that page: on the page
+    /// under it, or the nearest page, and on the nearest line there. `None`
+    /// when that page has no text, or none indexed yet.
+    fn resolve(&self, page: usize, x: f32, y: f32) -> Option<TextPos> {
+        let inner = self.inner.borrow();
+        let search = self.search.borrow();
+        let &(width, height) = inner.pages_pt.get(page)?;
+        let (page, x, y) = if (0.0..=width).contains(&x) && (0.0..=height).contains(&y) {
+            (page, x, y)
+        } else {
+            let (origin_x, origin_y) = page_origin_px(&inner, page)?;
+            let density = page_density(&inner, page);
+            let (doc_x, doc_y) = (origin_x + x * density, origin_y + y * density);
+            let target = page_at(&inner, doc_x, doc_y)?;
+            let (target_x, target_y) = page_origin_px(&inner, target)?;
+            let density = page_density(&inner, target);
+            let (width, height) = inner.pages_pt[target];
+            (
+                target,
+                ((doc_x - target_x) / density).clamp(0.0, width),
+                ((doc_y - target_y) / density).clamp(0.0, height),
+            )
+        };
+        let byte = search.index.get(page)?.position_at(x, y)?;
+        Some(TextPos { page, byte })
+    }
+
+    /// Moves the focus to where the drag is now.
+    fn follow_drag(&self) {
+        let Some((page, x, y)) = self.selection.borrow().drag else {
+            return;
+        };
+        let Some(position) = self.resolve(page, x, y) else {
+            return;
+        };
+        if let Some((_, focus)) = &mut self.selection.borrow_mut().range {
+            *focus = position;
+        }
+        self.show_selection();
+    }
+
+    /// Scrolls the view by `delta` logical pixels, downwards when positive,
+    /// as far as it goes, and says how far it went. Paged mode scrolls
+    /// within the page shown.
+    fn scroll_view_by(&self, delta: f32) -> f32 {
+        if self.inner.borrow().continuous {
+            let before = self.inner.borrow().scroll_px;
+            self.scroll_by(delta);
+            self.inner.borrow().scroll_px - before
+        } else {
+            let before = self.inner.borrow().paged_scroll_y;
+            self.inner.borrow_mut().paged_scroll_y += delta;
+            self.push_paged_offsets();
+            self.inner.borrow().paged_scroll_y - before
+        }
+    }
+
+    /// The pages moved up by `scrolled` logical pixels under a still pointer,
+    /// so the drag is that much further down the page it began on.
+    fn drag_moved_by(&self, scrolled: f32) {
+        if scrolled == 0.0 {
+            return;
+        }
+        {
+            let mut selection = self.selection.borrow_mut();
+            let Some((page, _, y)) = &mut selection.drag else {
+                return;
+            };
+            *y += scrolled / page_density(&self.inner.borrow(), *page);
+        }
+        self.follow_drag();
+    }
+
+    /// How far past the top (negative) or bottom of the view the drag is, in
+    /// logical pixels, or zero while it is within the view.
+    fn drag_overshoot(&self) -> f32 {
+        let Some((page, _, y)) = self.selection.borrow().drag else {
+            return 0.0;
+        };
+        let inner = self.inner.borrow();
+        let Some((_, origin_y)) = page_origin_px(&inner, page) else {
+            return 0.0;
+        };
+        let doc_y = origin_y + y * page_density(&inner, page);
+        let view_h = inner.view.map_or(0.0, |(_, height)| height);
+        let view_y = if inner.continuous {
+            doc_y - inner.scroll_px
+        } else {
+            let (_, content_h) = paged_content_size(&inner);
+            let offset_y = if content_h <= view_h {
+                (view_h - content_h) / 2.0
+            } else {
+                -inner.paged_scroll_y
+            };
+            doc_y + offset_y
+        };
+        if view_y < 0.0 {
+            view_y
+        } else if view_y > view_h {
+            view_y - view_h
+        } else {
+            0.0
+        }
+    }
+
+    /// Keeps the view scrolling while the drag is held past its top or
+    /// bottom edge, so a selection can reach past what is on screen.
+    fn scroll_for_drag(&self) {
+        if self.drag_overshoot() == 0.0 {
+            self.drag_scroll.stop();
+            return;
+        }
+        if self.drag_scroll.running() {
+            return;
+        }
+        let me = self.me.clone();
+        self.drag_scroll.start(TimerMode::Repeated, DRAG_SCROLL_INTERVAL, move || {
+            let Some(viewer) = me.upgrade() else {
+                return;
+            };
+            let overshoot = viewer.drag_overshoot();
+            if overshoot == 0.0 {
+                viewer.drag_scroll.stop();
+                return;
+            }
+            let scrolled =
+                viewer.scroll_view_by(overshoot.clamp(-DRAG_SCROLL_MAX, DRAG_SCROLL_MAX));
+            if scrolled == 0.0 {
+                viewer.drag_scroll.stop();
+            }
+            viewer.drag_moved_by(scrolled);
+        });
     }
 
     /// Scrolls so the hit at `index` is in view, a third of the way down the
