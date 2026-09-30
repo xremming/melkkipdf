@@ -13,12 +13,12 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use slint::{ComponentHandle, Model, ModelRc};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::render::{RenderControl, WorkerMessage};
 use crate::search::{PageText, PageTextBuilder};
 use crate::settings::Store;
-use crate::{App, FileDrag, MainWindow, PageLayout, ViewSettings, Viewer, Workers};
+use crate::{App, FileDrag, MainWindow, OutlineItem, PageLayout, ViewSettings, Viewer, Workers};
 
 /// A window + viewer pair for tests, plus convenience accessors.
 pub struct Harness {
@@ -294,14 +294,30 @@ impl Tabs {
 
     /// Like [`Tabs::open`], with each page's width and height in points.
     pub fn open_pages(&self, title: &str, pages: Vec<(f32, f32)>) -> i32 {
+        self.open_outlined(title, pages, &[])
+    }
+
+    /// Like [`Tabs::open_pages`], with an outline of `(title, 0-based page,
+    /// depth)` entries in the order they are listed.
+    pub fn open_outlined(
+        &self,
+        title: &str,
+        pages: Vec<(f32, f32)>,
+        outline: &[(&str, i32, i32)],
+    ) -> i32 {
         let path = PathBuf::from(title);
         if let Some(index) = self.app.find(&path) {
             self.app.select(index);
             return self.app.tabs.borrow()[index].id;
         }
+        let outline: Vec<OutlineItem> = outline
+            .iter()
+            .map(|&(title, page, depth)| OutlineItem { title: title.into(), page, depth })
+            .collect();
+        let outline = ModelRc::new(VecModel::from(outline));
         let index = self
             .app
-            .insert(path, title.into(), pages, ModelRc::default(), |_| {
+            .insert(path, title.into(), pages, outline, |_| {
                 let (pages, requests) = mpsc::channel();
                 let (thumbnails, thumb_requests) = mpsc::channel();
                 self.receivers.borrow_mut().push((requests, thumb_requests));
@@ -404,5 +420,17 @@ impl Tabs {
 
     pub fn active_tab(&self) -> i32 {
         self.window.get_active_tab()
+    }
+
+    /// The 0-based pages of the flags on the page edge, in the order drawn,
+    /// with what each one's tooltip says.
+    pub fn flags(&self) -> Vec<(i32, String)> {
+        self.window.get_bookmarks().iter().map(|flag| (flag.page, flag.label.into())).collect()
+    }
+
+    /// The 0-based page Backspace flips back to, or `None` while there is
+    /// none.
+    pub fn return_page(&self) -> Option<i32> {
+        Some(self.window.get_return_page()).filter(|&page| page >= 0)
     }
 }

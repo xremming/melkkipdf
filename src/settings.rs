@@ -1,5 +1,5 @@
-//! Remembers each document's view settings, and the tabs that were open,
-//! between runs.
+//! Remembers each document's view settings and bookmarks, and the tabs that
+//! were open, between runs.
 //!
 //! Everything lives in one small JSON file under the platform's state
 //! directory. It is rewritten whole, through a temporary file renamed over the
@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::hash::{BuildHasher, RandomState};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,8 +17,12 @@ use serde::{Deserialize, Serialize};
 use crate::ViewSettings;
 
 /// Bumped whenever the file's layout changes incompatibly, so an old build
-/// never misreads a newer file as its own, nor overwrites it.
-const VERSION: u32 = 1;
+/// never misreads a newer file as its own, nor overwrites it. Version 2 added
+/// bookmarks, which a version 1 build would silently drop on its next save.
+const VERSION: u32 = 2;
+/// The oldest layout that still reads as the current one: version 1 only
+/// lacks bookmarks, which default to none.
+const OLDEST_READABLE: u32 = 1;
 /// How many documents are remembered. The least recently opened are dropped
 /// first, so the file cannot grow without bound.
 const MAX_DOCUMENTS: usize = 500;
@@ -40,6 +45,18 @@ struct DocumentEntry {
     /// documents once there are too many.
     last_opened: u64,
     settings: ViewSettings,
+    /// Sorted by page, with at most one bookmark per page.
+    #[serde(default)]
+    bookmarks: Vec<Bookmark>,
+}
+
+/// A page the reader has flagged.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub page: usize,
+    /// The hue of its flag in degrees, picked at random when it was added so
+    /// flags are told apart at a glance.
+    pub hue: u16,
 }
 
 /// The tabs that were open, in order, and which of them was shown.
@@ -121,7 +138,7 @@ impl Store {
         let parsed = serde_json::from_slice::<StateFile>(&contents)
             .map_err(|err| err.to_string())
             .and_then(|state| match state.version {
-                VERSION => Ok(state),
+                OLDEST_READABLE..=VERSION => Ok(state),
                 other => Err(format!("unknown version {other}")),
             });
         match parsed {
@@ -158,9 +175,49 @@ impl Store {
             path: path.to_path_buf(),
             last_opened: now,
             settings: ViewSettings::default(),
+            bookmarks: Vec::new(),
         });
         entry.last_opened = now;
         self.dirty = true;
+    }
+
+    /// The bookmarks of the document at `path`, sorted by page.
+    pub fn bookmarks(&self, path: &Path) -> Vec<Bookmark> {
+        self.documents.get(path).map_or_else(Vec::new, |entry| entry.bookmarks.clone())
+    }
+
+    /// Flags `page` of the document at `path`, or takes its flag away if it
+    /// has one, and returns the document's bookmarks as they are now.
+    pub fn toggle_bookmark(&mut self, path: &Path, page: usize) -> Vec<Bookmark> {
+        if self
+            .documents
+            .get(path)
+            .is_some_and(|entry| entry.bookmarks.iter().any(|b| b.page == page))
+        {
+            return self.remove_bookmark(path, page);
+        }
+        if !self.documents.contains_key(path) {
+            self.record_open(path);
+        }
+        let entry = self.documents.get_mut(path).expect("the document was just recorded");
+        let at = entry.bookmarks.partition_point(|bookmark| bookmark.page < page);
+        entry.bookmarks.insert(at, Bookmark { page, hue: random_hue() });
+        self.dirty = true;
+        entry.bookmarks.clone()
+    }
+
+    /// Takes away the flag on `page` of the document at `path`, if it has one,
+    /// and returns the document's bookmarks as they are now.
+    pub fn remove_bookmark(&mut self, path: &Path, page: usize) -> Vec<Bookmark> {
+        let Some(entry) = self.documents.get_mut(path) else {
+            return Vec::new();
+        };
+        let before = entry.bookmarks.len();
+        entry.bookmarks.retain(|bookmark| bookmark.page != page);
+        if entry.bookmarks.len() != before {
+            self.dirty = true;
+        }
+        entry.bookmarks.clone()
     }
 
     /// Remembers `settings` for the document at `path`.
@@ -235,7 +292,9 @@ impl Store {
     }
 
     /// Drops the least recently opened documents beyond [`MAX_DOCUMENTS`],
-    /// sparing any that are open in a tab.
+    /// sparing any that are open in a tab. A bookmarked document is spared
+    /// too: its view is disposable, but its bookmarks are the reader's own
+    /// work, and flagging takes enough effort that they cannot pile up.
     fn forget_oldest(&mut self) {
         if self.documents.len() <= MAX_DOCUMENTS {
             return;
@@ -244,7 +303,7 @@ impl Store {
         let mut candidates: Vec<(u64, PathBuf)> = self
             .documents
             .values()
-            .filter(|entry| !open.contains(&entry.path))
+            .filter(|entry| !open.contains(&entry.path) && entry.bookmarks.is_empty())
             .map(|entry| (entry.last_opened, entry.path.clone()))
             .collect();
         candidates.sort();
@@ -253,6 +312,13 @@ impl Store {
             self.documents.remove(&path);
         }
     }
+}
+
+/// A hue in degrees for a new flag. The standard library's hasher is seeded
+/// at random, which is all the randomness a colour needs, and saves a
+/// dependency.
+fn random_hue() -> u16 {
+    (RandomState::new().hash_one(0u8) % 360) as u16
 }
 
 /// Where to move an unreadable settings `file`: `<file>.bak`, or the first of
@@ -323,6 +389,61 @@ mod tests {
         assert_eq!(loaded.document(Path::new("/docs/a.pdf")), Some(custom()));
         assert_eq!(loaded.document(Path::new("/docs/b.pdf")), None);
         assert_eq!(loaded.session(), Session { tabs: vec!["/docs/a.pdf".into()], active: Some(0) });
+    }
+
+    #[test]
+    fn bookmarks_are_kept_by_page() {
+        let mut store = Store::in_memory();
+        let path = Path::new("/docs/a.pdf");
+        store.toggle_bookmark(path, 7);
+        store.toggle_bookmark(path, 2);
+        store.toggle_bookmark(path, 12);
+        let pages = |store: &Store| -> Vec<usize> {
+            store.bookmarks(path).iter().map(|bookmark| bookmark.page).collect()
+        };
+        assert_eq!(pages(&store), vec![2, 7, 12]);
+        assert!(store.bookmarks(path).iter().all(|bookmark| bookmark.hue < 360));
+
+        // Flagging a flagged page takes the flag away, and only that one.
+        store.toggle_bookmark(path, 7);
+        assert_eq!(pages(&store), vec![2, 12]);
+        store.remove_bookmark(path, 12);
+        store.remove_bookmark(path, 12);
+        assert_eq!(pages(&store), vec![2]);
+        assert_eq!(store.bookmarks(Path::new("/docs/b.pdf")), Vec::new());
+    }
+
+    #[test]
+    fn saved_bookmarks_load_back() {
+        let directory = scratch("bookmarks");
+        let file = directory.join("documents.json");
+        let mut store = Store::load(file.clone());
+        let bookmarks = store.toggle_bookmark(Path::new("/docs/a.pdf"), 3);
+        store.save().unwrap();
+
+        let loaded = Store::load(file);
+        assert_eq!(loaded.bookmarks(Path::new("/docs/a.pdf")), bookmarks);
+    }
+
+    #[test]
+    fn a_file_from_before_bookmarks_still_loads() {
+        let directory = scratch("v1");
+        let file = directory.join("documents.json");
+        let older = r#"{
+            "version": 1,
+            "documents": [{
+                "path": "/docs/a.pdf",
+                "last_opened": 1,
+                "settings": {"continuous": false, "spread": "even", "fit": "free", "zoom": 1.5, "page": 7}
+            }],
+            "session": {"tabs": ["/docs/a.pdf"], "active": 0}
+        }"#;
+        std::fs::write(&file, older).unwrap();
+
+        let store = Store::load(file);
+        assert_eq!(store.document(Path::new("/docs/a.pdf")), Some(custom()));
+        assert_eq!(store.bookmarks(Path::new("/docs/a.pdf")), Vec::new());
+        assert!(!directory.join("documents.json.bak").exists());
     }
 
     #[test]
@@ -415,15 +536,17 @@ mod tests {
             store.update(&path, custom());
             store.documents.get_mut(&path).unwrap().last_opened = index as u64;
         }
-        // The oldest document is open in a tab, so it survives in place of the
-        // next oldest.
+        // The oldest document is open in a tab and the next oldest has a
+        // bookmark, so they survive in place of the two after them.
         store.set_session(Session { tabs: vec!["/docs/0.pdf".into()], active: Some(0) });
+        store.toggle_bookmark(Path::new("/docs/1.pdf"), 0);
         store.save().unwrap();
 
         assert_eq!(store.documents.len(), MAX_DOCUMENTS);
         assert!(store.document(Path::new("/docs/0.pdf")).is_some());
-        assert!(store.document(Path::new("/docs/1.pdf")).is_none());
+        assert!(store.document(Path::new("/docs/1.pdf")).is_some());
         assert!(store.document(Path::new("/docs/2.pdf")).is_none());
-        assert!(store.document(Path::new("/docs/3.pdf")).is_some());
+        assert!(store.document(Path::new("/docs/3.pdf")).is_none());
+        assert!(store.document(Path::new("/docs/4.pdf")).is_some());
     }
 }

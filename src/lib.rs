@@ -21,11 +21,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
-use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
 use render::{Loaded, RenderControl, WorkerMessage};
 use search::{IndexHandle, Indexed};
-use settings::{Session, Store};
+use settings::{Bookmark, Session, Store};
 
 pub use viewer::{FitMode, Spread, ViewSettings, Viewer};
 
@@ -84,6 +84,10 @@ struct Tab {
     /// read, which takes a while for a long one.
     viewer: Option<Rc<Viewer>>,
     outline: ModelRc<OutlineItem>,
+    /// The reader's flags on the page edge, which the store remembers.
+    bookmarks: Rc<VecModel<BookmarkFlag>>,
+    /// The page a bookmark jump left, which Backspace flips back to.
+    return_page: Option<usize>,
     /// The worker reading the document, until it has.
     loading: Option<Loading>,
     /// The indexer reading the document's text for search, which stops when
@@ -193,15 +197,25 @@ impl App {
         let id = self.allocate_id();
         let (pages, control) =
             render::spawn(path.clone(), id, window.as_weak(), self.load_sender.clone());
+        let bookmarks = self.stored_bookmarks(&canonical);
         Some(self.add_tab(Tab {
             id,
             path: canonical,
             title: title.into(),
             viewer: None,
             outline: ModelRc::default(),
+            bookmarks,
+            return_page: None,
             loading: Some(Loading { path, pages, control }),
             indexer: None,
         }))
+    }
+
+    /// The flags of the document at `path` as the store remembers them, with
+    /// no outline yet to name them after.
+    fn stored_bookmarks(&self, path: &Path) -> Rc<VecModel<BookmarkFlag>> {
+        let bookmarks = self.store.borrow().bookmarks(path);
+        Rc::new(VecModel::from(flags(&bookmarks, &ModelRc::default())))
     }
 
     /// Takes in every document whose worker has finished reading it.
@@ -257,9 +271,13 @@ impl App {
         let viewer = self.make_viewer(&window, &path, info.pages_pt, workers);
         {
             let mut tabs = self.tabs.borrow_mut();
-            tabs[index].viewer = Some(viewer);
-            tabs[index].outline = ModelRc::new(VecModel::from(outline));
-            tabs[index].indexer = Some(indexer);
+            let tab = &mut tabs[index];
+            tab.viewer = Some(viewer);
+            tab.outline = ModelRc::new(VecModel::from(outline));
+            tab.indexer = Some(indexer);
+            // The flags were shown before the outline arrived to name them.
+            let bookmarks = self.store.borrow().bookmarks(&tab.path);
+            tab.bookmarks.set_vec(flags(&bookmarks, &tab.outline));
         }
         if self.active.get() == Some(index) {
             self.show(index);
@@ -286,12 +304,15 @@ impl App {
         let window = self.window.upgrade()?;
         let id = self.allocate_id();
         let viewer = self.make_viewer(&window, &path, pages_pt, spawn(id));
+        let bookmarks = self.store.borrow().bookmarks(&path);
         Some(self.add_tab(Tab {
             id,
             path,
             title,
             viewer: Some(viewer),
+            bookmarks: Rc::new(VecModel::from(flags(&bookmarks, &outline))),
             outline,
+            return_page: None,
             loading: None,
             indexer: None,
         }))
@@ -370,11 +391,16 @@ impl App {
         let Some(window) = self.window.upgrade() else {
             return;
         };
-        let Some((viewer, outline, title)) = self
-            .tabs
-            .borrow()
-            .get(index)
-            .map(|tab| (tab.viewer.clone(), tab.outline.clone(), tab.title.clone()))
+        let Some((viewer, outline, bookmarks, return_page, title)) =
+            self.tabs.borrow().get(index).map(|tab| {
+                (
+                    tab.viewer.clone(),
+                    tab.outline.clone(),
+                    tab.bookmarks.clone(),
+                    tab.return_page,
+                    tab.title.clone(),
+                )
+            })
         else {
             return;
         };
@@ -388,6 +414,8 @@ impl App {
 
         window.set_active_tab(index as i32);
         window.set_outline(outline);
+        window.set_bookmarks(ModelRc::from(bookmarks));
+        window.set_return_page(return_page.map_or(-1, |page| page as i32));
         window.set_doc_title(title.clone());
         let Some(viewer) = viewer else {
             Self::clear_document(&window, &format!("Loading {title}…"));
@@ -477,6 +505,100 @@ impl App {
         }
     }
 
+    /// Flags the page being read in the active tab, or takes its flag away.
+    /// The store remembers the change; the autosave writes it out.
+    pub(crate) fn toggle_bookmark(&self) {
+        let Some((index, viewer)) = self.active.get().zip(self.active_viewer()) else {
+            return;
+        };
+        let page = viewer.reading_page();
+        let path = self.tabs.borrow()[index].path.clone();
+        let bookmarks = self.store.borrow_mut().toggle_bookmark(&path, page);
+        self.set_flags(index, &bookmarks);
+    }
+
+    /// Takes the flag off `page` of the active tab's document.
+    pub(crate) fn remove_bookmark(&self, page: usize) {
+        let Some(index) = self.active.get() else {
+            return;
+        };
+        let path = self.tabs.borrow()[index].path.clone();
+        let bookmarks = self.store.borrow_mut().remove_bookmark(&path, page);
+        self.set_flags(index, &bookmarks);
+    }
+
+    /// Redraws the flags of the tab at `index` from `bookmarks`.
+    fn set_flags(&self, index: usize, bookmarks: &[Bookmark]) {
+        let tabs = self.tabs.borrow();
+        let tab = &tabs[index];
+        tab.bookmarks.set_vec(flags(bookmarks, &tab.outline));
+    }
+
+    /// Goes to the flagged `page`, leaving the page being read as the place
+    /// to flip back to. Going to the page already being read leaves nothing
+    /// to flip back to, so it does not disturb the place.
+    pub(crate) fn go_to_bookmark(&self, page: usize) {
+        let Some((index, viewer)) = self.active.get().zip(self.active_viewer()) else {
+            return;
+        };
+        let from = viewer.reading_page();
+        if from == page {
+            return;
+        }
+        viewer.nav_to_page(page);
+        self.set_return_page(index, from);
+    }
+
+    /// Goes to the next (`dir > 0`) or previous flag from the page being
+    /// read, wrapping around at the ends. A page's own flag does not count as
+    /// next or previous, so pressing on always moves.
+    pub(crate) fn bookmark_step(&self, dir: i32) {
+        let Some(viewer) = self.active_viewer() else {
+            return;
+        };
+        let page = viewer.reading_page();
+        let pages: Vec<usize> = self.flagged_pages();
+        let target = if dir < 0 {
+            pages.iter().rev().find(|&&flagged| flagged < page).or(pages.last())
+        } else {
+            pages.iter().find(|&&flagged| flagged > page).or(pages.first())
+        };
+        if let Some(&target) = target {
+            self.go_to_bookmark(target);
+        }
+    }
+
+    /// Flips back to the page the last bookmark jump left, and remembers the
+    /// page left now, so flipping again returns to the flag: the two pages
+    /// swap, like a ribbon and a flag in a book.
+    pub(crate) fn flip_back(&self) {
+        let Some((index, viewer)) = self.active.get().zip(self.active_viewer()) else {
+            return;
+        };
+        let Some(target) = self.tabs.borrow()[index].return_page else {
+            return;
+        };
+        let from = viewer.reading_page();
+        viewer.nav_to_page(target);
+        self.set_return_page(index, from);
+    }
+
+    /// The flagged pages of the active tab, in page order.
+    fn flagged_pages(&self) -> Vec<usize> {
+        let Some(index) = self.active.get() else {
+            return Vec::new();
+        };
+        let tabs = self.tabs.borrow();
+        tabs[index].bookmarks.iter().filter_map(|flag| self::index(flag.page)).collect()
+    }
+
+    fn set_return_page(&self, index: usize, page: usize) {
+        self.tabs.borrow_mut()[index].return_page = Some(page);
+        if let Some(window) = self.window.upgrade() {
+            window.set_return_page(page as i32);
+        }
+    }
+
     /// Records every open tab's view and the tabs themselves, then writes them
     /// out if anything changed since the last save.
     pub(crate) fn save(&self) {
@@ -546,6 +668,8 @@ impl App {
         };
         window.set_active_tab(-1);
         window.set_outline(ModelRc::default());
+        window.set_bookmarks(ModelRc::default());
+        window.set_return_page(-1);
         window.set_doc_title(SharedString::new());
         Self::clear_document(&window, "Open a PDF to get started.");
     }
@@ -715,6 +839,43 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
 /// that leads nowhere.
 fn index(value: i32) -> Option<usize> {
     usize::try_from(value).ok()
+}
+
+/// Flag saturation and value: strong enough to stand out on the dark chrome
+/// whatever the hue, yet not glaring.
+const FLAG_SATURATION: f32 = 0.6;
+const FLAG_VALUE: f32 = 0.9;
+
+/// The flags to draw for `bookmarks`, each named after the last entry of
+/// `outline` that starts on or before its page, since a flag has no name of
+/// its own and the heading is what the reader knows the page by.
+fn flags(bookmarks: &[Bookmark], outline: &ModelRc<OutlineItem>) -> Vec<BookmarkFlag> {
+    bookmarks
+        .iter()
+        .map(|bookmark| {
+            let page = bookmark.page as i32;
+            let heading = outline
+                .iter()
+                .filter(|item| item.page >= 0 && item.page <= page)
+                .last()
+                .map(|item| item.title.trim().to_owned())
+                .filter(|title| !title.is_empty());
+            let label = match heading {
+                Some(heading) => format!("Page {} · {heading}", page + 1),
+                None => format!("Page {}", page + 1),
+            };
+            BookmarkFlag {
+                page,
+                color: slint::Color::from_hsva(
+                    f32::from(bookmark.hue),
+                    FLAG_SATURATION,
+                    FLAG_VALUE,
+                    1.0,
+                ),
+                label: label.into(),
+            }
+        })
+        .collect()
 }
 
 /// Connects the window's callbacks to the app, dispatching each to the viewer of
@@ -906,6 +1067,34 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
                 app.with_viewer(|v| v.go_to_search_result(result));
             }
         }
+    });
+    window.on_toggle_bookmark({
+        let app = app.clone();
+        move || app.toggle_bookmark()
+    });
+    window.on_remove_bookmark({
+        let app = app.clone();
+        move |page| {
+            if let Some(page) = index(page) {
+                app.remove_bookmark(page);
+            }
+        }
+    });
+    window.on_go_to_bookmark({
+        let app = app.clone();
+        move |page| {
+            if let Some(page) = index(page) {
+                app.go_to_bookmark(page);
+            }
+        }
+    });
+    window.on_bookmark_step({
+        let app = app.clone();
+        move |dir| app.bookmark_step(dir)
+    });
+    window.on_flip_back({
+        let app = app.clone();
+        move || app.flip_back()
     });
     window.on_toggle_sidebar({
         let window = window.as_weak();

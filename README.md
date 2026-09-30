@@ -49,7 +49,9 @@ cargo test --features testing
 - Continuous and single-page reading modes
 - Single, odd, and even page spreads
 - Zoom, fit-width, and fit-page
-- Bookmark sidebar with page thumbnails
+- Outline sidebar with page thumbnails
+- Bookmarks that stick out of the page edge like flags on a book, so every
+  marked page is in view and one press flips there and back
 - Full-text search that ignores case, accents, and most punctuation, with every
   hit listed in a sidebar and outlined on its page
 - Keyboard-driven navigation
@@ -72,11 +74,14 @@ Ctrl is ⌘ on macOS.
 | Esc in the search field                | Back to the document                          |
 | Ctrl+Tab, Ctrl+Shift+Tab               | Next or previous tab                          |
 | Ctrl+W                                 | Close the tab                                 |
+| Ctrl+D                                 | Flag the page, or take its flag away          |
+| B, Shift+B                             | Next or previous flag                         |
+| Backspace                              | Flip between a flag and where you came from   |
 
 ## Where it keeps its state
 
-Each document's view and the tabs to reopen are kept in one file,
-`documents.json`:
+Each document's view and bookmarks, and the tabs to reopen, are kept in one
+file, `documents.json`:
 
 - Linux: `~/.local/state/melkkipdf/`, or `$XDG_STATE_HOME/melkkipdf/`.
 - Flatpak: `~/.var/app/io.github.xremming.MelkkiPDF/.local/state/melkkipdf/`.

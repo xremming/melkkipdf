@@ -70,6 +70,14 @@ export struct OutlineItem {
     depth: int,
 }
 
+// A page the reader has flagged: the 0-based page its flag sits at on the
+// page edge, the colour the flag was given, and what its tooltip says.
+export struct BookmarkFlag {
+    page: int,
+    color: color,
+    label: string,
+}
+
 // A single page: white paper with the rendered image on top. Sized from the
 // page's points times the shared density.
 component PageImageView inherits Rectangle {
@@ -486,6 +494,21 @@ export component MainWindow inherits Window {
     in-out property <bool> sidebar-open: true;
     in-out property <int> sidebar-tab;
 
+    // The reader's bookmarks, drawn as flags on the page edge, and the
+    // 0-based page Backspace flips back to (-1 while there is none).
+    in property <[BookmarkFlag]> bookmarks;
+    in property <int> return-page: -1;
+    // Flags the page being read, or takes its flag away.
+    callback toggle-bookmark();
+    // Takes the flag off a 0-based page.
+    callback remove-bookmark(int);
+    // Jumps to a flagged 0-based page, remembering where it was left from.
+    callback go-to-bookmark(int);
+    // Jumps to the next (1) or previous (-1) flag, wrapping around.
+    callback bookmark-step(int);
+    // Flips back to where the last bookmark jump was left from.
+    callback flip-back();
+
     // The name of the open document, shown in the window title bar.
     in property <string> doc-title;
 
@@ -692,6 +715,11 @@ export component MainWindow inherits Window {
                 }
                 return accept;
             }
+            // Ctrl+D flags the page, as it bookmarks a page in a browser.
+            if (event.modifiers.control && (event.text == "d" || event.text == "D")) {
+                root.toggle-bookmark();
+                return accept;
+            }
             if (event.modifiers.control && event.text.character-count == 1 && event.text.is-float()) {
                 let number = event.text.to-float();
                 if (number == 9 && root.tabs.length > 0) {
@@ -720,6 +748,11 @@ export component MainWindow inherits Window {
             if (event.text == "1") { root.set-spread(0); return accept; }
             if (event.text == "2") { root.set-spread(1); return accept; }
             if (event.text == "3") { root.set-spread(2); return accept; }
+            // B and Shift+B flip to the next and previous flag, and Backspace
+            // back to where the last flip came from.
+            if (event.text == "b") { root.bookmark-step(1); return accept; }
+            if (event.text == "B") { root.bookmark-step(-1); return accept; }
+            if (event.text == Key.Backspace) { root.flip-back(); return accept; }
             // The arrows, and H, J, K and L as in Vim.
             if (event.text == Key.UpArrow || event.text == "k") { root.nav-line(-1); return accept; }
             if (event.text == Key.DownArrow || event.text == "j") { root.nav-line(1); return accept; }
@@ -924,6 +957,27 @@ export component MainWindow inherits Window {
                             current: root.spread-mode;
                             select(index) => {
                                 root.set-spread(index);
+                            }
+                        }
+                    }
+
+                    // Bookmarks: flip back to where the last jump came from,
+                    // and flag the page.
+                    VerticalLayout {
+                        alignment: center;
+                        bookmark-group := SegmentedControl {
+                            options: [@image-url("icons/flip-back.svg"), @image-url("icons/bookmark.svg")];
+                            tips: [
+                                "Flip back to where you came from (Backspace)",
+                                "Bookmark this page, or take the bookmark away (\{root.command-key}D)",
+                            ];
+                            current: -1;
+                            select(index) => {
+                                if (index == 0) {
+                                    root.flip-back();
+                                } else {
+                                    root.toggle-bookmark();
+                                }
                             }
                         }
                     }
@@ -1163,6 +1217,114 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // The page edge: the reader's flags stick out of it at their
+                // depth in the document, like sticky flags on a closed book,
+                // so every one is in view and a click flips to it. A bar
+                // shows the page being read, so a flag's distance from it can
+                // be judged, and a dot the page Backspace flips back to.
+                if root.page-count > 0: edge := Rectangle {
+                    width: 18px;
+                    background: #2a2a2a;
+
+                    // A flag sits at its page's depth, at least tall enough
+                    // to hit, and the last one is kept whole.
+                    property <length> flag-height: max(12px, self.height / root.page-count);
+                    pure function flag-y(page: int) -> length {
+                        return max(0px, min(self.height - self.flag-height, page * self.height / root.page-count));
+                    }
+
+                    Rectangle {
+                        x: 0;
+                        width: 1px;
+                        background: #444444;
+                    }
+                    // The search sidebar is the same colour, so a line keeps
+                    // the two apart when it is open.
+                    if root.search-open: Rectangle {
+                        x: edge.width - 1px;
+                        width: 1px;
+                        background: #444444;
+                    }
+                    // A click on the edge hands the keys back to the
+                    // document, as one on the document does.
+                    TouchArea {
+                        clicked => {
+                            key-handler.focus();
+                        }
+                    }
+
+                    // The page being read.
+                    Rectangle {
+                        x: 1px;
+                        y: edge.flag-y(root.current-page - 1);
+                        width: 3px;
+                        height: edge.flag-height;
+                        background: #dddddd;
+                    }
+
+                    for flag in root.bookmarks: Rectangle {
+                        x: 1px;
+                        y: edge.flag-y(flag.page);
+                        // A flag pulls out a little under the pointer, and
+                        // on the page being read.
+                        width: flag-touch.has-hover || flag.page == root.current-page - 1 ? 16px : 11px;
+                        height: edge.flag-height;
+                        background: flag.color;
+                        border-top-right-radius: 3px;
+                        border-bottom-right-radius: 3px;
+                        animate width { duration: 80ms; }
+                        flag-menu := ContextMenuArea {
+                            Menu {
+                                MenuItem {
+                                    title: "Remove bookmark";
+                                    activated => {
+                                        root.remove-bookmark(flag.page);
+                                    }
+                                }
+                            }
+                        }
+                        // The touch area sits over the menu area, so it
+                        // opens the menu itself on a right click.
+                        flag-touch := TouchArea {
+                            clicked => {
+                                root.go-to-bookmark(flag.page);
+                            }
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                    flag-menu.show({ x: self.mouse-x, y: self.mouse-y });
+                                }
+                                // A middle click takes the flag away without
+                                // a menu, as it closes a tab.
+                                if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.up) {
+                                    root.remove-bookmark(flag.page);
+                                }
+                            }
+                        }
+                        Tooltip {
+                            text: @markdown("\{flag.label}");
+                        }
+                    }
+
+                    // The page to flip back to: a dot drawn over the flags,
+                    // small enough to leave whatever it sits on in view and
+                    // to take no clicks from it, since Backspace most often
+                    // leads to a flag's page.
+                    if root.return-page >= 0: Rectangle {
+                        x: 1px;
+                        y: edge.flag-y(root.return-page);
+                        width: 11px;
+                        height: edge.flag-height;
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: #eeeeee;
+                            border-width: 1px;
+                            border-color: #2a2a2a;
                         }
                     }
                 }

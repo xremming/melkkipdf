@@ -675,11 +675,15 @@ impl Viewer {
             spread: inner.spread,
             fit: inner.fit,
             zoom: inner.zoom,
-            page: inner
-                .specs
-                .get(inner.current_row)
-                .map_or(0, |spec| reading_page_in(&inner, spec)),
+            page: self.reading_page(),
         }
+    }
+
+    /// The 0-based page being read: the one a bookmark goes on, and the one
+    /// the view comes back to when the document is reopened.
+    pub fn reading_page(&self) -> usize {
+        let inner = self.inner.borrow();
+        inner.specs.get(inner.current_row).map_or(0, |spec| reading_page_in(&inner, spec))
     }
 
     /// Puts a restored page at the top of the view. Paged mode shows it right
