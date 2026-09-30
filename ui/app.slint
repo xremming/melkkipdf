@@ -484,6 +484,41 @@ component DocumentTab inherits Rectangle {
 
 // Top-level window: a toolbar above the document, shown either as a continuous
 // scrollable column of rows or one row at a time.
+// One line of the help page: the keys on the left, what they do on the
+// right.
+component HelpRow inherits HorizontalLayout {
+    in property <string> keys;
+    in property <string> action;
+    spacing: 12px;
+    Text {
+        text: root.keys;
+        color: #ffffff;
+        font-size: 13px;
+        width: 135px;
+        vertical-alignment: top;
+    }
+    Text {
+        text: root.action;
+        color: #bbbbbb;
+        font-size: 13px;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
+    }
+}
+
+// A titled group of help rows.
+component HelpSection inherits VerticalLayout {
+    in property <string> title;
+    spacing: 4px;
+    Text {
+        text: root.title;
+        color: #ffffff;
+        font-size: 13px;
+        font-weight: 700;
+    }
+    @children
+}
+
 export component MainWindow inherits Window {
     in property <[PageRow]> rows;
     in property <PageRow> current-row-content;
@@ -515,6 +550,19 @@ export component MainWindow inherits Window {
     // 0-based page Tab flips back to (-1 while there is none).
     in property <[BookmarkFlag]> bookmarks;
     in property <int> return-page: -1;
+
+    // The help page over the window, with every shortcut. The modifier it
+    // names is Cmd on macOS, where Slint reports it as control, and Ctrl
+    // elsewhere.
+    in-out property <bool> help-open;
+    property <string> command-key: Platform.os == OperatingSystemType.macos ? "⌘" : "Ctrl+";
+
+    // Shows the help, or puts it away, and leaves the keys with the
+    // document either way, since the help is read, not typed into.
+    function toggle-help() {
+        root.help-open = !root.help-open;
+        key-handler.focus();
+    }
     // Flags the page being read, or takes its flag away.
     callback toggle-bookmark();
     // Takes the flag off a 0-based page.
@@ -707,6 +755,19 @@ export component MainWindow inherits Window {
 
     key-handler := FocusScope {
         key-pressed(event) => {
+            // ? and F1 show the help, and Esc or either key puts it away.
+            // Nothing else gets through while it is up, so the document
+            // stays put underneath.
+            if (event.text == "?" || event.text == Key.F1) {
+                root.toggle-help();
+                return accept;
+            }
+            if (root.help-open) {
+                if (event.text == Key.Escape) {
+                    root.help-open = false;
+                }
+                return accept;
+            }
             if (event.modifiers.control && (event.text == "+" || event.text == "=")) {
                 root.zoom-in();
                 return accept;
@@ -911,6 +972,34 @@ export component MainWindow inherits Window {
                     // the left behind the open button.
                     Rectangle {
                         horizontal-stretch: 1;
+                    }
+
+                    // Help, at the strip's far end, as the open button is at
+                    // its start.
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 5px;
+                            background: (root.help-open || help-toggle.pressed)
+                                ? #252525
+                                : (help-toggle.has-hover ? #3a3a3a : transparent);
+                            Image {
+                                source: @image-url("icons/help.svg");
+                                width: Toolbar.icon-size;
+                                height: self.width;
+                                colorize: (root.help-open || help-toggle.pressed) ? #ffffff : #dddddd;
+                            }
+                            help-toggle := TouchArea {
+                                clicked => {
+                                    root.toggle-help();
+                                }
+                            }
+                            Tooltip {
+                                text: @markdown("Keyboard shortcuts (?)");
+                            }
+                        }
                     }
                 }
             }
@@ -1610,6 +1699,140 @@ export component MainWindow inherits Window {
         TouchArea {
             clicked => {
                 root.notice = "";
+            }
+        }
+    }
+
+    // The help page: every shortcut, and how the bookmarks work. A click
+    // outside the page puts it away, as Esc does.
+    if root.help-open: help-overlay := Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000a0;
+        TouchArea {
+            clicked => {
+                root.help-open = false;
+            }
+        }
+
+        help-panel := Rectangle {
+            width: min(800px, root.width - 32px);
+            // The slack keeps a page that fits from scrolling by the pixel
+            // that rounding the wrapped text can leave over.
+            height: min(help-content.preferred-height + 4px, root.height - 32px);
+            background: #2a2a2a;
+            border-width: 1px;
+            border-color: #4a4a4a;
+            border-radius: 8px;
+            clip: true;
+            // Keeps clicks on the page from reaching the backdrop.
+            TouchArea { }
+
+            // Scrolls only when the window is too short for the page. The
+            // text wraps to the page's width rather than widening it.
+            ScrollView {
+                content-width: self.visible-width;
+                content-height: help-content.preferred-height;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
+                help-content := VerticalLayout {
+                    padding: 24px;
+                    spacing: 18px;
+
+                    HorizontalLayout {
+                        Text {
+                            text: "Keyboard shortcuts";
+                            color: #ffffff;
+                            font-size: 18px;
+                            font-weight: 700;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: "Esc closes";
+                            color: #808080;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 36px;
+
+                        VerticalLayout {
+                            spacing: 18px;
+                            alignment: start;
+                            horizontal-stretch: 1;
+
+                            HelpSection {
+                                title: "Moving around";
+                                HelpRow { keys: "J, K, Down, Up"; action: "Scroll, or turn the page at its edge in paged mode"; }
+                                HelpRow { keys: "H, L, Left, Right"; action: "Previous or next page"; }
+                                HelpRow { keys: "Shift+K, Shift+J"; action: "Previous or next page"; }
+                                HelpRow { keys: "Page Up, Page Down"; action: "Previous or next page"; }
+                                HelpRow { keys: "Space, Shift+Space"; action: "Next or previous page"; }
+                                HelpRow { keys: "Home, End"; action: "First or last page"; }
+                                HelpRow { keys: ":"; action: "Type a page number, then Enter to go there"; }
+                            }
+
+                            HelpSection {
+                                title: "Zoom and fit";
+                                HelpRow { keys: "+, -, ="; action: "Zoom in, zoom out, 100%"; }
+                                HelpRow { keys: "\{root.command-key}+, \{root.command-key}-, \{root.command-key}0"; action: "The same"; }
+                                HelpRow { keys: "S, A"; action: "Fit the page width, fit the whole page"; }
+                                HelpRow { keys: "C"; action: "Switch between continuous and paged"; }
+                                HelpRow { keys: "1, 2, 3"; action: "Single pages, odd spreads, even spreads"; }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 18px;
+                            alignment: start;
+                            horizontal-stretch: 1;
+
+                            HelpSection {
+                                title: "Search";
+                                HelpRow { keys: "/, \{root.command-key}F"; action: "Search, with the cursor in the field"; }
+                                HelpRow { keys: "N, Shift+N"; action: "Next or previous hit"; }
+                                HelpRow { keys: "Enter, Shift+Enter"; action: "Next or previous hit, in the field"; }
+                                HelpRow { keys: "Esc"; action: "Back to the document from a field"; }
+                            }
+
+                            HelpSection {
+                                title: "Bookmarks";
+                                HelpRow { keys: "D"; action: "Flag the page, or take its flag away"; }
+                                HelpRow { keys: "B, Shift+B"; action: "Next or previous flag"; }
+                                HelpRow { keys: "M"; action: "Dog-ear the page"; }
+                                HelpRow { keys: "Tab"; action: "Flip between the dog-ear and where you are"; }
+                            }
+
+                            HelpSection {
+                                title: "Tabs, files and help";
+                                HelpRow { keys: "O, \{root.command-key}O"; action: "Open a PDF"; }
+                                HelpRow { keys: "T"; action: "Show or hide the outline and thumbnails"; }
+                                HelpRow { keys: "Ctrl+Tab, Ctrl+Shift+Tab"; action: "Next or previous tab"; }
+                                HelpRow { keys: "\{root.command-key}1 to \{root.command-key}9"; action: "That tab, or the last one"; }
+                                HelpRow { keys: "\{root.command-key}W"; action: "Close the tab"; }
+                                HelpRow { keys: "?, F1"; action: "Show or hide this page"; }
+                            }
+                        }
+                    }
+
+                    HelpSection {
+                        title: "How bookmarks work";
+                        Text {
+                            text: "Flags are sticky bookmarks on a closed book. Each hangs from the top edge over the pages at its page's depth in the document, so every one is in view at once, and a click on one, or B, goes there. A right click takes a flag away.";
+                            color: #bbbbbb;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: "The dog-ear is your reading place, one per document. Going to a flag, or to a page typed after a colon, dog-ears the page you left, and Tab flips back to it and forward again, so a flag and your place swap like a ribbon and a bookmark. M dog-ears the page you are on by hand.";
+                            color: #bbbbbb;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
             }
         }
     }

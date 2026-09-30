@@ -17,8 +17,8 @@ the Apache License 2.0, and are used here under those terms.
 | `zoom-in.svg`      | `toolbarButton-zoomIn.svg`                  |
 | `zoom-out.svg`     | `toolbarButton-zoomOut.svg`                 |
 
-`bookmark.svg`, `dog-ear.svg` and `flip-back.svg` were drawn for MelkkiPDF in
-the same style and are covered by its own license.
+`bookmark.svg`, `dog-ear.svg`, `flip-back.svg` and `help.svg` were drawn for
+MelkkiPDF in the same style and are covered by its own license.
 
 Each file is a 16x16 solid black path; the toolbar tints it with `colorize`.
 

@@ -94,16 +94,18 @@ fn text_group_is_its_labels_plus_padding() {
 fn toolbar_slack_goes_to_the_spacer() {
     let window = toolbar_window();
 
-    // All the leftover width belongs to the spacer between the last mode group
-    // and the page counter. The groups need well under half the toolbar, so on a
-    // window this wide the gap has to be the larger share.
-    let spread = element(&window, "MainWindow::spread-group");
-    let field = element(&window, "MainWindow::page-field");
-    let gap = field.absolute_position().x - (spread.absolute_position().x + spread.size().width);
-    assert!(
-        gap > WINDOW_WIDTH / 2.0,
-        "only {gap}px of slack reached the spacer, so the groups are absorbing it"
-    );
+    // All the leftover width belongs to the spacer between the last group and
+    // the page counter, so widening the window widens exactly that gap and
+    // none of the groups absorb any of it.
+    let gap = || {
+        let last = element(&window, "MainWindow::bookmark-group");
+        let field = element(&window, "MainWindow::page-field");
+        field.absolute_position().x - (last.absolute_position().x + last.size().width)
+    };
+    let before = gap();
+    assert!(before > 0.0, "the groups already overlap the page counter");
+    window.window().set_size(slint::LogicalSize::new(WINDOW_WIDTH + 400.0, 800.0));
+    assert_eq!(gap(), before + 400.0, "the extra width did not all reach the spacer");
 }
 
 /// Moves the pointer to `position`.

@@ -87,6 +87,7 @@ alone. Ctrl is ⌘ on macOS.
 | Ctrl+Tab, Ctrl+Shift+Tab               | Next or previous tab                          |
 | Ctrl+1 to Ctrl+8, Ctrl+9               | That tab, the last tab                        |
 | Ctrl+W                                 | Close the tab                                 |
+| ?, F1                                  | Show or hide the keyboard shortcuts           |
 
 Going to a flag, or to a page typed after a colon, leaves the dog-ear on the
 page you came from, so Tab takes you back.
