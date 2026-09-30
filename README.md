@@ -21,24 +21,34 @@ Built with [Slint][slint] and [MuPDF][mupdf].
 
 ## Build from source
 
-Needs a Rust toolchain and MuPDF's build dependencies (a C compiler, `clang`
-for bindgen).
+Needs MuPDF's build dependencies (a C compiler, `clang` and `libclang` for
+bindgen, and `fontconfig` on Linux) and the tools in [`mise.toml`](mise.toml),
+which [mise](https://mise.jdx.dev/) installs:
+
+```sh
+mise trust && mise install
+mise run build
+./target/release/melkkipdf document.pdf
+```
+
+`mise tasks` lists every command; `mise run check` runs what CI runs. The
+tasks are thin wrappers, so with a Rust toolchain of your own the plain
+commands work too:
 
 ```sh
 cargo build --release
-./target/release/melkkipdf document.pdf
 ```
 
 To build the flatpak instead, see [packaging/README.md](packaging/README.md).
 
-It also builds and runs on macOS. `packaging/build-macos-app.sh` wraps the
-release binary in an app bundle that Finder can open PDFs with, signed only for
-the machine that built it.
+It also builds and runs on macOS, where `mise run macos:app` wraps the release
+binary in an app bundle that Finder can open PDFs with, signed only for the
+machine that built it.
 
 The tests drive the window headlessly, so they need no display:
 
 ```sh
-cargo test --features testing
+mise run test    # cargo test --features testing
 ```
 
 ## Features

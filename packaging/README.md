@@ -13,7 +13,12 @@ to host it, and users get automatic updates through `flatpak update`.
 | `generate-cargo-sources.sh`              | Regenerates the above from `Cargo.lock`     |
 | `index.html`                             | Landing page; `@BASE_URL@` and `@APP_ID@` are filled in at publish time |
 | `publish.sh`                             | Builds the repo and lays out the Pages site |
+| `check-flatpak.sh`                       | Checks the installed flatpak runs and its metadata validates |
+| `release.sh`                             | The release checklist below, as `check` and `tag` |
 | `build-macos-app.sh`                     | Builds an ad-hoc signed `target/MelkkiPDF.app` for local use on macOS |
+
+Each script has a task in [`mise.toml`](../mise.toml), which is how CI and
+the steps below run them.
 
 ## Installing
 
@@ -27,24 +32,20 @@ Needs `flatpak-builder` (or the `org.flatpak.Builder` flatpak, which
 `publish.sh` falls back to) and the runtime:
 
 ```sh
-flatpak remote-add --if-not-exists --user \
-    flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user flathub \
-    org.freedesktop.Platform//25.08 \
-    org.freedesktop.Sdk//25.08 \
-    org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-    org.freedesktop.Sdk.Extension.llvm21//25.08
-
-./packaging/publish.sh
+mise run flatpak:runtime
+mise run flatpak:build
 ```
 
 That leaves an OSTree repo in `packaging/repo` and the site that gets deployed
 in `packaging/site`. To try the result:
 
 ```sh
-flatpak install --user --reinstall packaging/repo io.github.xremming.MelkkiPDF
+mise run flatpak:install
 flatpak run io.github.xremming.MelkkiPDF
 ```
+
+`mise run flatpak:check` then checks the installed app the way CI does, given
+`desktop-file-utils` and `appstream`.
 
 ## After changing dependencies
 
@@ -52,9 +53,13 @@ The flatpak build has no network access, so every crate has to be listed as a
 source. Whenever `Cargo.lock` changes:
 
 ```sh
-./packaging/generate-cargo-sources.sh
+mise run flatpak:sources
 git add packaging/cargo-sources.json
 ```
+
+The task only runs when the lock file is newer than the list, and
+`flatpak:build` runs it first, so the flatpak is never built from a stale
+list.
 
 ## Releasing
 
@@ -81,24 +86,24 @@ release; nothing reaches the repository until a version is tagged.
    changelog they show. Keep it equal to the `Cargo.toml` version so the two
    cannot drift. Dates are `YYYY-MM-DD`.
 
-3. Only if dependencies changed, regenerate the vendored crate list:
+3. Commit the bump. If dependencies changed, `mise run flatpak:sources`
+   regenerates the vendored crate list to commit with it; a bare version bump
+   leaves it alone, since the generator lists only crates fetched from a
+   registry, and the viewer's own package is not one.
+
+4. Tag it and push, on `main`:
 
    ```sh
-   ./packaging/generate-cargo-sources.sh
+   mise run release:tag
    ```
 
-   A bare version bump does not need this. The generator emits sources for
-   crates fetched from a registry, and the viewer's own package is not one.
+   This first checks that the metainfo's top release matches `Cargo.toml`,
+   that the tag is new, and that nothing is uncommitted (a stale crate list
+   included), then asks before tagging and pushing `main` and the tag. The
+   tag is what triggers the build; `main` goes too so the published commit is
+   on the branch. `mise run release:check` runs the checks alone.
 
-4. Commit the bump, tag it, and push both. The tag is what triggers the
-   build, but push `main` too so the published commit is on the branch:
-
-   ```sh
-   git tag -a v0.2.0 -m "MelkkiPDF 0.2.0"
-   git push origin main v0.2.0
-   ```
-
-5. Confirm the deployment:
+5. Confirm the deployment, with the commands the tag task prints:
 
    ```sh
    gh run watch --exit-status

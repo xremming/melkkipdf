@@ -3,7 +3,8 @@
 #
 # The flatpak build has no network access, so every crate has to be declared as
 # a source in the manifest. Run this after any change to Cargo.lock and commit
-# the result.
+# the result. `mise run flatpak:sources` does so only when the lock file is
+# newer than the list.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,14 +25,10 @@ if [[ ! -f $generator ]]; then
     curl -sSfL -o "$generator" "$generator_url"
 fi
 
-if [[ ! -x $cache/venv/bin/python ]]; then
-    echo "Creating a virtualenv for the generator."
-    python3 -m venv "$cache/venv"
-    "$cache/venv/bin/pip" --quiet install aiohttp tomlkit
-fi
-
+# uv brings the generator's two dependencies along, and a Python if there is
+# none, without a virtualenv to keep.
 echo "Generating packaging/cargo-sources.json."
-"$cache/venv/bin/python" "$generator" \
-    Cargo.lock -o packaging/cargo-sources.json
+uv run --quiet --no-project --with aiohttp --with tomlkit \
+    "$generator" Cargo.lock -o packaging/cargo-sources.json
 
 echo "Done. Remember to commit packaging/cargo-sources.json."

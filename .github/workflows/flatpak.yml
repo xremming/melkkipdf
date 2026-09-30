@@ -24,13 +24,12 @@ jobs:
       GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
     steps:
       - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v3
 
       - name: Install flatpak-builder
         run: |
           sudo apt-get update
-          sudo apt-get install --yes flatpak flatpak-builder
-          flatpak remote-add --if-not-exists --user \
-            flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          sudo apt-get install --yes flatpak flatpak-builder appstream desktop-file-utils
 
       # Keeps the downloaded crate tarballs between runs; there are several
       # hundred of them.
@@ -41,13 +40,7 @@ jobs:
           key: flatpak-builder-${{ hashFiles('packaging/cargo-sources.json') }}
           restore-keys: flatpak-builder-
 
-      - name: Install the runtime and SDK
-        run: |
-          flatpak install --user --assumeyes flathub \
-            org.freedesktop.Platform//25.08 \
-            org.freedesktop.Sdk//25.08 \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-            org.freedesktop.Sdk.Extension.llvm21//25.08
+      - run: mise run flatpak:runtime
 
       - name: Import the signing key
         if: env.GPG_PRIVATE_KEY != ''
@@ -57,24 +50,13 @@ jobs:
           printenv GPG_PRIVATE_KEY | gpg --batch --import
           echo "GPG_HOMEDIR=$GNUPGHOME" >> "$GITHUB_ENV"
 
-      # Warnings here (a missing screenshot, say) are worth seeing but are not
-      # worth failing a release over, so only report them.
-      - name: Validate the desktop metadata
-        run: |
-          sudo apt-get install --yes appstream desktop-file-utils
-          desktop-file-validate packaging/io.github.xremming.MelkkiPDF.desktop
-          appstreamcli validate --no-net \
-            packaging/io.github.xremming.MelkkiPDF.metainfo.xml \
-            || echo "::warning::appstreamcli reported metadata issues"
-
       - name: Build and lay out the site
-        run: bash packaging/publish.sh
+        run: mise run flatpak:build
 
-      - name: Check that the built app installs
-        run: |
-          flatpak build-bundle packaging/repo \
-            packaging/MelkkiPDF.flatpak io.github.xremming.MelkkiPDF stable
-          flatpak install --user --assumeyes --bundle packaging/MelkkiPDF.flatpak
+      # Installs what was built and checks it runs and its metadata validates,
+      # as CI does on every push; a release should not get less.
+      - run: mise run flatpak:install
+      - run: mise run flatpak:check
 
       - name: Upload the site
         uses: actions/upload-pages-artifact@v5

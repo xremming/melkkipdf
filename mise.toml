@@ -1,0 +1,109 @@
+# The tools a checkout needs and the commands run against it, for laptops and
+# CI alike. Every task is a thin wrapper, so plain cargo keeps working without
+# mise. What mise cannot provide stays a system prerequisite: clang, libclang
+# and fontconfig for the build, flatpak-builder for the flatpak, rsvg-convert
+# and iconutil for the macOS bundle.
+
+[tools]
+# Pinned rather than "latest", so CI and every laptop compile the same thing
+# and a new stable cannot turn a branch red on its own. Bump it deliberately.
+rust = { version = "1.98", components = ["rustfmt", "clippy"] }
+# The macOS bundle and the release check read the version with it.
+jq = "1.8"
+# Runs the flatpak cargo generator with its two dependencies, in place of a
+# hand-rolled virtualenv.
+uv = "0.12"
+shellcheck = "0.11"
+
+[tasks.build]
+description = "Build the release binary"
+run = "cargo build --release"
+
+[tasks.run]
+description = "Build and open a PDF"
+usage = 'arg "<pdf>" help="The document to open"'
+run = 'cargo run --release -- "${usage_pdf?}"'
+
+[tasks.test]
+description = "Run the tests, headlessly"
+run = "cargo test --features testing"
+
+[tasks.fmt]
+description = "Format the Rust sources"
+run = "cargo fmt --all"
+
+[tasks."fmt:check"]
+description = "Fail on unformatted Rust sources"
+run = "cargo fmt --all --check"
+
+[tasks.clippy]
+description = "Lint the Rust sources, warnings as errors"
+run = "cargo clippy --all-targets --features testing -- -D warnings"
+
+[tasks."lint:shell"]
+description = "Lint the packaging scripts"
+run = "shellcheck packaging/*.sh"
+
+[tasks.check]
+description = "Everything CI checks"
+depends = ["fmt:check", "clippy", "test", "lint:shell"]
+
+[tasks.render]
+description = "Render a page of a PDF to a PNG, without a window"
+usage = '''
+arg "<pdf>" help="The document to render"
+arg "<png>" help="Where to write the page"
+arg "[page]" help="The 0-based page" default="0"
+'''
+run = 'cargo run --example render_png -- "${usage_pdf?}" "${usage_png?}" "${usage_page?}"'
+
+[tasks."macos:app"]
+description = "Build target/MelkkiPDF.app, signed for this machine only"
+run = "packaging/build-macos-app.sh"
+
+[tasks."flatpak:sources"]
+description = "Regenerate the vendored crate list from Cargo.lock"
+run = "packaging/generate-cargo-sources.sh"
+# Skipped while the list is newer than the lock file, and a dependency of the
+# build, so the flatpak can never be built from a stale list.
+sources = ["Cargo.lock", "packaging/generate-cargo-sources.sh"]
+outputs = ["packaging/cargo-sources.json"]
+
+[tasks."flatpak:runtime"]
+description = "Install the runtime and SDK the flatpak builds against"
+run = """
+flatpak remote-add --if-not-exists --user \
+    flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user --assumeyes flathub \
+    org.freedesktop.Platform//25.08 \
+    org.freedesktop.Sdk//25.08 \
+    org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+    org.freedesktop.Sdk.Extension.llvm21//25.08
+"""
+
+[tasks."flatpak:build"]
+description = "Build the flatpak into packaging/repo and lay out the site"
+depends = ["flatpak:sources"]
+run = "packaging/publish.sh"
+
+[tasks."flatpak:install"]
+description = "Install the flatpak just built, replacing any installed one"
+run = """
+flatpak build-bundle packaging/repo packaging/MelkkiPDF.flatpak \
+    io.github.xremming.MelkkiPDF stable
+flatpak install --user --assumeyes --reinstall --bundle packaging/MelkkiPDF.flatpak
+"""
+
+[tasks."flatpak:check"]
+description = "Check the installed flatpak runs and its metadata validates"
+run = "packaging/check-flatpak.sh"
+
+[tasks."release:check"]
+description = "Check that a release is ready to tag"
+depends = ["flatpak:sources"]
+run = "packaging/release.sh check"
+
+[tasks."release:tag"]
+description = "Tag the release and push it, which publishes it"
+depends = ["release:check"]
+run = "packaging/release.sh tag"

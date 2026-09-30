@@ -16,18 +16,28 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+# The tools and the commands come from mise.toml, so each job installs the
+# pinned tools and runs the same task a laptop would.
 jobs:
   rustfmt:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: rustup component add rustfmt
-      - run: cargo fmt --all --check
+      - uses: jdx/mise-action@v3
+      - run: mise run fmt:check
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v3
+      - run: mise run lint:shell
 
   clippy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v3
 
       # mupdf-sys generates its bindings with bindgen, which needs libclang,
       # and the viewer links fontconfig for font discovery.
@@ -36,42 +46,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes clang libclang-dev libfontconfig1-dev
 
+      # Keeps the compiled dependencies between runs, MuPDF above all, keyed
+      # on the toolchain, the lock file and the job. Only what dependencies
+      # produced is kept, so the crate's own rebuild stays cheap to store.
       - name: Restore the cargo cache
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-clippy-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-clippy-
+        uses: Swatinem/rust-cache@v2
 
-      - run: rustup component add clippy
-      - run: cargo clippy --all-targets --features testing -- -D warnings
+      - run: mise run clippy
 
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v3
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes clang libclang-dev libfontconfig1-dev
 
+      # Keeps the compiled dependencies between runs, MuPDF above all, keyed
+      # on the toolchain, the lock file and the job. Only what dependencies
+      # produced is kept, so the crate's own rebuild stays cheap to store.
       - name: Restore the cargo cache
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-test-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-test-
+        uses: Swatinem/rust-cache@v2
 
       # The integration tests drive the real layout through
       # i-slint-backend-testing, so they need no display.
-      - run: cargo test --features testing
+      - run: mise run test
 
   # Independent of the Rust checks: proves the manifest still builds and that
   # what it produces is a usable app, without publishing anything.
@@ -79,13 +81,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v3
 
       - name: Install flatpak-builder
         run: |
           sudo apt-get update
           sudo apt-get install --yes flatpak flatpak-builder appstream desktop-file-utils
-          flatpak remote-add --if-not-exists --user \
-            flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
       - name: Restore the flatpak-builder cache
         uses: actions/cache@v6
@@ -94,39 +95,12 @@ jobs:
           key: flatpak-builder-${{ hashFiles('packaging/cargo-sources.json') }}
           restore-keys: flatpak-builder-
 
-      - name: Install the runtime and SDK
-        run: |
-          flatpak install --user --assumeyes flathub \
-            org.freedesktop.Platform//25.08 \
-            org.freedesktop.Sdk//25.08 \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-            org.freedesktop.Sdk.Extension.llvm21//25.08
+      - run: mise run flatpak:runtime
 
       # The same script a release runs, so the publish path itself is covered.
       # No signing key in the environment, so the repo comes out unsigned.
-      - name: Build the flatpak
-        run: bash packaging/publish.sh
+      - run: mise run flatpak:build
 
-      - name: Install what was built
-        run: |
-          flatpak build-bundle packaging/repo MelkkiPDF.flatpak \
-            io.github.xremming.MelkkiPDF stable
-          flatpak install --user --assumeyes --bundle MelkkiPDF.flatpak
+      - run: mise run flatpak:install
 
-      - name: Check the installed app
-        run: |
-          app="$HOME/.local/share/flatpak/app/io.github.xremming.MelkkiPDF/current/active"
-
-          # A binary that builds can still be missing a library the runtime
-          # does not carry, which only shows up when someone runs it.
-          if flatpak run --command=ldd io.github.xremming.MelkkiPDF \
-              /app/bin/melkkipdf | grep 'not found'; then
-            echo "::error::the viewer has unresolved libraries inside the runtime"
-            exit 1
-          fi
-
-          desktop-file-validate \
-            "$app/export/share/applications/io.github.xremming.MelkkiPDF.desktop"
-          appstreamcli validate --no-net \
-            "$app/files/share/metainfo/io.github.xremming.MelkkiPDF.metainfo.xml" \
-            || echo "::warning::appstreamcli reported metadata issues"
+      - run: mise run flatpak:check
