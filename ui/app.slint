@@ -378,10 +378,17 @@ component DocumentTab inherits Rectangle {
     max-width: 220px;
     horizontal-stretch: 1;
 
+    // The tab hangs from the toolbar like a browser's, so its face leaves the
+    // top of the strip clear rather than the strip padding it, and the
+    // buttons beside the tabs centre on the whole strip.
+    property <length> top-gap: 6px;
+
     // Stays in the tab's place while the face moves, so the distance dragged
     // is measured from where the tab was pressed. Declared before the face so
     // the close button, drawn on top, gets its own clicks.
     touch := TouchArea {
+        y: root.top-gap;
+        height: root.height - root.top-gap;
         // Only the left button drags, and only once it has moved far enough
         // that a click with a shaky hand still just selects the tab.
         property <bool> left-down;
@@ -427,8 +434,9 @@ component DocumentTab inherits Rectangle {
 
     face := Rectangle {
         x: root.lifted ? root.offset : eased-offset;
+        y: root.top-gap;
         width: root.width;
-        height: root.height;
+        height: root.height - root.top-gap;
         clip: true;
         border-top-left-radius: 6px;
         border-top-right-radius: 6px;
@@ -891,7 +899,6 @@ export component MainWindow inherits Window {
                 background: #262626;
 
                 tab-strip := HorizontalLayout {
-                    padding-top: 6px;
                     padding-left: 8px;
                     padding-right: 8px;
                     spacing: 2px;
