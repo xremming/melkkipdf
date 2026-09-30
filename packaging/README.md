@@ -14,7 +14,7 @@ to host it, and users get automatic updates through `flatpak update`.
 | `index.html`                             | Landing page; `@BASE_URL@` and `@APP_ID@` are filled in at publish time |
 | `publish.sh`                             | Builds the repo and lays out the Pages site |
 | `check-flatpak.sh`                       | Checks the installed flatpak runs and its metadata validates |
-| `release.sh`                             | The release checklist below, as `check` and `tag` |
+| `release.sh`                             | Checks a release is ready to tag; the `/release` skill's last stop |
 | `build-macos-app.sh`                     | Builds an ad-hoc signed `target/MelkkiPDF.app` for local use on macOS |
 
 Each script has a task in [`mise.toml`](../mise.toml), which is how CI and
@@ -67,6 +67,10 @@ A `v*` tag is the only thing that publishes. CI builds the flatpak on every
 push and throws the result away, so the manifest is known to work before a
 release; nothing reaches the repository until a version is tagged.
 
+In Claude Code, `/release patch` (or `minor`, `major`, or an explicit
+`x.y.z`) does the whole checklist below, showing the release notes for
+approval and asking before it pushes. By hand:
+
 1. Bump `version` in `Cargo.toml` and run `cargo check` so `Cargo.lock` picks
    up the new number.
 
@@ -86,24 +90,26 @@ release; nothing reaches the repository until a version is tagged.
    changelog they show. Keep it equal to the `Cargo.toml` version so the two
    cannot drift. Dates are `YYYY-MM-DD`.
 
-3. Commit the bump. If dependencies changed, `mise run flatpak:sources`
-   regenerates the vendored crate list to commit with it; a bare version bump
-   leaves it alone, since the generator lists only crates fetched from a
-   registry, and the viewer's own package is not one.
+3. Commit the bump as `Release 0.2.0`, with the notes as the body. If
+   dependencies changed, `mise run flatpak:sources` regenerates the vendored
+   crate list to commit with it; a bare version bump leaves it alone, since
+   the generator lists only crates fetched from a registry, and the viewer's
+   own package is not one.
 
-4. Tag it and push, on `main`:
+4. Check, tag and push, on `main`:
 
    ```sh
-   mise run release:tag
+   mise run release:check
+   git tag -a v0.2.0 -m "MelkkiPDF 0.2.0"
+   git push origin main v0.2.0
    ```
 
-   This first checks that the metainfo's top release matches `Cargo.toml`,
-   that the tag is new, and that nothing is uncommitted (a stale crate list
-   included), then asks before tagging and pushing `main` and the tag. The
-   tag is what triggers the build; `main` goes too so the published commit is
-   on the branch. `mise run release:check` runs the checks alone.
+   The check verifies that the metainfo's top release matches `Cargo.toml`,
+   that the tag is new, and that nothing is uncommitted, a stale crate list
+   included. The tag is what triggers the build; `main` goes too so the
+   published commit is on the branch.
 
-5. Confirm the deployment, with the commands the tag task prints:
+5. Confirm the deployment:
 
    ```sh
    gh run watch --exit-status

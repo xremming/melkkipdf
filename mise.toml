@@ -98,12 +98,9 @@ flatpak install --user --assumeyes --reinstall --bundle packaging/MelkkiPDF.flat
 description = "Check the installed flatpak runs and its metadata validates"
 run = "packaging/check-flatpak.sh"
 
+# The release itself is the /release skill in .claude/skills, which bumps the
+# version, writes the notes, commits, tags and pushes; this is its check.
 [tasks."release:check"]
 description = "Check that a release is ready to tag"
 depends = ["flatpak:sources"]
 run = "packaging/release.sh check"
-
-[tasks."release:tag"]
-description = "Tag the release and push it, which publishes it"
-depends = ["release:check"]
-run = "packaging/release.sh tag"

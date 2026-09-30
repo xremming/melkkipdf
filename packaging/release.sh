@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# The release checklist from packaging/README.md, as two commands:
-#
-#   release.sh check   Checks that the tree is ready to tag: the version in
-#                      Cargo.toml has its release entry in the metainfo, the
-#                      tag is new, and nothing is uncommitted, which covers a
-#                      stale cargo-sources.json once it has been regenerated.
-#   release.sh tag     Runs the check, then tags the release and pushes main
-#                      and the tag, which is what publishes it.
+# Checks that the tree is ready to tag as a release: the version in Cargo.toml
+# has its release entry in the metainfo, the tag is new, the branch is main,
+# and nothing is uncommitted, which covers a stale cargo-sources.json once it
+# has been regenerated. The /release skill runs this on the release it has
+# prepared, before tagging it.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -56,36 +53,10 @@ check() {
     echo "Release $version is ready to tag."
 }
 
-tag() {
-    check
-    echo
-    echo "About to tag $(git rev-parse --short HEAD) as $tag and push main and the tag,"
-    echo "which builds and publishes the release."
-    read -r -p "Continue? [y/N] " answer
-    if [[ $answer != [yY] ]]; then
-        echo "Nothing tagged."
-        exit 1
-    fi
-
-    git tag -a "$tag" -m "MelkkiPDF $version"
-    git push origin main "$tag"
-
-    cat <<EOF
-
-Tagged and pushed $tag. To confirm the deployment:
-
-    gh run watch --exit-status
-    curl -s https://xremming.github.io/melkkipdf/melkkipdf.flatpakref | grep -c GPGKey
-
-A 1 from the last command means the signed ref published.
-EOF
-}
-
-case ${1:-} in
+case ${1:-check} in
     check) check ;;
-    tag) tag ;;
     *)
-        echo "usage: $0 check|tag" >&2
+        echo "usage: $0 [check]" >&2
         exit 2
         ;;
 esac
