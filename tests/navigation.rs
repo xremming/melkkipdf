@@ -2,7 +2,9 @@
 #![cfg(feature = "testing")]
 
 use melkkipdf::Spread;
-use melkkipdf::testing::Harness;
+use melkkipdf::testing::{Harness, Tabs};
+use slint::ComponentHandle;
+use slint::platform::{Key, WindowEvent};
 
 /// A harness with a known viewport, so fit and scroll math are defined.
 fn setup(count: usize) -> Harness {
@@ -153,4 +155,39 @@ fn paging_down_from_a_hair_short_of_a_page_moves_on() {
     assert_eq!(h.current_page(), 4);
     h.viewer.nav_page(1);
     assert_eq!(h.current_page(), 5, "paging down stayed on the page at the top");
+}
+
+/// Presses and releases `key` in a shown window.
+fn press(t: &Tabs, key: impl Into<slint::SharedString> + Clone) {
+    let window = t.window.window();
+    window.dispatch_event(WindowEvent::KeyPressed { text: key.clone().into() });
+    window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+}
+
+#[test]
+fn hjkl_move_as_the_arrows_do() {
+    let t = Tabs::new();
+    t.open("a.pdf", 20);
+    t.window.window().set_size(slint::LogicalSize::new(1000.0, 900.0));
+    t.window.show().unwrap();
+    // Paged, with the page fitting, so every key moves a whole page.
+    t.viewer(0).set_continuous(false);
+    t.viewer(0).fit_page();
+    assert_eq!(t.window.get_current_page(), 1);
+
+    let pairs = [
+        ("j", Key::DownArrow, 1),
+        ("k", Key::UpArrow, -1),
+        ("l", Key::RightArrow, 1),
+        ("h", Key::LeftArrow, -1),
+    ];
+    let mut page = 1;
+    for (letter, arrow, step) in pairs {
+        press(&t, letter);
+        page += step;
+        assert_eq!(t.window.get_current_page(), page, "{letter} did not move");
+        press(&t, arrow);
+        page += step;
+        assert_eq!(t.window.get_current_page(), page, "{arrow:?} did not move");
+    }
 }

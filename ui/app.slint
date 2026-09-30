@@ -720,10 +720,11 @@ export component MainWindow inherits Window {
             if (event.text == "1") { root.set-spread(0); return accept; }
             if (event.text == "2") { root.set-spread(1); return accept; }
             if (event.text == "3") { root.set-spread(2); return accept; }
-            if (event.text == Key.UpArrow) { root.nav-line(-1); return accept; }
-            if (event.text == Key.DownArrow) { root.nav-line(1); return accept; }
-            if (event.text == Key.LeftArrow) { root.nav-page(-1); return accept; }
-            if (event.text == Key.RightArrow) { root.nav-page(1); return accept; }
+            // The arrows, and H, J, K and L as in Vim.
+            if (event.text == Key.UpArrow || event.text == "k") { root.nav-line(-1); return accept; }
+            if (event.text == Key.DownArrow || event.text == "j") { root.nav-line(1); return accept; }
+            if (event.text == Key.LeftArrow || event.text == "h") { root.nav-page(-1); return accept; }
+            if (event.text == Key.RightArrow || event.text == "l") { root.nav-page(1); return accept; }
             if (event.text == Key.PageUp) { root.nav-page(-1); return accept; }
             if (event.text == Key.PageDown || event.text == " ") { root.nav-page(1); return accept; }
             if (event.text == Key.Home) { root.nav-home(); return accept; }
