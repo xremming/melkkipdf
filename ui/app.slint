@@ -538,10 +538,17 @@ export component MainWindow inherits Window {
     function toggle-search() {
         root.search-open = !root.search-open;
         if (root.search-open) {
-            search-input.focus();
+            root.focus-search();
         } else {
             key-handler.focus();
         }
+    }
+
+    // Puts the cursor in the search field with the query selected, so typing
+    // replaces it.
+    function focus-search() {
+        search-input.focus();
+        search-input.select-all();
     }
 
     // One title per open document, in tab order, and the index of the tab
@@ -647,15 +654,16 @@ export component MainWindow inherits Window {
                 root.zoom-reset();
                 return accept;
             }
-            // Ctrl+F puts the cursor in the search field, opening the sidebar
-            // if need be, and closes the sidebar again from the field. Once
-            // Esc has left the field, it goes back to it rather than closing.
+            // Ctrl+F puts the cursor in the search field with the query
+            // selected, opening the sidebar if need be, and closes the sidebar
+            // again from the field. Once Esc has left the field, it goes back
+            // to it rather than closing.
             if (event.modifiers.control && (event.text == "f" || event.text == "F")) {
                 if (search-input.has-focus) {
                     root.toggle-search();
                 } else {
                     root.search-open = true;
-                    search-input.focus();
+                    root.focus-search();
                 }
                 return accept;
             }
@@ -1051,6 +1059,15 @@ export component MainWindow inherits Window {
                 }
 
                 content := Rectangle {
+                    // A click on the document hands the keys back to it from
+                    // the search field. Sits under the views, which pass on
+                    // the clicks they have no use for.
+                    TouchArea {
+                        clicked => {
+                            key-handler.focus();
+                        }
+                    }
+
                     if root.page-count == 0: VerticalLayout {
                         alignment: center;
                         Text {
@@ -1087,6 +1104,9 @@ export component MainWindow inherits Window {
                     // and sized by Rust so centering, scrolling, and shift-to-scroll-
                     // horizontally are all deterministic.
                     if root.page-count > 0 && !root.continuous: TouchArea {
+                        clicked => {
+                            key-handler.focus();
+                        }
                         scroll-event(event) => {
                             root.paged-scroll(event.delta-x / 1px, event.delta-y / 1px, event.modifiers.shift);
                             return accept;

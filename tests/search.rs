@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{Scratch, write_text_pdf};
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use melkkipdf::testing::{Harness, Tabs};
-use slint::platform::{Key, WindowEvent};
+use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Model};
 
 /// A 20 page document whose text mentions the Orient Express on pages 4, 8
@@ -260,6 +260,40 @@ fn ctrl_f_in_the_field_closes_the_sidebar() {
     press(&t, "c", false);
     assert!(!t.window.get_continuous());
     assert_eq!(t.window.get_search_text(), "");
+}
+
+#[test]
+fn ctrl_f_selects_the_query_so_typing_replaces_it() {
+    let t = shown();
+    press(&t, "f", true);
+    for key in ["o", "k"] {
+        press(&t, key, false);
+    }
+    press(&t, Key::Escape, false);
+    press(&t, "f", true);
+    press(&t, "x", false);
+    assert_eq!(t.window.get_search_text(), "x", "typing did not replace the query");
+}
+
+#[test]
+fn clicking_the_document_hands_the_keys_back_to_it() {
+    for continuous in [true, false] {
+        let t = shown();
+        t.viewer(0).set_continuous(continuous);
+        press(&t, "f", true);
+        press(&t, "o", false);
+
+        let content = ElementHandle::find_by_element_id(&t.window, "MainWindow::content")
+            .next()
+            .expect("no page area");
+        content.mock_single_click(PointerEventButton::Left);
+        // With the keys back at the document, C switches modes and typing no
+        // longer reaches the field.
+        press(&t, "c", false);
+        assert_ne!(t.window.get_continuous(), continuous, "the keys stayed with the field");
+        assert_eq!(t.window.get_search_text(), "o");
+        assert!(t.window.get_search_open(), "the click closed the sidebar");
+    }
 }
 
 #[test]
