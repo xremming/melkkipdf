@@ -508,6 +508,19 @@ export component MainWindow inherits Window {
     callback bookmark-step(int);
     // Flips back to where the last bookmark jump was left from.
     callback flip-back();
+    // Where a flag on a 0-based page sits along a page edge `width` wide: at
+    // the page's depth, at least wide enough to hit, and the last one kept
+    // whole. Only meaningful while a document is open.
+    // The strip above the pages that the flags hang from: its edge line,
+    // the bar for the page being read, and a pixel between that and the
+    // pages.
+    property <length> edge-height: 5px;
+    pure function flag-width(width: length) -> length {
+        return max(12px, width / root.page-count);
+    }
+    pure function flag-x(page: int, width: length) -> length {
+        return max(0px, min(width - root.flag-width(width), page * width / root.page-count));
+    }
 
     // The name of the open document, shown in the window title bar.
     in property <string> doc-title;
@@ -1144,187 +1157,184 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                content := Rectangle {
-                    // A click on the document hands the keys back to it from
-                    // the search field. Sits under the views, which pass on
-                    // the clicks they have no use for.
-                    TouchArea {
-                        clicked => {
-                            key-handler.focus();
-                        }
-                    }
-
-                    if root.page-count == 0: VerticalLayout {
-                        alignment: center;
-                        Text {
-                            text: root.status;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
-                    }
-
-                    if root.page-count > 0 && root.continuous: ListView {
-                        // Two-way bound so Rust can both read the scroll offset (for the
-                        // page counter) and set it (to jump to a page).
-                        content-y <=> root.scroll-y;
-                        changed content-y => {
-                            root.scrolled(-self.content-y / 1px);
-                        }
-                        scrolled => {
-                            root.user-scrolled();
-                        }
-                        for entry[idx] in root.rows: PageRowView {
-                            page-row: entry;
-                            density: root.density;
-                            row-height-pt: root.row-height-pt;
-                            // Request pixels when this row scrolls into view. Zoom
-                            // re-renders are driven from Rust (rerender_view).
-                            init => {
-                                root.request-render-row(idx);
-                            }
-                        }
-                    }
-
-                    // Paged view: a Rust-controlled scroll surface. The wheel scrolls
-                    // within the page and pages at the edges; content is positioned
-                    // and sized by Rust so centering, scrolling, and shift-to-scroll-
-                    // horizontally are all deterministic.
-                    if root.page-count > 0 && !root.continuous: TouchArea {
-                        clicked => {
-                            key-handler.focus();
-                        }
-                        scroll-event(event) => {
-                            root.paged-scroll(event.delta-x / 1px, event.delta-y / 1px, event.modifiers.shift);
-                            return accept;
-                        }
+                // The document column. Above the pages sits only the page
+                // edge itself, a thin strip the flags hang from over the
+                // pages.
+                VerticalLayout {
+                    if root.page-count > 0: Rectangle {
+                        height: root.edge-height;
+                        background: #2a2a2a;
                         Rectangle {
-                            clip: true;
-                            Rectangle {
-                                x: root.paged-offset-x;
-                                y: root.paged-offset-y;
-                                width: root.paged-content-w;
-                                height: root.paged-content-h;
-
-                                HorizontalLayout {
-                                    spacing: PageLayout.spread-spacing;
-                                    PageImageView {
-                                        entry: root.current-row-content.left;
-                                        density: root.density;
-                                    }
-                                    if root.current-row-content.has-right: PageImageView {
-                                        entry: root.current-row-content.right;
-                                        density: root.density;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // The page edge: the reader's flags stick out of it at their
-                // depth in the document, like sticky flags on a closed book,
-                // so every one is in view and a click flips to it. A bar
-                // shows the page being read, so a flag's distance from it can
-                // be judged, and a dot the page Backspace flips back to.
-                if root.page-count > 0: edge := Rectangle {
-                    width: 18px;
-                    background: #2a2a2a;
-
-                    // A flag sits at its page's depth, at least tall enough
-                    // to hit, and the last one is kept whole.
-                    property <length> flag-height: max(12px, self.height / root.page-count);
-                    pure function flag-y(page: int) -> length {
-                        return max(0px, min(self.height - self.flag-height, page * self.height / root.page-count));
-                    }
-
-                    Rectangle {
-                        x: 0;
-                        width: 1px;
-                        background: #444444;
-                    }
-                    // The search sidebar is the same colour, so a line keeps
-                    // the two apart when it is open.
-                    if root.search-open: Rectangle {
-                        x: edge.width - 1px;
-                        width: 1px;
-                        background: #444444;
-                    }
-                    // A click on the edge hands the keys back to the
-                    // document, as one on the document does.
-                    TouchArea {
-                        clicked => {
-                            key-handler.focus();
+                            y: 0;
+                            height: 1px;
+                            background: #444444;
                         }
                     }
 
-                    // The page being read.
-                    Rectangle {
-                        x: 1px;
-                        y: edge.flag-y(root.current-page - 1);
-                        width: 3px;
-                        height: edge.flag-height;
-                        background: #dddddd;
-                    }
-
-                    for flag in root.bookmarks: Rectangle {
-                        x: 1px;
-                        y: edge.flag-y(flag.page);
-                        // A flag pulls out a little under the pointer, and
-                        // on the page being read.
-                        width: flag-touch.has-hover || flag.page == root.current-page - 1 ? 16px : 11px;
-                        height: edge.flag-height;
-                        background: flag.color;
-                        border-top-right-radius: 3px;
-                        border-bottom-right-radius: 3px;
-                        animate width { duration: 80ms; }
-                        flag-menu := ContextMenuArea {
-                            Menu {
-                                MenuItem {
-                                    title: "Remove bookmark";
-                                    activated => {
-                                        root.remove-bookmark(flag.page);
-                                    }
-                                }
-                            }
-                        }
-                        // The touch area sits over the menu area, so it
-                        // opens the menu itself on a right click.
-                        flag-touch := TouchArea {
+                    content := Rectangle {
+                        // A click on the document hands the keys back to it from
+                        // the search field. Sits under the views, which pass on
+                        // the clicks they have no use for.
+                        TouchArea {
                             clicked => {
-                                root.go-to-bookmark(flag.page);
-                            }
-                            pointer-event(event) => {
-                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                    flag-menu.show({ x: self.mouse-x, y: self.mouse-y });
-                                }
-                                // A middle click takes the flag away without
-                                // a menu, as it closes a tab.
-                                if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.up) {
-                                    root.remove-bookmark(flag.page);
-                                }
+                                key-handler.focus();
                             }
                         }
-                        Tooltip {
-                            text: @markdown("\{flag.label}");
-                        }
-                    }
 
-                    // The page to flip back to: a dot drawn over the flags,
-                    // small enough to leave whatever it sits on in view and
-                    // to take no clicks from it, since Backspace most often
-                    // leads to a flag's page.
-                    if root.return-page >= 0: Rectangle {
-                        x: 1px;
-                        y: edge.flag-y(root.return-page);
-                        width: 11px;
-                        height: edge.flag-height;
-                        Rectangle {
-                            width: 6px;
-                            height: 6px;
-                            border-radius: 3px;
-                            background: #eeeeee;
-                            border-width: 1px;
-                            border-color: #2a2a2a;
+                        if root.page-count == 0: VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.status;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        if root.page-count > 0 && root.continuous: ListView {
+                            // Two-way bound so Rust can both read the scroll offset (for the
+                            // page counter) and set it (to jump to a page).
+                            content-y <=> root.scroll-y;
+                            changed content-y => {
+                                root.scrolled(-self.content-y / 1px);
+                            }
+                            scrolled => {
+                                root.user-scrolled();
+                            }
+                            for entry[idx] in root.rows: PageRowView {
+                                page-row: entry;
+                                density: root.density;
+                                row-height-pt: root.row-height-pt;
+                                // Request pixels when this row scrolls into view. Zoom
+                                // re-renders are driven from Rust (rerender_view).
+                                init => {
+                                    root.request-render-row(idx);
+                                }
+                            }
+                        }
+
+                        // Paged view: a Rust-controlled scroll surface. The wheel scrolls
+                        // within the page and pages at the edges; content is positioned
+                        // and sized by Rust so centering, scrolling, and shift-to-scroll-
+                        // horizontally are all deterministic.
+                        if root.page-count > 0 && !root.continuous: TouchArea {
+                            clicked => {
+                                key-handler.focus();
+                            }
+                            scroll-event(event) => {
+                                root.paged-scroll(event.delta-x / 1px, event.delta-y / 1px, event.modifiers.shift);
+                                return accept;
+                            }
+                            Rectangle {
+                                clip: true;
+                                Rectangle {
+                                    x: root.paged-offset-x;
+                                    y: root.paged-offset-y;
+                                    width: root.paged-content-w;
+                                    height: root.paged-content-h;
+
+                                    HorizontalLayout {
+                                        spacing: PageLayout.spread-spacing;
+                                        PageImageView {
+                                            entry: root.current-row-content.left;
+                                            density: root.density;
+                                        }
+                                        if root.current-row-content.has-right: PageImageView {
+                                            entry: root.current-row-content.right;
+                                            density: root.density;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // The reader's flags hang from the toolbar's edge over
+                        // the top of the pages at their depth in the document,
+                        // like sticky flags on a closed book, so every one is
+                        // in view and a click flips to it, and the pages lose
+                        // no room to them. A dog-ear marks the page Backspace
+                        // flips back to, and a bar over everything the page
+                        // being read, so a flag's distance from it can be
+                        // judged.
+                        // Starts just under the strip's edge line, which stays
+                        // whole above everything.
+                        if root.page-count > 0: edge := Rectangle {
+                            y: 1px - root.edge-height;
+                            height: 16px + root.edge-height - 1px;
+
+                            for flag in root.bookmarks: Rectangle {
+                                x: root.flag-x(flag.page, edge.width);
+                                y: 0;
+                                width: root.flag-width(edge.width);
+                                // A flag pulls out a little under the pointer,
+                                // and on the page being read.
+                                height: root.edge-height - 1px + (flag-touch.has-hover || flag.page == root.current-page - 1 ? 16px : 11px);
+                                background: flag.color;
+                                border-bottom-left-radius: 3px;
+                                border-bottom-right-radius: 3px;
+                                animate height { duration: 80ms; }
+                                flag-menu := ContextMenuArea {
+                                    Menu {
+                                        MenuItem {
+                                            title: "Remove bookmark";
+                                            activated => {
+                                                root.remove-bookmark(flag.page);
+                                            }
+                                        }
+                                    }
+                                }
+                                // The touch area sits over the menu area, so it
+                                // opens the menu itself on a right click.
+                                flag-touch := TouchArea {
+                                    clicked => {
+                                        root.go-to-bookmark(flag.page);
+                                    }
+                                    pointer-event(event) => {
+                                        if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                            flag-menu.show({ x: self.mouse-x, y: self.mouse-y });
+                                        }
+                                        // A middle click takes the flag away
+                                        // without a menu, as it closes a tab.
+                                        if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.up) {
+                                            root.remove-bookmark(flag.page);
+                                        }
+                                    }
+                                }
+                                Tooltip {
+                                    text: @markdown("\{flag.label}");
+                                }
+                            }
+
+                            // The page being read, over the flags.
+                            Rectangle {
+                                x: root.flag-x(root.current-page - 1, edge.width);
+                                y: 0;
+                                width: root.flag-width(edge.width);
+                                height: 3px;
+                                background: #dddddd;
+                            }
+
+                            // The page to flip back to: a dog-ear folded down
+                            // from the edge, last so nothing covers it, and
+                            // small enough to leave whatever it sits on in
+                            // view and taking no clicks from it, since
+                            // Backspace most often leads to a flag's page.
+                            if root.return-page >= 0: Path {
+                                x: root.flag-x(root.return-page, edge.width) + (root.flag-width(edge.width) - self.width) / 2;
+                                // Up under the edge line, so no gap shows
+                                // between the fold and the edge.
+                                y: -1px;
+                                width: 10px;
+                                height: 8px;
+                                viewbox-width: 10;
+                                viewbox-height: 8;
+                                // Left open along the top: the fill closes the
+                                // triangle, and the outline runs only down the
+                                // two folded sides.
+                                commands: "M 0 0 L 5 8 L 10 0";
+                                fill: #eeeeee;
+                                stroke: #2a2a2a;
+                                stroke-width: 1px;
+                            }
                         }
                     }
                 }
