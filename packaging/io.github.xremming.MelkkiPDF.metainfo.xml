@@ -46,6 +46,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.8.0" date="2026-09-30">
+      <description>
+        <p>
+          Select text by dragging over it, even on to the next page, and
+          copy it with Ctrl+C. A double click takes a word and a triple
+          click a line, Ctrl+A selects the whole document, and Esc lets the
+          selection go.
+        </p>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-09-30">
       <description>
         <p>
