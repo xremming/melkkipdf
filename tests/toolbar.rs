@@ -104,3 +104,40 @@ fn toolbar_slack_goes_to_the_spacer() {
         "only {gap}px of slack reached the spacer, so the groups are absorbing it"
     );
 }
+
+/// Moves the pointer to `position`.
+fn move_pointer(window: &MainWindow, position: slint::LogicalPosition) {
+    window.window().dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+}
+
+/// How many tooltips are showing. A tooltip's text sits in its own popup,
+/// where the testing backend sees it but not what it says.
+fn tooltips(window: &MainWindow) -> usize {
+    ElementHandle::find_by_element_type_name(window, "StyledText").count()
+}
+
+#[test]
+fn resting_the_pointer_on_a_button_shows_its_tooltip() {
+    let window = toolbar_window();
+    let wait = |milliseconds| {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(milliseconds))
+    };
+    assert_eq!(tooltips(&window), 0);
+
+    let search = element(&window, "MainWindow::search-toggle");
+    let (position, size) = (search.absolute_position(), search.size());
+    move_pointer(
+        &window,
+        slint::LogicalPosition::new(position.x + size.width / 2.0, position.y + size.height / 2.0),
+    );
+    // The tooltip waits a moment, so a pointer passing by shows nothing.
+    wait(100);
+    assert_eq!(tooltips(&window), 0, "the tooltip showed at once");
+    wait(600);
+    assert_eq!(tooltips(&window), 1, "no tooltip after resting on the button");
+
+    // It goes once the pointer leaves.
+    move_pointer(&window, slint::LogicalPosition::new(WINDOW_WIDTH / 2.0, 400.0));
+    wait(100);
+    assert_eq!(tooltips(&window), 0, "the tooltip stayed after the pointer left");
+}

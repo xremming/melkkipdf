@@ -183,6 +183,8 @@ component PageRowView inherits Rectangle {
 component Segment inherits Rectangle {
     in property <image> icon;
     in property <string> label;
+    // Shown while the pointer rests on the segment.
+    in property <string> tip;
     in property <bool> active;
     in property <bool> divider;
     // Slint has no minimum-padding property, but an inner layout is the same
@@ -232,14 +234,20 @@ component Segment inherits Rectangle {
     }
 
     touch := TouchArea { }
+
+    Tooltip {
+        text: @markdown("\{root.tip}");
+    }
 }
 
 // A fused, segmented toggle: the options render as one control with rounded ends
 // and shared borders. Emits `select` with the chosen index. A control fills
-// either `options` (icons) or `labels` (text), never both.
+// either `options` (icons) or `labels` (text), never both, and `tips` has a
+// tooltip for each segment.
 component SegmentedControl inherits Rectangle {
     in property <[image]> options;
     in property <[string]> labels;
+    in property <[string]> tips;
     in property <int> current;
     // Guaranteed gap on each side of every segment's icon or label, which is
     // what sizes the control now that it hugs its content.
@@ -259,6 +267,7 @@ component SegmentedControl inherits Rectangle {
     HorizontalLayout {
         for option[idx] in root.options: Segment {
             icon: option;
+            tip: root.tips[idx];
             active: idx == root.current;
             divider: idx > 0;
             h-padding: root.segment-padding;
@@ -268,6 +277,7 @@ component SegmentedControl inherits Rectangle {
         }
         for text[idx] in root.labels: Segment {
             label: text;
+            tip: root.tips[idx];
             active: idx == root.current;
             divider: idx > 0;
             h-padding: root.segment-padding;
@@ -630,6 +640,10 @@ export component MainWindow inherits Window {
     in property <length> paged-content-w;
     in property <length> paged-content-h;
 
+    // The modifier the shortcuts in the tooltips name: Cmd on macOS, where
+    // Slint reports it as control, and Ctrl elsewhere.
+    property <string> command-key: Platform.os == OperatingSystemType.macos ? "⌘" : "Ctrl+";
+
     title: root.doc-title == "" ? "melkkipdf" : root.doc-title + " — melkkipdf";
     preferred-width: 1000px;
     preferred-height: 1000px;
@@ -753,6 +767,9 @@ export component MainWindow inherits Window {
                                     root.open-document();
                                 }
                             }
+                            Tooltip {
+                                text: @markdown("Open a PDF");
+                            }
                         }
                     }
 
@@ -841,6 +858,9 @@ export component MainWindow inherits Window {
                                     root.toggle-sidebar();
                                 }
                             }
+                            Tooltip {
+                                text: @markdown("Outline and thumbnails");
+                            }
                         }
                     }
 
@@ -850,6 +870,7 @@ export component MainWindow inherits Window {
                         alignment: center;
                         zoom-group := SegmentedControl {
                             options: [@image-url("icons/zoom-out.svg"), @image-url("icons/zoom-in.svg")];
+                            tips: ["Zoom out (\{root.command-key}-)", "Zoom in (\{root.command-key}+)"];
                             current: -1;
                             select(index) => {
                                 if (index == 0) {
@@ -865,6 +886,7 @@ export component MainWindow inherits Window {
                         alignment: center;
                         fit-group := SegmentedControl {
                             labels: ["Page Fit", "Page Width"];
+                            tips: ["Fit the whole page in the window (P)", "Fit the page's width to the window (F)"];
                             current: -1;
                             select(index) => {
                                 if (index == 0) {
@@ -881,6 +903,7 @@ export component MainWindow inherits Window {
                         alignment: center;
                         SegmentedControl {
                             options: [@image-url("icons/continuous.svg"), @image-url("icons/paged.svg")];
+                            tips: ["Scroll through the pages (C)", "One page at a time (C)"];
                             current: root.continuous ? 0 : 1;
                             select(index) => {
                                 root.set-continuous(index == 0);
@@ -892,6 +915,11 @@ export component MainWindow inherits Window {
                         alignment: center;
                         spread-group := SegmentedControl {
                             options: [@image-url("icons/spread-single.svg"), @image-url("icons/spread-odd.svg"), @image-url("icons/spread-even.svg")];
+                            tips: [
+                                "Single pages (1)",
+                                "Two pages side by side, from the first page (2)",
+                                "Two pages side by side, the first page alone (3)",
+                            ];
                             current: root.spread-mode;
                             select(index) => {
                                 root.set-spread(index);
@@ -944,6 +972,9 @@ export component MainWindow inherits Window {
                                 clicked => {
                                     root.toggle-search();
                                 }
+                            }
+                            Tooltip {
+                                text: @markdown("Search the text (\{root.command-key}F)");
                             }
                         }
                     }
