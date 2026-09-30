@@ -46,6 +46,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.7.0" date="2026-09-30">
+      <description>
+        <p>
+          Bookmark pages with D. Each flag hangs over the pages at its depth
+          in the document, so every one is in view, and a click on one goes
+          there, leaving a dog-ear where you came from for Tab to flip back
+          to. The shortcuts now follow Vim and zathura, and ? lists them.
+        </p>
+      </description>
+    </release>
     <release version="0.6.1" date="2026-09-30">
       <description>
         <p>
