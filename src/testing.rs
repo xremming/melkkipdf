@@ -422,13 +422,19 @@ impl Tabs {
         self.window.get_active_tab()
     }
 
+    /// Feeds the tab at `index` the text of its pages, as its indexer would,
+    /// one entry per page holding the page's lines.
+    pub fn index_text(&self, index: usize, pages: &[&[&str]]) {
+        self.viewer(index).on_text_indexed(0, text_pages(pages));
+    }
+
     /// The 0-based pages of the flags on the page edge, in the order drawn,
     /// with what each one's tooltip says.
     pub fn flags(&self) -> Vec<(i32, String)> {
         self.window.get_bookmarks().iter().map(|flag| (flag.page, flag.label.into())).collect()
     }
 
-    /// The 0-based page Backspace flips back to, or `None` while there is
+    /// The 0-based page Tab flips back to, or `None` while there is
     /// none.
     pub fn return_page(&self) -> Option<i32> {
         Some(self.window.get_return_page()).filter(|&page| page >= 0)

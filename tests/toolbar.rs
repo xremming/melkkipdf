@@ -43,7 +43,7 @@ fn icon_groups_are_their_icons_plus_padding() {
     let segment = toolbar.get_icon_size() + 2.0 * toolbar.get_h_padding();
     assert_eq!(width_of(&window, "MainWindow::zoom-group"), 2.0 * segment);
     assert_eq!(width_of(&window, "MainWindow::spread-group"), 3.0 * segment);
-    assert_eq!(width_of(&window, "MainWindow::bookmark-group"), 2.0 * segment);
+    assert_eq!(width_of(&window, "MainWindow::bookmark-group"), 3.0 * segment);
     assert_eq!(width_of(&window, "MainWindow::page-field"), 48.0);
 }
 
@@ -61,7 +61,7 @@ fn segment_icons_sit_on_the_vertical_center() {
         ElementHandle::find_by_element_id(&window, "Segment::icon-image").collect();
     // Every group is 28px tall and centered in the same toolbar row, so the one
     // middle applies to all of them.
-    assert_eq!(icons.len(), 9, "expected 2 zoom, 2 mode, 3 spread and 2 bookmark icons");
+    assert_eq!(icons.len(), 10, "expected 2 zoom, 2 mode, 3 spread and 3 bookmark icons");
 
     for icon in &icons {
         let middle = icon.absolute_position().y + icon.size().height / 2.0;

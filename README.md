@@ -50,7 +50,7 @@ cargo test --features testing
 - Single, odd, and even page spreads
 - Zoom, fit-width, and fit-page
 - Outline sidebar with page thumbnails
-- Bookmarks that stick out of the page edge like flags on a book, so every
+- Bookmarks that hang from the page edge like flags on a book, so every
   marked page is in view and one press flips there and back
 - Full-text search that ignores case, accents, and most punctuation, with every
   hit listed in a sidebar and outlined on its page
@@ -58,25 +58,38 @@ cargo test --features testing
 
 ## Keyboard shortcuts
 
-Ctrl is ⌘ on macOS.
+Laid out as in Vim and zathura, so the viewer reads well from the keyboard
+alone. Ctrl is ⌘ on macOS.
 
 | Keys                                   | Action                                        |
 | -------------------------------------- | --------------------------------------------- |
-| Up, Down                               | Scroll, or turn the page at its edge in paged mode |
-| Left, Right, Page Up, Page Down, Space | Previous or next page                         |
+| J, K, Down, Up                         | Scroll, or turn the page at its edge in paged mode |
+| H, L, Left, Right                      | Previous or next page                         |
+| Shift+K, Shift+J, Page Up, Page Down   | Previous or next page                         |
+| Space, Shift+Space                     | Next or previous page                         |
 | Home, End                              | First or last page                            |
-| Ctrl+Plus, Ctrl+Minus, Ctrl+0          | Zoom in, zoom out, 100%                       |
-| F, P                                   | Fit the page width, fit the whole page        |
+| :                                      | Type a page number, then Enter to go there    |
+| Plus, Minus, =                         | Zoom in, zoom out, 100%                       |
+| Ctrl+Plus, Ctrl+Minus, Ctrl+0          | The same                                      |
+| S, A                                   | Fit the page width, fit the whole page        |
 | C                                      | Switch between continuous and paged           |
 | 1, 2, 3                                | Single pages, odd spreads, even spreads       |
-| Ctrl+F                                 | Search                                        |
+| /, Ctrl+F                              | Search                                        |
+| N, Shift+N                             | Next or previous hit                          |
 | Enter, Shift+Enter in the search field | Next or previous hit                          |
-| Esc in the search field                | Back to the document                          |
-| Ctrl+Tab, Ctrl+Shift+Tab               | Next or previous tab                          |
-| Ctrl+W                                 | Close the tab                                 |
-| Ctrl+D                                 | Flag the page, or take its flag away          |
+| Esc in a field                         | Back to the document                          |
+| D                                      | Flag the page, or take its flag away          |
 | B, Shift+B                             | Next or previous flag                         |
-| Backspace                              | Flip between a flag and where you came from   |
+| M                                      | Dog-ear the page, to flip back to it          |
+| Tab                                    | Flip between the dog-ear and where you came from |
+| O, Ctrl+O                              | Open a PDF                                    |
+| T                                      | Show or hide the outline and thumbnails       |
+| Ctrl+Tab, Ctrl+Shift+Tab               | Next or previous tab                          |
+| Ctrl+1 to Ctrl+8, Ctrl+9               | That tab, the last tab                        |
+| Ctrl+W                                 | Close the tab                                 |
+
+Going to a flag, or to a page typed after a colon, leaves the dog-ear on the
+page you came from, so Tab takes you back.
 
 ## Where it keeps its state
 

@@ -45,10 +45,10 @@ fn flagging_a_page_puts_a_flag_on_it_and_flagging_again_takes_it_off() {
     let t = tabs();
     t.open("a.pdf", 20);
     t.viewer(0).go_to_page("5");
-    press(&t, &[Key::Control], "d");
+    press(&t, &[], "d");
     assert_eq!(flagged(&t), [4]);
 
-    press(&t, &[Key::Control], "d");
+    press(&t, &[], "d");
     assert!(flagged(&t).is_empty());
 }
 
@@ -95,7 +95,7 @@ fn a_document_without_an_outline_names_a_flag_by_its_page() {
 }
 
 #[test]
-fn clicking_a_flag_goes_there_and_backspace_flips_back_and_forth() {
+fn clicking_a_flag_goes_there_and_tab_flips_back_and_forth() {
     let t = tabs();
     t.open("a.pdf", 20);
     t.viewer(0).go_to_page("15");
@@ -107,11 +107,11 @@ fn clicking_a_flag_goes_there_and_backspace_flips_back_and_forth() {
     assert_eq!(t.window.get_current_page(), 15);
     assert_eq!(t.return_page(), Some(2));
 
-    press(&t, &[], Key::Backspace);
+    press(&t, &[], Key::Tab);
     assert_eq!(t.window.get_current_page(), 3);
     assert_eq!(t.return_page(), Some(14));
 
-    press(&t, &[], Key::Backspace);
+    press(&t, &[], Key::Tab);
     assert_eq!(t.window.get_current_page(), 15);
     assert_eq!(t.return_page(), Some(2));
 }
@@ -126,16 +126,49 @@ fn reading_on_does_not_move_the_place_to_flip_back_to() {
     t.window.invoke_go_to_bookmark(14);
     t.viewer(0).go_to_page("18");
 
-    press(&t, &[], Key::Backspace);
+    press(&t, &[], Key::Tab);
     assert_eq!(t.window.get_current_page(), 3);
 }
 
 #[test]
-fn backspace_does_nothing_before_any_flip() {
+fn the_dog_ear_can_be_put_on_the_page_being_read() {
+    let t = tabs();
+    t.open("a.pdf", 20);
+    t.viewer(0).go_to_page("5");
+    press(&t, &[], "m");
+    assert_eq!(t.return_page(), Some(4));
+    assert!(flagged(&t).is_empty(), "a dog-ear is not a flag");
+
+    t.viewer(0).go_to_page("12");
+    press(&t, &[], Key::Tab);
+    assert_eq!(t.window.get_current_page(), 5);
+    assert_eq!(t.return_page(), Some(11));
+}
+
+#[test]
+fn a_jump_through_the_page_field_leaves_the_dog_ear_behind() {
     let t = tabs();
     t.open("a.pdf", 20);
     t.viewer(0).go_to_page("3");
-    press(&t, &[], Key::Backspace);
+    t.window.invoke_go_to_page("12".into());
+    assert_eq!(t.window.get_current_page(), 12);
+    assert_eq!(t.return_page(), Some(2));
+
+    press(&t, &[], Key::Tab);
+    assert_eq!(t.window.get_current_page(), 3);
+
+    // Asking for the page already being read is no jump.
+    t.window.invoke_mark_return_page();
+    t.window.invoke_go_to_page("3".into());
+    assert_eq!(t.return_page(), Some(2));
+}
+
+#[test]
+fn tab_does_nothing_before_any_flip() {
+    let t = tabs();
+    t.open("a.pdf", 20);
+    t.viewer(0).go_to_page("3");
+    press(&t, &[], Key::Tab);
     assert_eq!(t.window.get_current_page(), 3);
 }
 
@@ -163,8 +196,8 @@ fn b_steps_through_the_flags_and_wraps_around() {
     press(&t, &[Key::Shift], "B");
     assert_eq!(t.window.get_current_page(), 10);
 
-    // Stepping is a flip too, so Backspace goes back to where it came from.
-    press(&t, &[], Key::Backspace);
+    // Stepping is a flip too, so Tab goes back to where it came from.
+    press(&t, &[], Key::Tab);
     assert_eq!(t.window.get_current_page(), 16);
 }
 

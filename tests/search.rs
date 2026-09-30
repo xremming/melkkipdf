@@ -483,3 +483,29 @@ fn a_real_document_is_indexed_in_the_background_and_searched() {
     assert!((70.0..90.0).contains(&highlight.y), "the outline is at {}", highlight.y);
     assert!(highlight.x > 72.0 && highlight.width > 0.0);
 }
+
+#[test]
+fn a_slash_opens_the_search_and_n_steps_through_the_hits_from_the_document() {
+    let t = shown();
+    t.index_text(0, &[&["nothing"], &["ok here"], &["nothing"], &["ok again"], &["ok once more"]]);
+    press(&t, "/", false);
+    assert!(t.window.get_search_open(), "/ did not open the search");
+    for key in ["o", "k"] {
+        press(&t, key, false);
+    }
+    wait(1000);
+    assert_eq!(t.window.get_search_text(), "ok", "typing did not reach the search field");
+    assert_eq!(t.window.get_search_current(), 0);
+
+    // Back in the document, N and Shift+N step through the hits, wrapping.
+    press(&t, Key::Escape, false);
+    press(&t, "n", false);
+    assert_eq!(t.window.get_search_current(), 1);
+    press(&t, "n", false);
+    press(&t, "n", false);
+    assert_eq!(t.window.get_search_current(), 0, "N did not wrap around");
+    press(&t, "N", false);
+    assert_eq!(t.window.get_search_current(), 2);
+    // The keys stayed with the document throughout.
+    assert_eq!(t.window.get_search_text(), "ok");
+}

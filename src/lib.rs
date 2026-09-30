@@ -86,7 +86,7 @@ struct Tab {
     outline: ModelRc<OutlineItem>,
     /// The reader's flags on the page edge, which the store remembers.
     bookmarks: Rc<VecModel<BookmarkFlag>>,
-    /// The page a bookmark jump left, which Backspace flips back to.
+    /// The page a bookmark jump left, which Tab flips back to.
     return_page: Option<usize>,
     /// The worker reading the document, until it has.
     loading: Option<Loading>,
@@ -583,6 +583,30 @@ impl App {
         self.set_return_page(index, from);
     }
 
+    /// Goes to the page asked for in the page field, leaving the dog-ear on
+    /// the page being read, since a jump is what the reader most wants to
+    /// come back from. Asking for the page already being read, or for none,
+    /// leaves the dog-ear alone.
+    pub(crate) fn go_to_page(&self, text: &str) {
+        let Some((index, viewer)) = self.active.get().zip(self.active_viewer()) else {
+            return;
+        };
+        let from = viewer.reading_page();
+        viewer.go_to_page(text);
+        if viewer.reading_page() != from {
+            self.set_return_page(index, from);
+        }
+    }
+
+    /// Puts the dog-ear on the page being read, so Tab comes back
+    /// here from wherever the reader wanders off to, without a flag.
+    pub(crate) fn mark_return_page(&self) {
+        let Some((index, viewer)) = self.active.get().zip(self.active_viewer()) else {
+            return;
+        };
+        self.set_return_page(index, viewer.reading_page());
+    }
+
     /// The flagged pages of the active tab, in page order.
     fn flagged_pages(&self) -> Vec<usize> {
         let Some(index) = self.active.get() else {
@@ -990,7 +1014,7 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_go_to_page({
         let app = app.clone();
-        move |text| app.with_viewer(|v| v.go_to_page(text.as_str()))
+        move |text| app.go_to_page(text.as_str())
     });
     window.on_set_spread({
         let app = app.clone();
@@ -1095,6 +1119,10 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_flip_back({
         let app = app.clone();
         move || app.flip_back()
+    });
+    window.on_mark_return_page({
+        let app = app.clone();
+        move || app.mark_return_page()
     });
     window.on_toggle_sidebar({
         let window = window.as_weak();

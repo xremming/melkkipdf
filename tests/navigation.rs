@@ -191,3 +191,81 @@ fn hjkl_move_as_the_arrows_do() {
         assert_eq!(t.window.get_current_page(), page, "{arrow:?} did not move");
     }
 }
+
+/// Presses and releases `key` with Shift held.
+fn press_shifted(t: &Tabs, key: &str) {
+    let window = t.window.window();
+    window.dispatch_event(WindowEvent::KeyPressed { text: Key::Shift.into() });
+    press(t, key);
+    window.dispatch_event(WindowEvent::KeyReleased { text: Key::Shift.into() });
+}
+
+#[test]
+fn shift_j_k_and_space_turn_pages_as_in_zathura() {
+    let t = Tabs::new();
+    t.open("a.pdf", 20);
+    t.window.window().set_size(slint::LogicalSize::new(1000.0, 900.0));
+    t.window.show().unwrap();
+    t.viewer(0).set_continuous(false);
+    t.viewer(0).fit_page();
+
+    press_shifted(&t, "J");
+    press_shifted(&t, "J");
+    assert_eq!(t.window.get_current_page(), 3);
+    press_shifted(&t, "K");
+    assert_eq!(t.window.get_current_page(), 2);
+    press(&t, " ");
+    assert_eq!(t.window.get_current_page(), 3);
+    press_shifted(&t, " ");
+    assert_eq!(t.window.get_current_page(), 2);
+}
+
+#[test]
+fn a_colon_types_a_page_number_into_the_page_field() {
+    let t = Tabs::new();
+    t.open("a.pdf", 20);
+    t.window.window().set_size(slint::LogicalSize::new(1000.0, 900.0));
+    t.window.show().unwrap();
+
+    for key in [":", "1", "2"] {
+        press(&t, key);
+    }
+    press(&t, Key::Return);
+    assert_eq!(t.window.get_current_page(), 12, "the number did not reach the page field");
+
+    // The keys are back with the document, where C switches modes.
+    press(&t, "c");
+    assert!(!t.window.get_continuous(), "the keys stayed with the page field");
+
+    // Esc leaves the field without going anywhere.
+    for key in [":", "5"] {
+        press(&t, key);
+    }
+    press(&t, Key::Escape);
+    press(&t, "c");
+    assert!(t.window.get_continuous());
+    assert_eq!(t.window.get_current_page(), 12);
+}
+
+#[test]
+fn zoom_and_fit_have_single_keys() {
+    let t = Tabs::new();
+    t.open("a.pdf", 20);
+    t.window.window().set_size(slint::LogicalSize::new(1000.0, 900.0));
+    t.window.show().unwrap();
+    t.viewer(0).set_continuous(false);
+
+    press(&t, "s");
+    let width = t.window.get_density();
+    press(&t, "a");
+    let page = t.window.get_density();
+    assert!(page < width, "fitting the page should zoom out from fitting the width");
+    press(&t, "+");
+    assert!(t.window.get_density() > page);
+    press(&t, "-");
+    press(&t, "-");
+    assert!(t.window.get_density() < page);
+    press(&t, "=");
+    // At 100% a point is a CSS pixel: 96 per inch over 72 points.
+    assert!((t.window.get_density() - 96.0 / 72.0).abs() < 1e-4, "= is 100%");
+}

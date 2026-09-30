@@ -301,6 +301,15 @@ component SegmentedControl inherits Rectangle {
 component PageField inherits Rectangle {
     in property <int> page;
     callback go-to(string);
+    // The cursor is leaving the field, whether a page was asked for or not.
+    callback done();
+
+    // Puts the cursor in the field with the number selected, so typing
+    // replaces it.
+    public function take-focus() {
+        input.focus();
+        input.select-all();
+    }
 
     width: 48px;
     height: 26px;
@@ -323,6 +332,14 @@ component PageField inherits Rectangle {
         input-type: number;
         accepted => {
             root.go-to(self.text);
+            root.done();
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.done();
+                return accept;
+            }
+            return reject;
         }
     }
 }
@@ -495,7 +512,7 @@ export component MainWindow inherits Window {
     in-out property <int> sidebar-tab;
 
     // The reader's bookmarks, drawn as flags on the page edge, and the
-    // 0-based page Backspace flips back to (-1 while there is none).
+    // 0-based page Tab flips back to (-1 while there is none).
     in property <[BookmarkFlag]> bookmarks;
     in property <int> return-page: -1;
     // Flags the page being read, or takes its flag away.
@@ -508,6 +525,8 @@ export component MainWindow inherits Window {
     callback bookmark-step(int);
     // Flips back to where the last bookmark jump was left from.
     callback flip-back();
+    // Puts the dog-ear on the page being read, for Tab to come back to.
+    callback mark-return-page();
     // Where a flag on a 0-based page sits along a page edge `width` wide: at
     // the page's depth, at least wide enough to hit, and the last one kept
     // whole. Only meaningful while a document is open.
@@ -676,10 +695,6 @@ export component MainWindow inherits Window {
     in property <length> paged-content-w;
     in property <length> paged-content-h;
 
-    // The modifier the shortcuts in the tooltips name: Cmd on macOS, where
-    // Slint reports it as control, and Ctrl elsewhere.
-    property <string> command-key: Platform.os == OperatingSystemType.macos ? "⌘" : "Ctrl+";
-
     title: root.doc-title == "" ? "melkkipdf" : root.doc-title + " — melkkipdf";
     preferred-width: 1000px;
     preferred-height: 1000px;
@@ -728,9 +743,8 @@ export component MainWindow inherits Window {
                 }
                 return accept;
             }
-            // Ctrl+D flags the page, as it bookmarks a page in a browser.
-            if (event.modifiers.control && (event.text == "d" || event.text == "D")) {
-                root.toggle-bookmark();
+            if (event.modifiers.control && (event.text == "o" || event.text == "O")) {
+                root.open-document();
                 return accept;
             }
             if (event.modifiers.control && event.text.character-count == 1 && event.text.is-float()) {
@@ -755,24 +769,53 @@ export component MainWindow inherits Window {
                 }
                 return accept;
             }
-            if (event.text == "f") { root.fit-width(); return accept; }
-            if (event.text == "p") { root.fit-page(); return accept; }
+            // The rest are single keys, laid out as in Vim and zathura so
+            // the viewer reads well from the keyboard alone. Zoom and the
+            // fits: + and - zoom, = is 100%, S fits the width and A the
+            // whole page.
+            if (event.text == "+") { root.zoom-in(); return accept; }
+            if (event.text == "-") { root.zoom-out(); return accept; }
+            if (event.text == "=") { root.zoom-reset(); return accept; }
+            if (event.text == "s") { root.fit-width(); return accept; }
+            if (event.text == "a") { root.fit-page(); return accept; }
             if (event.text == "c") { root.toggle-continuous(); return accept; }
             if (event.text == "1") { root.set-spread(0); return accept; }
             if (event.text == "2") { root.set-spread(1); return accept; }
             if (event.text == "3") { root.set-spread(2); return accept; }
-            // B and Shift+B flip to the next and previous flag, and Backspace
-            // back to where the last flip came from.
+            // Search: / puts the cursor in the field like Ctrl+F, and N and
+            // Shift+N step through the hits without leaving the document.
+            if (event.text == "/") {
+                root.search-open = true;
+                root.focus-search();
+                return accept;
+            }
+            if (event.text == "n") { root.search-step(1); return accept; }
+            if (event.text == "N") { root.search-step(-1); return accept; }
+            // Bookmarks: D flags the page, B and Shift+B flip to the next and
+            // previous flag, M sets the dog-ear on the page, and Tab flips
+            // back to it, or to where the last flip came from. Tab is
+            // otherwise free here: the fields are reached with keys of their
+            // own or a click, not by tabbing.
+            if (event.text == "d") { root.toggle-bookmark(); return accept; }
             if (event.text == "b") { root.bookmark-step(1); return accept; }
             if (event.text == "B") { root.bookmark-step(-1); return accept; }
-            if (event.text == Key.Backspace) { root.flip-back(); return accept; }
-            // The arrows, and H, J, K and L as in Vim.
+            if (event.text == "m") { root.mark-return-page(); return accept; }
+            if (event.text == Key.Tab) { root.flip-back(); return accept; }
+            // O opens a document and T shows or hides the sidebar, and a
+            // colon puts the cursor in the page field, as :42 goes to a line
+            // in Vim.
+            if (event.text == "o") { root.open-document(); return accept; }
+            if (event.text == "t") { root.toggle-sidebar(); return accept; }
+            if (event.text == ":") { page-field.take-focus(); return accept; }
+            // The arrows, and H, J, K and L as in Vim; Shift+J, Shift+K and
+            // Shift+Space turn pages too, as in zathura.
             if (event.text == Key.UpArrow || event.text == "k") { root.nav-line(-1); return accept; }
             if (event.text == Key.DownArrow || event.text == "j") { root.nav-line(1); return accept; }
-            if (event.text == Key.LeftArrow || event.text == "h") { root.nav-page(-1); return accept; }
-            if (event.text == Key.RightArrow || event.text == "l") { root.nav-page(1); return accept; }
+            if (event.text == Key.LeftArrow || event.text == "h" || event.text == "K") { root.nav-page(-1); return accept; }
+            if (event.text == Key.RightArrow || event.text == "l" || event.text == "J") { root.nav-page(1); return accept; }
             if (event.text == Key.PageUp) { root.nav-page(-1); return accept; }
-            if (event.text == Key.PageDown || event.text == " ") { root.nav-page(1); return accept; }
+            if (event.text == Key.PageDown) { root.nav-page(1); return accept; }
+            if (event.text == " ") { root.nav-page(event.modifiers.shift ? -1 : 1); return accept; }
             if (event.text == Key.Home) { root.nav-home(); return accept; }
             if (event.text == Key.End) { root.nav-end(); return accept; }
             return reject;
@@ -815,7 +858,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             Tooltip {
-                                text: @markdown("Open a PDF");
+                                text: @markdown("Open a PDF (O)");
                             }
                         }
                     }
@@ -906,7 +949,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             Tooltip {
-                                text: @markdown("Outline and thumbnails");
+                                text: @markdown("Outline and thumbnails (T)");
                             }
                         }
                     }
@@ -917,7 +960,7 @@ export component MainWindow inherits Window {
                         alignment: center;
                         zoom-group := SegmentedControl {
                             options: [@image-url("icons/zoom-out.svg"), @image-url("icons/zoom-in.svg")];
-                            tips: ["Zoom out (\{root.command-key}-)", "Zoom in (\{root.command-key}+)"];
+                            tips: ["Zoom out (-)", "Zoom in (+)"];
                             current: -1;
                             select(index) => {
                                 if (index == 0) {
@@ -933,7 +976,7 @@ export component MainWindow inherits Window {
                         alignment: center;
                         fit-group := SegmentedControl {
                             labels: ["Page Fit", "Page Width"];
-                            tips: ["Fit the whole page in the window (P)", "Fit the page's width to the window (F)"];
+                            tips: ["Fit the whole page in the window (A)", "Fit the page's width to the window (S)"];
                             current: -1;
                             select(index) => {
                                 if (index == 0) {
@@ -975,19 +1018,26 @@ export component MainWindow inherits Window {
                     }
 
                     // Bookmarks: flip back to where the last jump came from,
-                    // and flag the page.
+                    // put the dog-ear on the page, and flag the page.
                     VerticalLayout {
                         alignment: center;
                         bookmark-group := SegmentedControl {
-                            options: [@image-url("icons/flip-back.svg"), @image-url("icons/bookmark.svg")];
+                            options: [
+                                @image-url("icons/flip-back.svg"),
+                                @image-url("icons/dog-ear.svg"),
+                                @image-url("icons/bookmark.svg"),
+                            ];
                             tips: [
-                                "Flip back to where you came from (Backspace)",
-                                "Bookmark this page, or take the bookmark away (\{root.command-key}D)",
+                                "Flip back to where you came from (Tab)",
+                                "Dog-ear this page, to flip back to it (M)",
+                                "Bookmark this page, or take the bookmark away (D)",
                             ];
                             current: -1;
                             select(index) => {
                                 if (index == 0) {
                                     root.flip-back();
+                                } else if (index == 1) {
+                                    root.mark-return-page();
                                 } else {
                                     root.toggle-bookmark();
                                 }
@@ -1006,6 +1056,9 @@ export component MainWindow inherits Window {
                                 page: root.current-page;
                                 go-to(value) => {
                                     root.go-to-page(value);
+                                }
+                                done => {
+                                    key-handler.focus();
                                 }
                             }
                             VerticalLayout {
@@ -1042,7 +1095,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             Tooltip {
-                                text: @markdown("Search the text (\{root.command-key}F)");
+                                text: @markdown("Search the text (/)");
                             }
                         }
                     }
@@ -1251,7 +1304,7 @@ export component MainWindow inherits Window {
                         // the top of the pages at their depth in the document,
                         // like sticky flags on a closed book, so every one is
                         // in view and a click flips to it, and the pages lose
-                        // no room to them. A dog-ear marks the page Backspace
+                        // no room to them. A dog-ear marks the page Tab
                         // flips back to, and a bar over everything the page
                         // being read, so a flag's distance from it can be
                         // judged.
@@ -1316,8 +1369,8 @@ export component MainWindow inherits Window {
                             // The page to flip back to: a dog-ear folded down
                             // from the edge, last so nothing covers it, and
                             // small enough to leave whatever it sits on in
-                            // view and taking no clicks from it, since
-                            // Backspace most often leads to a flag's page.
+                            // view and taking no clicks from it, since Tab
+                            // most often leads to a flag's page.
                             if root.return-page >= 0: Path {
                                 x: root.flag-x(root.return-page, edge.width) + (root.flag-width(edge.width) - self.width) / 2;
                                 // Up under the edge line, so no gap shows
