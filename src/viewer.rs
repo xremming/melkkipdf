@@ -162,6 +162,10 @@ const MAX_HITS: usize = 2000;
 /// past the first few the scores say little, and the list is for reading
 /// down, not scrolling.
 const MAX_RELATED: usize = 20;
+/// The most pages one vectorizer job takes, so that a long document's
+/// progress shows as it goes and the first pages can be searched before the
+/// last are done.
+const VECTORIZE_BATCH: usize = 32;
 /// Rows to prefetch on either side of the visible range while idle.
 const PREFETCH_ROWS: usize = 4;
 /// Bytes of rendered page images a viewer keeps at once. A budget in bytes
@@ -1826,6 +1830,7 @@ impl Viewer {
             if first_page >= ready {
                 return;
             }
+            let ready = ready.min(first_page + VECTORIZE_BATCH);
             let chunks: Vec<String> = (first_page..ready)
                 .map(|page| {
                     let text = |page: usize| search.index.get(page).map(|text| text.text.as_str());
@@ -2139,21 +2144,26 @@ impl Viewer {
             return format!("Searching by meaning is unavailable: {err}.");
         }
         let vectorized = search.vectors.len().min(pages);
-        let vectorizing = vectorized < pages;
-        let so_far = if vectorizing { " so far" } else { "" };
+        let progress = format!("vectorizing {vectorized} of {pages} pages");
         if search.query.trim().is_empty() {
-            if vectorizing {
-                format!("Vectorizing for search, {vectorized} of {pages} pages.")
+            if vectorized < pages {
+                let progress = progress[..1].to_uppercase() + &progress[1..];
+                format!("{progress}.")
             } else {
                 String::new()
             }
         } else if self.vectorizer.model().loaded().is_none() {
-            "Loading the model, which takes a moment.".to_string()
+            format!("Loading the model, which takes a moment, then {progress}.")
         } else {
-            match search.total {
-                0 => format!("No related pages{so_far}."),
-                1 => format!("1 related page{so_far}."),
-                total => format!("{total} related pages{so_far}."),
+            let found = match search.total {
+                0 => "No related pages".to_string(),
+                1 => "1 related page".to_string(),
+                total => format!("{total} related pages"),
+            };
+            if vectorized < pages {
+                format!("{found} so far, {progress}.")
+            } else {
+                format!("{found}.")
             }
         }
     }

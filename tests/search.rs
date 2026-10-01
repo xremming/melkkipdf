@@ -615,10 +615,10 @@ fn pages_are_vectorized_as_their_text_is_indexed() {
     h.index_text_from(0, &[pages[0].as_slice(), pages[1].as_slice()]);
     h.finish_vectorizing();
     wait(100);
-    assert_eq!(status(&h), "No related pages so far.");
+    assert_eq!(status(&h), "No related pages so far, vectorizing 1 of 4 pages.");
     h.viewer.search_edited("");
     wait(100);
-    assert_eq!(status(&h), "Vectorizing for search, 1 of 4 pages.");
+    assert_eq!(status(&h), "Vectorizing 1 of 4 pages.");
 
     h.index_text_from(2, &[pages[2].as_slice(), pages[3].as_slice()]);
     h.viewer.search_edited("orient express");
@@ -626,6 +626,22 @@ fn pages_are_vectorized_as_their_text_is_indexed() {
     wait(100);
     assert_eq!(h.result_pages(), [3, 1]);
     assert_eq!(status(&h), "2 related pages.");
+}
+
+#[test]
+fn a_long_document_is_vectorized_in_batches_that_show_as_they_go() {
+    let pages = vec![vec!["Nothing to see on this page"]; 70];
+    let h = indexed(&pages);
+    h.viewer.set_search_mode(SearchMode::Meaning);
+    assert_eq!(status(&h), "Vectorizing 0 of 70 pages.");
+    h.take_vectorized_batch();
+    assert_eq!(status(&h), "Vectorizing 32 of 70 pages.");
+    h.viewer.search_edited("marmalade");
+    wait(100);
+    assert_eq!(status(&h), "No related pages so far, vectorizing 32 of 70 pages.");
+    assert_eq!(h.finish_vectorizing(), 2, "batches after the first");
+    wait(100);
+    assert_eq!(status(&h), "No related pages.");
 }
 
 #[test]
@@ -638,7 +654,10 @@ fn without_a_model_the_search_by_meaning_says_so() {
     h.viewer.set_search_mode(SearchMode::Meaning);
     h.viewer.search_edited("end");
     wait(100);
-    assert_eq!(status(&h), "Loading the model, which takes a moment.");
+    assert_eq!(
+        status(&h),
+        "Loading the model, which takes a moment, then vectorizing 0 of 2 pages."
+    );
     h.finish_vectorizing();
     wait(100);
     let status = status(&h);

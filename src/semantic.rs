@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
 use model2vec_rs::model::StaticModel;
@@ -56,7 +56,13 @@ const PASSAGE_MARGIN: f32 = 0.1;
 /// The embedding model, loaded the first time it is needed.
 pub struct EmbeddingModel {
     source: Source,
+    /// Held only for as long as it takes to look or to put the model in,
+    /// never while loading, so the UI thread's look (see [`Self::loaded`])
+    /// is never kept waiting on a load.
     loaded: RwLock<Option<Loaded>>,
+    /// Held while loading, so two documents vectorized at once load the
+    /// model once between them rather than once each.
+    loading: Mutex<()>,
 }
 
 enum Source {
@@ -100,25 +106,27 @@ impl EmbeddingModel {
 
     /// The model in `directory`, read once [`Self::load`] is called.
     pub fn in_directory(directory: PathBuf) -> Self {
-        Self { source: Source::Directory(directory), loaded: RwLock::new(None) }
+        Self::from_source(Source::Directory(directory))
     }
 
     /// A model that scores texts by the words they share, so tests can search
     /// by meaning without a model on disk.
     #[cfg(feature = "testing")]
     pub fn words() -> Self {
-        Self { source: Source::Words, loaded: RwLock::new(None) }
+        Self::from_source(Source::Words)
+    }
+
+    fn from_source(source: Source) -> Self {
+        Self { source, loaded: RwLock::new(None), loading: Mutex::new(()) }
     }
 
     /// The model, read from disk first if it has not been, which takes a
     /// while and a good deal of memory.
     pub fn load(&self) -> Result<Loaded, String> {
+        let _loading = self.loading.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Another thread may have loaded it while this one waited its turn.
         if let Some(loaded) = self.loaded() {
             return Ok(loaded);
-        }
-        let mut slot = self.loaded.write().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(loaded) = slot.as_ref() {
-            return Ok(loaded.clone());
         }
         let loaded = match &self.source {
             Source::Directory(directory) => StaticModel::from_pretrained(
@@ -135,7 +143,8 @@ impl EmbeddingModel {
             #[cfg(feature = "testing")]
             Source::Words => Loaded::Words,
         };
-        *slot = Some(loaded.clone());
+        *self.loaded.write().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(loaded.clone());
         Ok(loaded)
     }
 

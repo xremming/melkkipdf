@@ -91,12 +91,24 @@ impl Harness {
 
     /// Waits for the viewer's vectorizer to finish each batch it has going
     /// and hands the vectors to the viewer, as the app would on the event
-    /// loop, until no more are being made.
-    pub fn finish_vectorizing(&self) {
+    /// loop, until no more are being made. Returns how many batches there
+    /// were.
+    pub fn finish_vectorizing(&self) -> usize {
+        let mut batches = 0;
         while self.viewer.vectorizing() {
-            let vectorized = self.vectors.recv().expect("the vectorizer stopped without a word");
-            self.viewer.on_vectorized(vectorized.first_page, vectorized.result);
+            self.take_vectorized_batch();
+            batches += 1;
         }
+        batches
+    }
+
+    /// Waits for the batch the viewer's vectorizer has going and hands its
+    /// vectors to the viewer, which sets the next batch going if there is
+    /// one.
+    pub fn take_vectorized_batch(&self) {
+        assert!(self.viewer.vectorizing(), "nothing is being vectorized");
+        let vectorized = self.vectors.recv().expect("the vectorizer stopped without a word");
+        self.viewer.on_vectorized(vectorized.first_page, vectorized.result);
     }
 
     /// Drains and returns the 0-based page indices the viewer has requested for
