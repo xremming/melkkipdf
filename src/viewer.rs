@@ -23,8 +23,9 @@ use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, 
 use crate::render::{
     RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale, scale_key,
 };
-use crate::search::{self, Hit, PageText};
+use crate::search::{self, Hit, PageText, Snippet};
 use crate::selection::{TextPos, Unit};
+use crate::semantic::{self, Vectorizer, Vectors};
 use crate::{Highlight, MainWindow, PageEntry, PageLayout, PageRow, SearchResult};
 
 /// How pages are grouped into rows.
@@ -157,6 +158,10 @@ const OUTLIER_FACTOR: f32 = 1.25;
 const SEARCH_INTERVAL: Duration = Duration::from_millis(100);
 /// The most hits a search lists and outlines. Every hit is still counted.
 const MAX_HITS: usize = 2000;
+/// The most pages a search by meaning lists. Every page gets a score, but
+/// past the first few the scores say little, and the list is for reading
+/// down, not scrolling.
+const MAX_RELATED: usize = 20;
 /// Rows to prefetch on either side of the visible range while idle.
 const PREFETCH_ROWS: usize = 4;
 /// Bytes of rendered page images a viewer keeps at once. A budget in bytes
@@ -555,13 +560,55 @@ fn reading_page_in(inner: &Inner, spec: &RowSpec) -> usize {
     if spec.right == Some(inner.reading_page) { inner.reading_page } else { spec.left }
 }
 
+/// What a search looks for: the query's letters, or pages about it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchMode {
+    /// Every place the query's text occurs, as [`search::search`] finds them.
+    #[default]
+    Exact,
+    /// The pages most like the query in what they say, as
+    /// [`semantic::search`] ranks them.
+    Meaning,
+}
+
+impl SearchMode {
+    /// The mode's index in the window's `search-mode` property.
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Exact => 0,
+            Self::Meaning => 1,
+        }
+    }
+
+    /// The mode at `index` in the window's `search-mode` property, or
+    /// `None` for an index that is none of them.
+    pub fn from_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::Exact),
+            1 => Some(Self::Meaning),
+            _ => None,
+        }
+    }
+}
+
 /// A document's search: its text, as much as has been indexed, and what the
 /// current query found in it.
 #[derive(Default)]
 struct SearchState {
     /// Each page's text, from the first page on, as far as it is indexed.
     index: Vec<PageText>,
+    mode: SearchMode,
+    /// Each page's vector, from the first page on, as far as the vectorizer
+    /// has made them. Made only once the reader searches by meaning, and
+    /// then kept, since switching modes costs nothing.
+    vectors: Vectors,
+    /// Whether a vectorizer is making more of them.
+    vectorizing: bool,
+    /// Why the model could not be loaded, which ends vectorizing.
+    model_error: Option<String>,
     query: String,
+    /// What the query found: every occurrence in exact mode, and in meaning
+    /// mode one hit per page listed, spanning nothing, best page first.
     hits: Vec<Hit>,
     /// How many hits there are in all, including those past [`MAX_HITS`].
     total: usize,
@@ -669,6 +716,8 @@ pub struct Viewer {
     /// The document's text as far as it has been indexed, and the search
     /// over it.
     search: RefCell<SearchState>,
+    /// Makes the page vectors a search by meaning ranks.
+    vectorizer: Vectorizer,
     /// The hits of the search, as the results list shows them.
     results: Rc<VecModel<SearchResult>>,
     /// Runs for [`SEARCH_INTERVAL`] after each search, holding the next one
@@ -686,16 +735,23 @@ pub struct Viewer {
     drag_scroll: Timer,
 }
 
+/// The channels to one document's background workers.
+pub struct Workers {
+    pub(crate) pages: Sender<WorkerMessage>,
+    pub(crate) thumbnails: Sender<i32>,
+    pub(crate) control: RenderControl,
+    pub(crate) vectorizer: Vectorizer,
+}
+
 impl Viewer {
     pub fn new(
         window: &MainWindow,
         pages_pt: Vec<(f32, f32)>,
         scale_factor: f32,
-        sender: Sender<WorkerMessage>,
-        thumb_sender: Sender<i32>,
-        control: RenderControl,
+        workers: Workers,
         settings: &ViewSettings,
     ) -> Rc<Self> {
+        let Workers { pages: sender, thumbnails: thumb_sender, control, vectorizer } = workers;
         let page_count = pages_pt.len();
         let model = Rc::new(VecModel::<PageRow>::default());
         let thumb_model = Rc::new(VecModel::<PageRow>::default());
@@ -742,6 +798,7 @@ impl Viewer {
             control,
             resize_timer: Timer::default(),
             search: RefCell::new(SearchState::default()),
+            vectorizer,
             results: Rc::new(VecModel::default()),
             search_timer: Timer::default(),
             search_pending: Cell::new(false),
@@ -808,6 +865,7 @@ impl Viewer {
             window.set_row_height_pt(inner.ref_h_pt);
             window.set_search_results(ModelRc::from(self.results.clone()));
             window.set_search_text(self.search.borrow().query.as_str().into());
+            window.set_search_mode(self.search.borrow().mode.index());
         }
         self.publish_search();
         let scroll_px = self.inner.borrow().scroll_px;
@@ -1707,6 +1765,7 @@ impl Viewer {
             search.index.extend(pages);
             !search.query.trim().is_empty()
         };
+        self.vectorize_more();
         if searching {
             self.request_search();
         } else {
@@ -1717,6 +1776,94 @@ impl Viewer {
     /// Whether every page's text has been indexed.
     pub fn text_indexed(&self) -> bool {
         self.search.borrow().index.len() >= self.inner.borrow().pages_pt.len()
+    }
+
+    /// The reader picked what the search looks for. The query stays, and is
+    /// searched for again the new way.
+    pub fn set_search_mode(&self, mode: SearchMode) {
+        {
+            let mut search = self.search.borrow_mut();
+            if search.mode == mode {
+                return;
+            }
+            search.mode = mode;
+            search.jump = true;
+        }
+        if let Some(window) = self.window() {
+            window.set_search_mode(mode.index());
+        }
+        self.vectorize_more();
+        self.request_search();
+    }
+
+    pub fn search_mode(&self) -> SearchMode {
+        self.search.borrow().mode
+    }
+
+    /// Whether a vectorizer is making page vectors right now.
+    pub fn vectorizing(&self) -> bool {
+        self.search.borrow().vectorizing
+    }
+
+    /// Sets a vectorizer going on the pages whose vectors are not made yet,
+    /// while the search is by meaning, nothing else is vectorizing, and the
+    /// model has not failed to load. A page's chunk takes in part of the
+    /// page after it, so a page is only ready once that one is indexed, or
+    /// it is the last.
+    fn vectorize_more(&self) {
+        let job = {
+            let mut search = self.search.borrow_mut();
+            if search.mode != SearchMode::Meaning
+                || search.vectorizing
+                || search.model_error.is_some()
+            {
+                return;
+            }
+            let pages = self.inner.borrow().pages_pt.len();
+            let indexed = search.index.len().min(pages);
+            let ready = if indexed == pages { pages } else { indexed.saturating_sub(1) };
+            let first_page = search.vectors.len();
+            if first_page >= ready {
+                return;
+            }
+            let chunks: Vec<String> = (first_page..ready)
+                .map(|page| {
+                    let text = |page: usize| search.index.get(page).map(|text| text.text.as_str());
+                    semantic::chunk(
+                        page.checked_sub(1).and_then(text),
+                        text(page).unwrap_or(""),
+                        text(page + 1),
+                    )
+                })
+                .collect();
+            search.vectorizing = true;
+            (first_page, chunks)
+        };
+        self.vectorizer.spawn(job.0, job.1);
+        self.publish_search();
+    }
+
+    /// Takes in what a vectorizer made of the pages from `first_page` on,
+    /// sets one going on the rest, and searches again with them.
+    pub(crate) fn on_vectorized(&self, first_page: usize, result: Result<Vectors, String>) {
+        let searching = {
+            let mut search = self.search.borrow_mut();
+            search.vectorizing = false;
+            match result {
+                Ok(vectors) if first_page == search.vectors.len() => {
+                    search.vectors.append(&vectors)
+                }
+                Ok(_) => {}
+                Err(err) => search.model_error = Some(err),
+            }
+            search.mode == SearchMode::Meaning && !search.query.trim().is_empty()
+        };
+        self.vectorize_more();
+        if searching {
+            self.request_search();
+        } else {
+            self.publish_search();
+        }
     }
 
     /// The reader edited the search query. The view moves to the first hit
@@ -1793,14 +1940,19 @@ impl Viewer {
         let reading = self.settings().page;
         let jump_to = {
             let mut search = self.search.borrow_mut();
-            let found = search::search(&search.index, &search.query, MAX_HITS);
+            let found = match search.mode {
+                SearchMode::Exact => search::search(&search.index, &search.query, MAX_HITS),
+                SearchMode::Meaning => self.related_pages(&search),
+            };
             let previous = search.current.and_then(|current| search.hits.get(current).copied());
             search.current = if search.jump {
-                found
-                    .hits
-                    .iter()
-                    .position(|hit| hit.page >= reading)
-                    .or((!found.hits.is_empty()).then_some(0))
+                // Pages by meaning come best first, and the best is the one
+                // to go to wherever the reader is.
+                match search.mode {
+                    SearchMode::Exact => found.hits.iter().position(|hit| hit.page >= reading),
+                    SearchMode::Meaning => None,
+                }
+                .or((!found.hits.is_empty()).then_some(0))
             } else {
                 previous.and_then(|previous| found.hits.iter().position(|hit| *hit == previous))
             };
@@ -1820,7 +1972,18 @@ impl Viewer {
             hits.iter()
                 .enumerate()
                 .map(|(index, hit)| {
-                    let snippet = search.index[hit.page].snippet(hit.start, hit.end);
+                    let text = &search.index[hit.page];
+                    let snippet = match search.mode {
+                        SearchMode::Exact => text.snippet(hit.start, hit.end),
+                        // How the passage starts, or the page when it has
+                        // none, in plain text: none of it is the query's
+                        // words, so none of it is bold.
+                        SearchMode::Meaning => Snippet {
+                            before: String::new(),
+                            found: String::new(),
+                            after: text.snippet(hit.start, hit.start).after,
+                        },
+                    };
                     // Hits come in document order, so a page's hits are
                     // together and only its first carries the count.
                     let first_on_page = index == 0 || hits[index - 1].page != hit.page;
@@ -1846,6 +2009,29 @@ impl Viewer {
         if let Some(index) = jump_to {
             self.go_to_hit(index);
         }
+    }
+
+    /// The pages most like the query, best first, each as a hit spanning the
+    /// passage it matched by, or nothing when no passage stands out. None
+    /// while the model is still loading, as the query is vectorized here on
+    /// the UI thread and loading would hold it.
+    fn related_pages(&self, search: &SearchState) -> search::Found {
+        let query = search.query.trim();
+        let Some(model) = self.vectorizer.model().loaded().filter(|_| !query.is_empty()) else {
+            return search::Found::default();
+        };
+        let query = model.embed(&[query.to_string()]);
+        let query = query.get(0);
+        let hits: Vec<Hit> = semantic::search(&search.vectors, query, MAX_RELATED)
+            .into_iter()
+            .map(|(page, _)| {
+                let text = search.index.get(page).map_or("", |text| text.text.as_str());
+                let (start, end) = semantic::best_passage(&model, text, query).unwrap_or((0, 0));
+                Hit { page, start, end }
+            })
+            .collect();
+        let total = hits.len();
+        search::Found { hits, total }
     }
 
     /// Outlines every hit on its page, the current one stronger, and tells
@@ -1925,6 +2111,8 @@ impl Viewer {
         let so_far = if indexing { " so far" } else { "" };
         let status = if !indexing && search.index.iter().all(PageText::is_empty) {
             "This document has no searchable text.".to_string()
+        } else if search.mode == SearchMode::Meaning {
+            self.meaning_status(&search, pages)
         } else if search.query.trim().is_empty() {
             if indexing {
                 format!("Indexing for search, {indexed} of {pages} pages.")
@@ -1943,6 +2131,31 @@ impl Viewer {
         };
         window.set_search_status(status.into());
         window.set_search_current(search.current.map_or(-1, |current| current as i32));
+    }
+
+    /// How a search by meaning is going, for a document of `pages` pages.
+    fn meaning_status(&self, search: &SearchState, pages: usize) -> String {
+        if let Some(err) = &search.model_error {
+            return format!("Searching by meaning is unavailable: {err}.");
+        }
+        let vectorized = search.vectors.len().min(pages);
+        let vectorizing = vectorized < pages;
+        let so_far = if vectorizing { " so far" } else { "" };
+        if search.query.trim().is_empty() {
+            if vectorizing {
+                format!("Vectorizing for search, {vectorized} of {pages} pages.")
+            } else {
+                String::new()
+            }
+        } else if self.vectorizer.model().loaded().is_none() {
+            "Loading the model, which takes a moment.".to_string()
+        } else {
+            match search.total {
+                0 => format!("No related pages{so_far}."),
+                1 => format!("1 related page{so_far}."),
+                total => format!("{total} related pages{so_far}."),
+            }
+        }
     }
 
     /// The reader pressed on `page` at `x`, `y` points from its corner,
@@ -2437,8 +2650,14 @@ impl Viewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Spread, Viewer, build_row_specs, page_locations, reference_dims};
+    use std::sync::mpsc::Sender;
+
+    use slint::ComponentHandle;
+
+    use super::{Spread, Viewer, Workers, build_row_specs, page_locations, reference_dims};
     use crate::MainWindow;
+    use crate::render::WorkerMessage;
+    use crate::semantic::Vectorizer;
 
     fn as_pairs(specs: &[super::RowSpec]) -> Vec<(usize, Option<usize>)> {
         specs.iter().map(|s| (s.left, s.right)).collect()
@@ -2455,6 +2674,19 @@ mod tests {
             i_slint_backend_testing::init_no_event_loop();
         }
         MainWindow::new().expect("failed to create the window")
+    }
+
+    /// Workers that answer nothing, and a vectorizer whose model is never
+    /// loaded, as these tests never search by meaning. `sender` is the page
+    /// worker's, so a test can see what the viewer asks it for.
+    fn workers(window: &MainWindow, sender: Sender<WorkerMessage>) -> Workers {
+        let model = std::sync::Arc::new(crate::semantic::EmbeddingModel::locate());
+        Workers {
+            pages: sender,
+            thumbnails: std::sync::mpsc::channel().0,
+            control: crate::render::RenderControl::inert(),
+            vectorizer: Vectorizer::new(0, model, std::sync::mpsc::channel().0, window.as_weak()),
+        }
     }
 
     /// An image as large as a page at a high zoom. The pixels are shared, so
@@ -2474,9 +2706,7 @@ mod tests {
             &window,
             pages,
             1.0,
-            sender,
-            std::sync::mpsc::channel().0,
-            crate::render::RenderControl::inert(),
+            workers(&window, sender),
             &super::ViewSettings::default(),
         );
         viewer.activate();
@@ -2501,9 +2731,7 @@ mod tests {
             &window,
             vec![(600.0, 800.0); 10],
             1.0,
-            sender,
-            std::sync::mpsc::channel().0,
-            crate::render::RenderControl::inert(),
+            workers(&window, sender),
             &super::ViewSettings::default(),
         );
         viewer.activate();

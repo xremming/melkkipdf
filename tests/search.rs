@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use common::{Scratch, write_text_pdf};
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
-use melkkipdf::testing::{Harness, Tabs};
+use melkkipdf::SearchMode;
+use melkkipdf::testing::{EmbeddingModel, Harness, Tabs};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Model};
 
@@ -508,4 +509,246 @@ fn a_slash_opens_the_search_and_n_steps_through_the_hits_from_the_document() {
     assert_eq!(t.window.get_search_current(), 2);
     // The keys stayed with the document throughout.
     assert_eq!(t.window.get_search_text(), "ok");
+}
+
+/// A four page document where pages 2 and 4 are about the Orient Express,
+/// the last in fewer words.
+fn travelogue() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["Introduction"],
+        vec!["The Orient Express leaves Paris"],
+        vec!["Nothing to see on this page"],
+        vec!["Orient Express again"],
+    ]
+}
+
+/// Like [`indexed`], searching by meaning, with every page vectorized and
+/// the search ready to run again at once.
+fn vectorized(pages: &[Vec<&str>]) -> Harness {
+    let h = indexed(pages);
+    h.viewer.set_search_mode(SearchMode::Meaning);
+    h.finish_vectorizing();
+    wait(100);
+    h
+}
+
+#[test]
+fn searching_by_meaning_lists_the_pages_most_like_the_query_best_first() {
+    let h = vectorized(&travelogue());
+    h.viewer.search_edited("orient express");
+    // The shorter page is more about the query than the longer one.
+    assert_eq!(h.result_pages(), [3, 1]);
+    assert_eq!(status(&h), "2 related pages.");
+    assert_eq!(h.window.get_search_current(), 0);
+    assert_eq!(h.current_page(), 4, "the view did not move to the page most like the query");
+    // A page is the hit, so nothing on it is outlined, and its row shows how
+    // it starts.
+    assert!(h.highlights(3).is_empty());
+    let result = h.window.get_search_results().row_data(0).unwrap();
+    assert_eq!(result.found, "");
+    assert_eq!(result.after, "Orient Express again");
+    assert_eq!(result.page_hits, 1);
+}
+
+#[test]
+fn the_passage_a_page_matched_by_is_outlined_and_starts_its_row() {
+    // Thirty lines of filler, four words each, with the words sought on the
+    // eleventh, so they sit in the windows starting at the 21st and 41st
+    // words.
+    let mut lines = vec!["aaa bbb ccc ddd"; 30];
+    lines[10] = "the orient express at last";
+    let pages = vec![vec!["Introduction"], lines];
+    let h = vectorized(&pages);
+    h.viewer.search_edited("orient express");
+    assert_eq!(h.result_pages(), [1]);
+    // The first of those windows: the 40 words from line 6 to line 15.
+    let outlined: Vec<(f32, bool)> =
+        (5..15).map(|line| (72.0 + line as f32 * 20.0, true)).collect();
+    assert_eq!(h.highlights(1), outlined);
+    assert_eq!(h.current_page(), 2);
+    let result = h.window.get_search_results().row_data(0).unwrap();
+    assert_eq!(result.found, "");
+    assert!(result.after.starts_with("aaa bbb ccc ddd"), "{:?}", result.after);
+    assert!(result.after.ends_with('…'), "{:?}", result.after);
+}
+
+#[test]
+fn a_query_like_no_page_finds_nothing_by_meaning() {
+    let h = vectorized(&travelogue());
+    h.viewer.search_edited("marmalade");
+    assert!(h.result_pages().is_empty());
+    assert_eq!(status(&h), "No related pages.");
+}
+
+#[test]
+fn the_search_starts_exact_and_switching_back_searches_the_text_again() {
+    let h = indexed(&travelogue());
+    assert_eq!(h.viewer.search_mode(), SearchMode::Exact);
+    assert_eq!(h.window.get_search_mode(), 0);
+    h.viewer.search_edited("orient express");
+    assert_eq!(h.result_pages(), [1, 3]);
+
+    h.viewer.set_search_mode(SearchMode::Meaning);
+    assert_eq!(h.window.get_search_mode(), 1);
+    h.finish_vectorizing();
+    wait(100);
+    assert_eq!(h.result_pages(), [3, 1]);
+
+    h.viewer.set_search_mode(SearchMode::Exact);
+    wait(100);
+    assert_eq!(h.result_pages(), [1, 3]);
+    assert_eq!(status(&h), "2 matches.");
+}
+
+#[test]
+fn pages_are_vectorized_as_their_text_is_indexed() {
+    let pages = travelogue();
+    let h = Harness::uniform(pages.len(), 600.0, 800.0);
+    h.viewport(1000.0, 900.0);
+    h.viewer.set_search_mode(SearchMode::Meaning);
+    h.viewer.search_edited("orient express");
+    // Nothing is indexed, so there is nothing to vectorize yet.
+    assert!(!h.viewer.vectorizing());
+
+    // A page's chunk takes in part of the page after it, so with two pages
+    // indexed only the first can be vectorized.
+    h.index_text_from(0, &[pages[0].as_slice(), pages[1].as_slice()]);
+    h.finish_vectorizing();
+    wait(100);
+    assert_eq!(status(&h), "No related pages so far.");
+    h.viewer.search_edited("");
+    wait(100);
+    assert_eq!(status(&h), "Vectorizing for search, 1 of 4 pages.");
+
+    h.index_text_from(2, &[pages[2].as_slice(), pages[3].as_slice()]);
+    h.viewer.search_edited("orient express");
+    h.finish_vectorizing();
+    wait(100);
+    assert_eq!(h.result_pages(), [3, 1]);
+    assert_eq!(status(&h), "2 related pages.");
+}
+
+#[test]
+fn without_a_model_the_search_by_meaning_says_so() {
+    let directory = Scratch::new("search-no-model");
+    let model = EmbeddingModel::in_directory(directory.join("missing"));
+    let h = Harness::with_model(vec![(600.0, 800.0); 2], model);
+    h.viewport(1000.0, 900.0);
+    h.index_text(&[&["Introduction"], &["The end"]]);
+    h.viewer.set_search_mode(SearchMode::Meaning);
+    h.viewer.search_edited("end");
+    wait(100);
+    assert_eq!(status(&h), "Loading the model, which takes a moment.");
+    h.finish_vectorizing();
+    wait(100);
+    let status = status(&h);
+    assert!(
+        status.starts_with("Searching by meaning is unavailable: could not load the model from"),
+        "{status}"
+    );
+    assert!(h.result_pages().is_empty());
+    // Exact search is unaffected.
+    h.viewer.set_search_mode(SearchMode::Exact);
+    wait(100);
+    assert_eq!(h.result_pages(), [1]);
+}
+
+/// Needs the model that `mise run model:fetch` downloads, so it is run by
+/// hand: `mise run test:model`, or with `MELKKIPDF_MODEL_DIR` set,
+/// `cargo test --features testing -- --ignored`.
+#[test]
+#[ignore = "needs the model that `mise run model:fetch` downloads; see `mise run test:model`"]
+fn the_real_model_finds_pages_by_what_they_say_in_either_language() {
+    let pages: [&[&str]; 4] = [
+        &["Introduction"],
+        &["The Orient Express leaves Paris for Istanbul,", "crossing Europe by rail."],
+        &["Marmalade: oranges, sugar, and a long slow boil."],
+        &["Juna lähtee Helsingistä Tampereelle aamulla."],
+    ];
+    let h = Harness::with_model(vec![(600.0, 800.0); pages.len()], EmbeddingModel::locate());
+    h.viewport(1000.0, 900.0);
+    h.index_text(&pages);
+    h.viewer.set_search_mode(SearchMode::Meaning);
+    h.finish_vectorizing();
+    wait(100);
+    let loaded = status(&h);
+    assert!(!loaded.starts_with("Searching by meaning is unavailable"), "{loaded}");
+
+    // A name or a topic finds its page, in whichever language either is in.
+    for (query, page) in [("Istanbul", 1), ("marmalade recipe", 2), ("Helsinki", 3)] {
+        h.viewer.search_edited(query);
+        wait(100);
+        assert_eq!(h.result_pages().first(), Some(&page), "{query:?} did not find page {page}");
+    }
+    // Finnish for a train journey finds both pages about one, the English
+    // one as well as the Finnish.
+    h.viewer.search_edited("junamatka");
+    wait(100);
+    let mut found = h.result_pages();
+    found.truncate(2);
+    found.sort_unstable();
+    assert_eq!(found, [1, 3]);
+
+    h.viewer.search_edited("xyzzy plugh");
+    wait(100);
+    assert!(h.result_pages().is_empty(), "{:?}", h.result_pages());
+}
+
+/// Presses and releases `key` with Ctrl and Shift held.
+fn press_shifted(t: &Tabs, key: &str) {
+    let window = t.window.window();
+    window.dispatch_event(WindowEvent::KeyPressed { text: Key::Control.into() });
+    window.dispatch_event(WindowEvent::KeyPressed { text: Key::Shift.into() });
+    window.dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+    window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+    window.dispatch_event(WindowEvent::KeyReleased { text: Key::Shift.into() });
+    window.dispatch_event(WindowEvent::KeyReleased { text: Key::Control.into() });
+}
+
+#[test]
+fn ctrl_shift_f_switches_the_search_between_exact_and_meaning() {
+    let (_directory, t) = shown_with_text("search-mode-key", &[&["Chapter one"], &["The end"]]);
+    assert_eq!(t.window.get_search_mode(), 0);
+    assert!(!t.window.get_search_open());
+
+    // From the document: opens the sidebar, by meaning, with the cursor in
+    // the field.
+    press_shifted(&t, "F");
+    assert!(t.window.get_search_open());
+    assert_eq!(t.window.get_search_mode(), 1);
+    assert_eq!(t.viewer(0).search_mode(), SearchMode::Meaning);
+    press(&t, "e", false);
+    assert_eq!(t.window.get_search_text(), "e", "the field did not get the cursor");
+
+    // From the field: back to exact, keeping the query and the sidebar.
+    press_shifted(&t, "F");
+    assert_eq!(t.window.get_search_mode(), 0);
+    assert_eq!(t.viewer(0).search_mode(), SearchMode::Exact);
+    assert!(t.window.get_search_open());
+    assert_eq!(t.window.get_search_text(), "e");
+    // Plain Ctrl+F still closes the sidebar from the field.
+    press(&t, "f", true);
+    assert!(!t.window.get_search_open());
+}
+
+#[test]
+fn the_search_field_grows_as_the_query_wraps() {
+    let (_directory, t) = shown_with_text("search-field-grows", &[&["Chapter one"]]);
+    press(&t, "f", true);
+    let field = || {
+        ElementHandle::find_by_element_id(&t.window, "MainWindow::search-input")
+            .next()
+            .expect("no search field")
+            .size()
+            .height
+    };
+    let one_line = field();
+    // A hundred words, which wrap to a dozen lines or so in the sidebar.
+    for key in "word ".chars().cycle().take(500) {
+        press(&t, key.to_string(), false);
+    }
+    assert!(field() > one_line * 4.0, "the field stayed {} tall from {one_line}", field());
+    // Enter still steps between hits rather than breaking the line.
+    press(&t, Key::Return, false);
+    assert!(!t.window.get_search_text().contains('\n'));
 }

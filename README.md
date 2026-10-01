@@ -51,6 +51,23 @@ The tests drive the window headlessly, so they need no display:
 mise run test    # cargo test --features testing
 ```
 
+### Searching by meaning
+
+The search sidebar's "Meaning" mode ranks pages by an embedding model,
+[potion-multilingual-128M](https://huggingface.co/minishlab/potion-multilingual-128M),
+which is not in the repository. Download it once, half a gigabyte, with:
+
+```sh
+mise run model:fetch    # into data/model, where mise points the viewer
+```
+
+A build run outside mise looks for the model in `MELKKIPDF_MODEL_DIR`, or
+else under the platform's data directory: `~/.local/share/melkkipdf/model`
+on Linux, `~/Library/Application Support/melkkipdf/model` on macOS. Without
+it, the mode says so, and exact search is unaffected. The model is read into
+memory the first time a document is searched by meaning, which takes a few
+seconds and about 500 MB. `mise run test:model` runs the tests that need it.
+
 ## Features
 
 - Tabs for keeping several documents open, with documents opened while the
@@ -65,6 +82,9 @@ mise run test    # cargo test --features testing
   next colour and shape in turn, or ones picked from its right-click menu
 - Full-text search that ignores case, accents, and most punctuation, with every
   hit listed in a sidebar and outlined on its page
+- Search by meaning, listing the pages most like the query whatever words
+  they use, in the query's language or another, with the passage a page
+  matched by outlined on it (see below)
 - Text selection with the pointer, across pages and spreads, with a double
   or triple click for a word or a line, and Ctrl+C to copy
 - Keyboard-driven navigation
@@ -88,6 +108,7 @@ alone. Ctrl is ⌘ on macOS.
 | C                                      | Switch between continuous and paged           |
 | 1, 2, 3                                | Single pages, odd spreads, even spreads       |
 | /, Ctrl+F                              | Search                                        |
+| Ctrl+Shift+F                           | Switch the search between exact and meaning   |
 | N, Shift+N                             | Next or previous hit                          |
 | Enter, Shift+Enter in the search field | Next or previous hit                          |
 | Esc in a field                         | Back to the document                          |

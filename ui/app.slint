@@ -770,11 +770,16 @@ export component MainWindow inherits Window {
     // reader is on (-1 for none).
     in-out property <bool> search-open;
     in-out property <string> search-text;
+    // What the search looks for: 0 for every place the query's text occurs,
+    // 1 for the pages most like it in meaning.
+    in-out property <int> search-mode: 0;
     in property <string> search-status;
     in property <[SearchResult]> search-results;
     in property <int> search-current: -1;
     // The query was edited.
     callback search-edited(string);
+    // The reader picked what the search looks for (see `search-mode`).
+    callback search-mode-changed(int);
     // Move to the next (+1) or previous (-1) hit.
     callback search-step(int);
     // Move to a hit picked from the results list, by its index there.
@@ -782,6 +787,17 @@ export component MainWindow inherits Window {
     // Invoked from Rust when a document's indexer has read more pages, so
     // the app can take them in.
     callback text-indexed();
+    // Invoked from Rust when a document's vectorizer has made more page
+    // vectors, so the app can take them in.
+    callback pages-vectorized();
+
+    // Picks what the search looks for, as a press on the switch does.
+    function set-search-mode(mode: int) {
+        if (root.search-mode != mode) {
+            root.search-mode = mode;
+            root.search-mode-changed(mode);
+        }
+    }
 
     // Setting the text from here does not count as an edit, so the app is
     // told the query is empty the way typing would tell it.
@@ -808,9 +824,17 @@ export component MainWindow inherits Window {
                 + (result.headings - 1) * root.search-heading-gap;
             let top = bottom - root.search-row-height
                 - (result.page-hits > 0 ? root.search-heading-height : 0px);
+            let view-bottom = search-list.visible-height - search-list.content-y;
             if (top < -search-list.content-y) {
                 search-list.content-y = -top;
-            } else if (bottom > search-list.visible-height - search-list.content-y) {
+            } else if (top > view-bottom + search-list.visible-height) {
+                // A hit more than a screen below goes to the top rather than
+                // the bottom. The list places a far-off row by the average
+                // height of the rows it has built, rounded down, so a row
+                // meant for the bottom edge can land just past it, while one
+                // meant for the top lands there or a little below.
+                search-list.content-y = -top;
+            } else if (bottom > view-bottom) {
                 search-list.content-y = search-list.visible-height - bottom;
             }
         }
@@ -981,6 +1005,17 @@ export component MainWindow inherits Window {
             }
             if (event.modifiers.control && event.text == "0") {
                 root.zoom-reset();
+                return accept;
+            }
+            // Ctrl+Shift+F switches the search between exact and by meaning,
+            // opening the sidebar with the cursor in the field if need be.
+            // Before Ctrl+F, which would take the shifted key as its own.
+            if (event.modifiers.control && event.modifiers.shift && (event.text == "f" || event.text == "F")) {
+                root.set-search-mode(root.search-mode == 0 ? 1 : 0);
+                if (!search-input.has-focus) {
+                    root.search-open = true;
+                    root.focus-search();
+                }
                 return accept;
             }
             // Ctrl+F puts the cursor in the search field with the query
@@ -1751,7 +1786,9 @@ export component MainWindow inherits Window {
                         spacing: 6px;
 
                         Rectangle {
-                            height: 28px;
+                            // One line to start with, growing as the query
+                            // wraps: a search by meaning can be a sentence.
+                            height: max(28px, search-input.preferred-height + 10px);
                             border-width: 1px;
                             border-color: search-input.has-focus ? #6ea8fe : #5a5a5a;
                             border-radius: 4px;
@@ -1766,7 +1803,11 @@ export component MainWindow inherits Window {
                                 color: #eeeeee;
                                 font-size: 13px;
                                 vertical-alignment: center;
-                                single-line: true;
+                                wrap: word-wrap;
+                                // Enter steps between hits (below) rather than
+                                // breaking the line, so the field grows only
+                                // as the query wraps.
+                                single-line: false;
                                 edited => {
                                     root.search-edited(self.text);
                                 }
@@ -1806,7 +1847,9 @@ export component MainWindow inherits Window {
                             // the cursor in the field for the next one.
                             if root.search-text != "": search-clear := Rectangle {
                                 x: parent.width - 22px;
-                                y: (parent.height - self.height) / 2;
+                                // Beside the first line, where the field
+                                // starts, however tall it has grown.
+                                y: 6px;
                                 width: 16px;
                                 height: 16px;
                                 border-radius: self.width / 2;
@@ -1834,6 +1877,42 @@ export component MainWindow inherits Window {
                                 search-clear-touch := TouchArea {
                                     clicked => {
                                         root.clear-search();
+                                    }
+                                }
+                            }
+                        }
+
+                        // The switch between the two kinds of search, one
+                        // half pressed in.
+                        Rectangle {
+                            height: 24px;
+                            border-radius: 4px;
+                            background: #353535;
+                            HorizontalLayout {
+                                padding: 2px;
+                                spacing: 2px;
+                                for mode[index] in ["Exact", "Meaning"]: Rectangle {
+                                    border-radius: 3px;
+                                    background: root.search-mode == index
+                                        ? #505050
+                                        : (mode-touch.has-hover ? #404040 : transparent);
+                                    accessible-role: button;
+                                    accessible-label: mode;
+                                    accessible-checked: root.search-mode == index;
+                                    accessible-action-default => {
+                                        root.set-search-mode(index);
+                                    }
+                                    Text {
+                                        text: mode;
+                                        color: root.search-mode == index ? #ffffff : #bbbbbb;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    mode-touch := TouchArea {
+                                        clicked => {
+                                            root.set-search-mode(index);
+                                        }
                                     }
                                 }
                             }
@@ -2050,6 +2129,7 @@ export component MainWindow inherits Window {
                             HelpSection {
                                 title: "Search";
                                 HelpRow { keys: "/, \{root.command-key}F"; action: "Search, with the cursor in the field"; }
+                                HelpRow { keys: "\{root.command-key}Shift+F"; action: "Search by meaning, or by the letters again"; }
                                 HelpRow { keys: "N, Shift+N"; action: "Next or previous hit"; }
                                 HelpRow { keys: "Enter, Shift+Enter"; action: "Next or previous hit, in the field"; }
                                 HelpRow { keys: "Esc"; action: "Back to the document from a field"; }

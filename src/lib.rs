@@ -13,6 +13,7 @@ mod macos;
 mod render;
 mod search;
 mod selection;
+mod semantic;
 mod settings;
 mod viewer;
 
@@ -20,6 +21,7 @@ use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -29,9 +31,10 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use clipboard::Clipboard;
 use render::{Loaded, RenderControl, WorkerMessage};
 use search::{IndexHandle, Indexed};
+use semantic::{Vectorized, Vectorizer};
 use settings::{Bookmark, PALETTE, SHAPES, Session, Shape, Store};
 
-pub use viewer::{FitMode, Spread, ViewSettings, Viewer};
+pub use viewer::{FitMode, SearchMode, Spread, ViewSettings, Viewer, Workers};
 
 slint::include_modules!();
 
@@ -58,13 +61,6 @@ impl FileDrag {
             _ => None,
         }
     }
-}
-
-/// The channels to one document's render workers.
-struct Workers {
-    pages: Sender<WorkerMessage>,
-    thumbnails: Sender<i32>,
-    control: RenderControl,
 }
 
 /// A document's page worker while it reads the document, before there is a
@@ -126,18 +122,29 @@ pub(crate) struct App {
     /// Where each document's indexer sends the text it has read.
     indexes: Receiver<Indexed>,
     index_sender: Sender<Indexed>,
+    /// Where each document's vectorizer sends the page vectors it has made.
+    vectors: Receiver<Vectorized>,
+    vector_sender: Sender<Vectorized>,
+    /// The model every document's vectorizer shares, loaded once at most.
+    model: Arc<semantic::EmbeddingModel>,
     /// Where copied text goes.
     clipboard: Clipboard,
 }
 
 impl App {
-    pub(crate) fn new(window: &MainWindow, store: Store, clipboard: Clipboard) -> Rc<Self> {
+    pub(crate) fn new(
+        window: &MainWindow,
+        store: Store,
+        clipboard: Clipboard,
+        model: semantic::EmbeddingModel,
+    ) -> Rc<Self> {
         let titles = Rc::new(VecModel::default());
         window.set_tabs(ModelRc::from(titles.clone()));
         window.set_palette(ModelRc::new(VecModel::from(palette())));
         window.set_shapes(ModelRc::new(VecModel::from(shapes())));
         let (load_sender, loads) = mpsc::channel();
         let (index_sender, indexes) = mpsc::channel();
+        let (vector_sender, vectors) = mpsc::channel();
         let app = Rc::new(Self {
             window: window.as_weak(),
             tabs: RefCell::new(Vec::new()),
@@ -152,6 +159,9 @@ impl App {
             load_sender,
             indexes,
             index_sender,
+            vectors,
+            vector_sender,
+            model: Arc::new(model),
             clipboard,
         });
         app.show_empty();
@@ -275,7 +285,12 @@ impl App {
             self.index_sender.clone(),
         );
         let thumbnails = render::spawn_thumbnails(loading.path, loaded.doc, window.as_weak());
-        let workers = Workers { pages: loading.pages, thumbnails, control: loading.control };
+        let workers = Workers {
+            pages: loading.pages,
+            thumbnails,
+            control: loading.control,
+            vectorizer: self.vectorizer(loaded.doc),
+        };
         let path = self.tabs.borrow()[index].path.clone();
         let viewer = self.make_viewer(&window, &path, info.pages_pt, workers);
         {
@@ -341,6 +356,25 @@ impl App {
         self.with_document(doc, |viewer| viewer.on_text_indexed(first_page, pages));
     }
 
+    /// Takes in the page vectors every document's vectorizer has made since
+    /// last time.
+    pub(crate) fn receive_vectors(&self) {
+        while let Ok(vectorized) = self.vectors.try_recv() {
+            self.take_vectorized(vectorized);
+        }
+    }
+
+    /// Hands page vectors a vectorizer has made to its document's viewer.
+    pub(crate) fn take_vectorized(&self, vectorized: Vectorized) {
+        let Vectorized { doc, first_page, result } = vectorized;
+        self.with_document(doc, |viewer| viewer.on_vectorized(first_page, result));
+    }
+
+    /// A vectorizer for the document whose workers are tagged `id`.
+    fn vectorizer(&self, id: i32) -> Vectorizer {
+        Vectorizer::new(id, self.model.clone(), self.vector_sender.clone(), self.window.clone())
+    }
+
     /// A viewer for the document at `path`, in the view it was last left in.
     fn make_viewer(
         &self,
@@ -355,15 +389,7 @@ impl App {
             store.record_open(path);
             settings
         };
-        Viewer::new(
-            window,
-            pages_pt,
-            window.window().scale_factor(),
-            workers.pages,
-            workers.thumbnails,
-            workers.control,
-            &settings,
-        )
+        Viewer::new(window, pages_pt, window.window().scale_factor(), workers, &settings)
     }
 
     /// A fresh id to tag a new document's renders with.
@@ -829,7 +855,12 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
     // when the window is actually shown, so setting it here is in time.
     slint::set_xdg_app_id("io.github.xremming.MelkkiPDF")?;
 
-    let app = App::new(&window, Store::open_default(), Clipboard::system());
+    let app = App::new(
+        &window,
+        Store::open_default(),
+        Clipboard::system(),
+        semantic::EmbeddingModel::locate(),
+    );
 
     #[cfg(target_os = "macos")]
     macos::on_open_document({
@@ -1242,6 +1273,18 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_text_indexed({
         let app = app.clone();
         move || app.receive_indexes()
+    });
+    window.on_pages_vectorized({
+        let app = app.clone();
+        move || app.receive_vectors()
+    });
+    window.on_search_mode_changed({
+        let app = app.clone();
+        move |mode| {
+            if let Some(mode) = SearchMode::from_index(mode) {
+                app.with_viewer(|v| v.set_search_mode(mode));
+            }
+        }
     });
     window.on_search_edited({
         let app = app.clone();

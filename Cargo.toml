@@ -24,6 +24,11 @@ icu_properties = "2.3"
 # Slint gives the clipboard only to its own text fields, so copying goes
 # through arboard directly, which Slint's winit backend links anyway.
 arboard = { version = "3.6", default-features = false }
+# Static embeddings for searching by meaning. The model is read from disk
+# only, as the flatpak has no network, and the tokenizer's regexes go through
+# fancy-regex rather than oniguruma, so the build stays pure Rust.
+model2vec-rs = { version = "0.3", default-features = false, features = ["local-only"] }
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 i-slint-backend-testing = { version = "1.18", optional = true }
 
 [target.'cfg(all(unix, not(target_vendor = "apple")))'.dependencies]

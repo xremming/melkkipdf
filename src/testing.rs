@@ -10,6 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -18,8 +19,11 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use crate::clipboard::Clipboard;
 use crate::render::{RenderControl, WorkerMessage};
 use crate::search::{PageText, PageTextBuilder};
+use crate::semantic::{Vectorized, Vectorizer};
 use crate::settings::Store;
 use crate::{App, FileDrag, MainWindow, OutlineItem, PageLayout, ViewSettings, Viewer, Workers};
+
+pub use crate::semantic::EmbeddingModel;
 
 /// A window + viewer pair for tests, plus convenience accessors.
 pub struct Harness {
@@ -30,6 +34,10 @@ pub struct Harness {
     requests: Receiver<WorkerMessage>,
     // Kept alive so thumbnail requests have a receiver.
     _thumb_requests: Receiver<i32>,
+    // Where the viewer's vectorizer sends page vectors, which
+    // [`Harness::finish_vectorizing`] hands on, there being no event loop
+    // to do it.
+    vectors: Receiver<Vectorized>,
 }
 
 /// Installs Slint's testing backend on this thread, once. Windows made without
@@ -56,22 +64,39 @@ impl Harness {
         Self::with_pages(vec![(width, height); count])
     }
 
-    /// Builds a harness with the given per-page sizes in points.
+    /// Builds a harness with the given per-page sizes in points, searching
+    /// by meaning with the word-counting model.
     pub fn with_pages(pages: Vec<(f32, f32)>) -> Self {
+        Self::with_model(pages, EmbeddingModel::words())
+    }
+
+    /// Builds a harness with the given per-page sizes in points, searching
+    /// by meaning with `model`.
+    pub fn with_model(pages: Vec<(f32, f32)>, model: EmbeddingModel) -> Self {
         let window = new_window();
         let (sender, requests) = mpsc::channel();
         let (thumb_sender, _thumb_requests) = mpsc::channel();
-        let viewer = Viewer::new(
-            &window,
-            pages,
-            1.0,
-            sender,
-            thumb_sender,
-            RenderControl::inert(),
-            &ViewSettings::default(),
-        );
+        let (vector_sender, vectors) = mpsc::channel();
+        let vectorizer = Vectorizer::new(0, Arc::new(model), vector_sender, window.as_weak());
+        let workers = Workers {
+            pages: sender,
+            thumbnails: thumb_sender,
+            control: RenderControl::inert(),
+            vectorizer,
+        };
+        let viewer = Viewer::new(&window, pages, 1.0, workers, &ViewSettings::default());
         viewer.activate();
-        Self { window, viewer, requests, _thumb_requests }
+        Self { window, viewer, requests, _thumb_requests, vectors }
+    }
+
+    /// Waits for the viewer's vectorizer to finish each batch it has going
+    /// and hands the vectors to the viewer, as the app would on the event
+    /// loop, until no more are being made.
+    pub fn finish_vectorizing(&self) {
+        while self.viewer.vectorizing() {
+            let vectorized = self.vectors.recv().expect("the vectorizer stopped without a word");
+            self.viewer.on_vectorized(vectorized.first_page, vectorized.result);
+        }
     }
 
     /// Drains and returns the 0-based page indices the viewer has requested for
@@ -299,8 +324,18 @@ impl Tabs {
     }
 
     fn with_store(store: Store) -> Self {
+        Self::with_store_and_model(store, EmbeddingModel::words())
+    }
+
+    /// An empty window that remembers nothing on disk and searches by
+    /// meaning with `model`.
+    pub fn with_model(model: EmbeddingModel) -> Self {
+        Self::with_store_and_model(Store::in_memory(), model)
+    }
+
+    fn with_store_and_model(store: Store, model: EmbeddingModel) -> Self {
         let window = new_window();
-        let app = App::new(&window, store, Clipboard::detached());
+        let app = App::new(&window, store, Clipboard::detached(), model);
         Self { window, app, receivers: RefCell::new(Vec::new()) }
     }
 
@@ -341,11 +376,12 @@ impl Tabs {
         let outline = ModelRc::new(VecModel::from(outline));
         let index = self
             .app
-            .insert(path, title.into(), pages, outline, |_| {
+            .insert(path, title.into(), pages, outline, |id| {
                 let (pages, requests) = mpsc::channel();
                 let (thumbnails, thumb_requests) = mpsc::channel();
                 self.receivers.borrow_mut().push((requests, thumb_requests));
-                Workers { pages, thumbnails, control: RenderControl::inert() }
+                let vectorizer = self.app.vectorizer(id);
+                Workers { pages, thumbnails, control: RenderControl::inert(), vectorizer }
             })
             .expect("the window is gone");
         self.app.tabs.borrow()[index].id
@@ -410,6 +446,27 @@ impl Tabs {
                 .recv_timeout(Duration::from_secs(30))
                 .expect("a document took too long to index");
             self.app.take_indexed(indexed);
+        }
+    }
+
+    /// Waits for every open document's vectorizer to finish each batch it
+    /// has going, and takes the vectors in as the event loop would, until no
+    /// more are being made.
+    pub fn finish_vectorizing(&self) {
+        let pending = || {
+            self.app
+                .tabs
+                .borrow()
+                .iter()
+                .any(|tab| tab.viewer.as_ref().is_some_and(|viewer| viewer.vectorizing()))
+        };
+        while pending() {
+            let vectorized = self
+                .app
+                .vectors
+                .recv_timeout(Duration::from_secs(120))
+                .expect("a document took too long to vectorize");
+            self.app.take_vectorized(vectorized);
         }
     }
 

@@ -4,6 +4,12 @@
 # and fontconfig for the build, flatpak-builder for the flatpak, rsvg-convert
 # and iconutil for the macOS bundle.
 
+[env]
+# Where the viewer and the tests find the embedding model that searching by
+# meaning uses, which `mise run model:fetch` downloads. An installed build
+# looks under the platform's data directory instead.
+MELKKIPDF_MODEL_DIR = "{{config_root}}/data/model"
+
 [tools]
 # Pinned rather than "latest", so CI and every laptop compile the same thing
 # and a new stable cannot turn a branch red on its own. Bump it deliberately.
@@ -27,6 +33,14 @@ run = 'cargo run --release -- "${usage_pdf?}"'
 [tasks.test]
 description = "Run the tests, headlessly"
 run = "cargo test --features testing"
+
+[tasks."model:fetch"]
+description = "Download the embedding model for searching by meaning"
+run = "packaging/fetch-model.sh"
+
+[tasks."test:model"]
+description = "Run the tests that need the embedding model"
+run = "cargo test --features testing -- --ignored the_real_model"
 
 [tasks.fmt]
 description = "Format the Rust sources"
