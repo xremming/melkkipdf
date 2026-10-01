@@ -28,7 +28,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use clipboard::Clipboard;
 use render::{Loaded, RenderControl, WorkerMessage};
 use search::{IndexHandle, Indexed};
-use settings::{Bookmark, Session, Store};
+use settings::{Bookmark, PALETTE, Session, Store};
 
 pub use viewer::{FitMode, Spread, ViewSettings, Viewer};
 
@@ -133,6 +133,7 @@ impl App {
     pub(crate) fn new(window: &MainWindow, store: Store, clipboard: Clipboard) -> Rc<Self> {
         let titles = Rc::new(VecModel::default());
         window.set_tabs(ModelRc::from(titles.clone()));
+        window.set_palette(ModelRc::new(VecModel::from(palette())));
         let (load_sender, loads) = mpsc::channel();
         let (index_sender, indexes) = mpsc::channel();
         let app = Rc::new(Self {
@@ -523,6 +524,17 @@ impl App {
         self.set_flags(index, &bookmarks);
     }
 
+    /// Gives the flag on `page` of the active tab's document the colour of
+    /// `hue`.
+    pub(crate) fn color_bookmark(&self, page: usize, hue: u16) {
+        let Some(index) = self.active.get() else {
+            return;
+        };
+        let path = self.tabs.borrow()[index].path.clone();
+        let bookmarks = self.store.borrow_mut().set_bookmark_hue(&path, page, hue);
+        self.set_flags(index, &bookmarks);
+    }
+
     /// Takes the flag off `page` of the active tab's document.
     pub(crate) fn remove_bookmark(&self, page: usize) {
         let Some(index) = self.active.get() else {
@@ -896,13 +908,47 @@ fn flags(bookmarks: &[Bookmark], outline: &ModelRc<OutlineItem>) -> Vec<Bookmark
             };
             BookmarkFlag {
                 page,
-                color: slint::Color::from_hsva(
-                    f32::from(bookmark.hue),
-                    FLAG_SATURATION,
-                    FLAG_VALUE,
-                    1.0,
-                ),
+                color: flag_color(bookmark.hue),
+                hue: i32::from(bookmark.hue),
                 label: label.into(),
+            }
+        })
+        .collect()
+}
+
+/// The colour of a flag with `hue`.
+fn flag_color(hue: u16) -> slint::Color {
+    slint::Color::from_hsva(f32::from(hue), FLAG_SATURATION, FLAG_VALUE, 1.0)
+}
+
+/// The size of a colour's swatch in a flag's menu, in pixels.
+const SWATCH_SIZE: u32 = 16;
+
+/// The colours a flag's menu offers, each with a round swatch of it.
+fn palette() -> Vec<FlagColor> {
+    PALETTE
+        .iter()
+        .map(|&(name, hue)| {
+            let color = flag_color(hue);
+            let mut buffer =
+                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(SWATCH_SIZE, SWATCH_SIZE);
+            let centre = SWATCH_SIZE as f32 / 2.0;
+            for (index, pixel) in buffer.make_mut_slice().iter_mut().enumerate() {
+                let x = (index as u32 % SWATCH_SIZE) as f32 + 0.5 - centre;
+                let y = (index as u32 / SWATCH_SIZE) as f32 + 0.5 - centre;
+                // The edge fades over a pixel, so the disc is not jagged.
+                let coverage = (centre - (x * x + y * y).sqrt()).clamp(0.0, 1.0);
+                *pixel = slint::Rgba8Pixel {
+                    r: color.red(),
+                    g: color.green(),
+                    b: color.blue(),
+                    a: (coverage * 255.0).round() as u8,
+                };
+            }
+            FlagColor {
+                name: name.into(),
+                hue: i32::from(hue),
+                swatch: slint::Image::from_rgba8(buffer),
             }
         })
         .collect()
@@ -1141,6 +1187,14 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_toggle_bookmark({
         let app = app.clone();
         move || app.toggle_bookmark()
+    });
+    window.on_color_bookmark({
+        let app = app.clone();
+        move |page, hue| {
+            if let (Some(page), Ok(hue)) = (index(page), u16::try_from(hue)) {
+                app.color_bookmark(page, hue);
+            }
+        }
     });
     window.on_remove_bookmark({
         let app = app.clone();

@@ -463,6 +463,16 @@ impl Tabs {
         self.window.get_bookmarks().iter().map(|flag| (flag.page, flag.label.into())).collect()
     }
 
+    /// The hue in degrees of each flag, in the order drawn.
+    pub fn flag_hues(&self) -> Vec<i32> {
+        self.window.get_bookmarks().iter().map(|flag| flag.hue).collect()
+    }
+
+    /// The names and hues of the colours a flag's menu offers.
+    pub fn palette(&self) -> Vec<(String, i32)> {
+        self.window.get_palette().iter().map(|color| (color.name.into(), color.hue)).collect()
+    }
+
     /// The 0-based page Tab flips back to, or `None` while there is
     /// none.
     pub fn return_page(&self) -> Option<i32> {

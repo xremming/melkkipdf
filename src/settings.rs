@@ -7,7 +7,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::{BuildHasher, RandomState};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -54,10 +53,24 @@ struct DocumentEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Bookmark {
     pub page: usize,
-    /// The hue of its flag in degrees, picked at random when it was added so
-    /// flags are told apart at a glance.
+    /// The hue of its flag in degrees: one of [`PALETTE`], given in turn as
+    /// flags are added so they are told apart at a glance, or whatever the
+    /// reader picked for it.
     pub hue: u16,
 }
+
+/// The colours a flag can have, as names and hues in degrees. A new flag
+/// takes the first of them used by the fewest of the document's flags, so
+/// flags go round the palette and a colour freed up is taken again.
+pub const PALETTE: [(&str, u16); 7] = [
+    ("Red", 0),
+    ("Orange", 28),
+    ("Yellow", 52),
+    ("Green", 125),
+    ("Teal", 178),
+    ("Blue", 212),
+    ("Purple", 272),
+];
 
 /// The tabs that were open, in order, and which of them was shown.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -201,8 +214,25 @@ impl Store {
         }
         let entry = self.documents.get_mut(path).expect("the document was just recorded");
         let at = entry.bookmarks.partition_point(|bookmark| bookmark.page < page);
-        entry.bookmarks.insert(at, Bookmark { page, hue: random_hue() });
+        let hue = next_hue(&entry.bookmarks);
+        entry.bookmarks.insert(at, Bookmark { page, hue });
         self.dirty = true;
+        entry.bookmarks.clone()
+    }
+
+    /// Gives the flag on `page` of the document at `path` the colour of
+    /// `hue`, if it has one, and returns the document's bookmarks as they are
+    /// now.
+    pub fn set_bookmark_hue(&mut self, path: &Path, page: usize, hue: u16) -> Vec<Bookmark> {
+        let Some(entry) = self.documents.get_mut(path) else {
+            return Vec::new();
+        };
+        if let Some(bookmark) = entry.bookmarks.iter_mut().find(|bookmark| bookmark.page == page)
+            && bookmark.hue != hue
+        {
+            bookmark.hue = hue;
+            self.dirty = true;
+        }
         entry.bookmarks.clone()
     }
 
@@ -314,11 +344,14 @@ impl Store {
     }
 }
 
-/// A hue in degrees for a new flag. The standard library's hasher is seeded
-/// at random, which is all the randomness a colour needs, and saves a
-/// dependency.
-fn random_hue() -> u16 {
-    (RandomState::new().hash_one(0u8) % 360) as u16
+/// The hue for a flag added to `bookmarks`: the first of [`PALETTE`] that
+/// the fewest of them have.
+fn next_hue(bookmarks: &[Bookmark]) -> u16 {
+    PALETTE
+        .iter()
+        .map(|&(_, hue)| (bookmarks.iter().filter(|bookmark| bookmark.hue == hue).count(), hue))
+        .min_by_key(|&(used, _)| used)
+        .map_or(0, |(_, hue)| hue)
 }
 
 /// Where to move an unreadable settings `file`: `<file>.bak`, or the first of
@@ -339,7 +372,7 @@ fn backup_path(file: &Path) -> PathBuf {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{MAX_DOCUMENTS, Session, Store};
+    use super::{MAX_DOCUMENTS, PALETTE, Session, Store};
     use crate::{FitMode, Spread, ViewSettings};
 
     /// A fresh, empty directory for one test's settings file, removed again
@@ -392,6 +425,32 @@ mod tests {
     }
 
     #[test]
+    fn flags_go_round_the_palette_and_take_a_freed_colour_again() {
+        let mut store = Store::in_memory();
+        let path = Path::new("/docs/a.pdf");
+        let hues = |store: &Store| -> Vec<u16> {
+            store.bookmarks(path).iter().map(|bookmark| bookmark.hue).collect()
+        };
+        for page in 0..PALETTE.len() + 1 {
+            store.toggle_bookmark(path, page);
+        }
+        let mut expected: Vec<u16> = PALETTE.iter().map(|&(_, hue)| hue).collect();
+        expected.push(PALETTE[0].1);
+        assert_eq!(hues(&store), expected);
+
+        // Taking away a flag frees its colour for the next flag added.
+        store.remove_bookmark(path, 3);
+        store.toggle_bookmark(path, 20);
+        assert_eq!(hues(&store).last(), Some(&PALETTE[3].1));
+
+        // A colour the reader picks sticks, and only that flag changes.
+        let bookmarks = store.set_bookmark_hue(path, 20, PALETTE[6].1);
+        assert_eq!(bookmarks.last().map(|bookmark| bookmark.hue), Some(PALETTE[6].1));
+        assert_eq!(hues(&store)[0], PALETTE[0].1);
+        assert!(store.set_bookmark_hue(path, 999, 0).len() == bookmarks.len());
+    }
+
+    #[test]
     fn bookmarks_are_kept_by_page() {
         let mut store = Store::in_memory();
         let path = Path::new("/docs/a.pdf");
@@ -402,7 +461,6 @@ mod tests {
             store.bookmarks(path).iter().map(|bookmark| bookmark.page).collect()
         };
         assert_eq!(pages(&store), vec![2, 7, 12]);
-        assert!(store.bookmarks(path).iter().all(|bookmark| bookmark.hue < 360));
 
         // Flagging a flagged page takes the flag away, and only that one.
         store.toggle_bookmark(path, 7);

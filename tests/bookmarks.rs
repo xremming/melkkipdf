@@ -11,7 +11,7 @@ use std::path::Path;
 use common::{Scratch, write_pdf};
 use melkkipdf::testing::Tabs;
 use slint::platform::{Key, WindowEvent};
-use slint::{ComponentHandle, SharedString};
+use slint::{ComponentHandle, Model, SharedString};
 
 fn tabs() -> Tabs {
     Tabs::new()
@@ -243,6 +243,30 @@ fn closing_the_last_tab_clears_the_page_edge() {
 }
 
 #[test]
+fn flags_take_the_palettes_colours_in_turn_and_the_menu_can_change_one() {
+    let t = tabs();
+    t.open("a.pdf", 20);
+    let palette = t.palette();
+    assert_eq!(palette.len(), 7);
+    assert_eq!(palette[0].0, "Red");
+    for page in ["3", "7", "12"] {
+        t.viewer(0).go_to_page(page);
+        press(&t, &[], "d");
+    }
+    let hues: Vec<i32> = palette.iter().map(|&(_, hue)| hue).collect();
+    assert_eq!(t.flag_hues(), hues[..3]);
+
+    // The menu gives a flag the colour picked, and leaves the others.
+    t.window.invoke_color_bookmark(6, hues[5]);
+    assert_eq!(t.flag_hues(), [hues[0], hues[5], hues[2]]);
+    // The flag's colour follows its hue.
+    let colors: Vec<slint::Color> =
+        t.window.get_bookmarks().iter().map(|flag| flag.color).collect();
+    assert_ne!(colors[0], colors[1]);
+    assert_eq!(colors[1], slint::Color::from_hsva(hues[5] as f32, 0.6, 0.9, 1.0));
+}
+
+#[test]
 fn flags_survive_a_restart() {
     let directory = Scratch::new("restart");
     let settings = directory.join("documents.json");
@@ -256,12 +280,14 @@ fn flags_survive_a_restart() {
         run.window.invoke_toggle_bookmark();
         run.viewer(0).go_to_page("2");
         run.window.invoke_toggle_bookmark();
+        run.window.invoke_color_bookmark(1, 272);
         run.save();
     }
 
     let run = run_with(&settings);
     run.restore();
     assert_eq!(flagged(&run), [1, 8]);
+    assert_eq!(run.flag_hues(), [272, 0]);
     // Where a flip came from is not worth remembering across runs.
     assert_eq!(run.return_page(), None);
 }

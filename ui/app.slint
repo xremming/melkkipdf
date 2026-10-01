@@ -74,11 +74,21 @@ export struct OutlineItem {
 }
 
 // A page the reader has flagged: the 0-based page its flag sits at on the
-// page edge, the colour the flag was given, and what its tooltip says.
+// page edge, the colour the flag was given and its hue in degrees, which
+// names it among the palette's colours, and what its tooltip says.
 export struct BookmarkFlag {
     page: int,
     color: color,
+    hue: int,
     label: string,
+}
+
+// A colour a flag can be given, from the flag's menu: its name, its hue in
+// degrees, and a swatch of it for the menu.
+export struct FlagColor {
+    name: string,
+    hue: int,
+    swatch: image,
 }
 
 // A single page: white paper with the rendered image on top. Sized from the
@@ -650,6 +660,8 @@ export component MainWindow inherits Window {
     // 0-based page Tab flips back to (-1 while there is none).
     in property <[BookmarkFlag]> bookmarks;
     in property <int> return-page: -1;
+    // The colours a flag's menu offers.
+    in property <[FlagColor]> palette;
 
     // The help page over the window, with every shortcut. The modifier it
     // names is Cmd on macOS, where Slint reports it as control, and Ctrl
@@ -667,6 +679,8 @@ export component MainWindow inherits Window {
     callback toggle-bookmark();
     // Takes the flag off a 0-based page.
     callback remove-bookmark(int);
+    // Gives the flag on a 0-based page the colour of a hue in degrees.
+    callback color-bookmark(int, int);
     // Jumps to a flagged 0-based page, remembering where it was left from.
     callback go-to-bookmark(int);
     // Jumps to the next (1) or previous (-1) flag, wrapping around.
@@ -1564,8 +1578,24 @@ export component MainWindow inherits Window {
                                 border-bottom-left-radius: 3px;
                                 border-bottom-right-radius: 3px;
                                 animate height { duration: 80ms; }
+                                // The menu offers every colour, with a
+                                // check on the flag's own. Activating a
+                                // checkable item flips its check, but every
+                                // change replaces the flags wholesale, so
+                                // the menu is built afresh with the check
+                                // where it belongs.
                                 flag-menu := ContextMenuArea {
                                     Menu {
+                                        for color in root.palette: MenuItem {
+                                            title: color.name;
+                                            icon: color.swatch;
+                                            checkable: true;
+                                            checked: color.hue == flag.hue;
+                                            activated => {
+                                                root.color-bookmark(flag.page, color.hue);
+                                            }
+                                        }
+                                        MenuSeparator { }
                                         MenuItem {
                                             title: "Remove bookmark";
                                             activated => {
@@ -1978,7 +2008,7 @@ export component MainWindow inherits Window {
                     HelpSection {
                         title: "How bookmarks work";
                         Text {
-                            text: "Flags are sticky bookmarks on a closed book. Each hangs from the top edge over the pages at its page's depth in the document, so every one is in view at once, and a click on one, or B, goes there. A right click takes a flag away.";
+                            text: "Flags are sticky bookmarks on a closed book. Each hangs from the top edge over the pages at its page's depth in the document, so every one is in view at once, and a click on one, or B, goes there. Each new flag takes the next colour of the palette, and a right click on one picks its colour or takes it away.";
                             color: #bbbbbb;
                             font-size: 13px;
                             wrap: word-wrap;
