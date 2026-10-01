@@ -40,8 +40,12 @@ modules:
         # for the network, which is unavailable during the build anyway.
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo --offline build --release
+      - cargo --offline build --release --bins --example quantize_model
       - install -Dm755 target/release/melkkipdf /app/bin/melkkipdf
+      # The embedding model for searching by meaning, shrunk to int8 from
+      # the half gigabyte downloaded, where the viewer looks for it beside
+      # its binary.
+      - target/release/examples/quantize_model model /app/share/melkkipdf/model
       - install -Dm644 packaging/$FLATPAK_ID.desktop
         /app/share/applications/$FLATPAK_ID.desktop
       - install -Dm644 packaging/$FLATPAK_ID.metainfo.xml
@@ -58,4 +62,21 @@ modules:
           - packaging/build-dir
           - packaging/repo
           - packaging/site
+          # A developer's download of the model, half a gigabyte that the
+          # build fetches for itself.
+          - data/model
       - cargo-sources.json
+      # The embedding model, at the revision packaging/fetch-model.sh pins,
+      # fetched like the crates before the build starts without a network.
+      - type: file
+        url: https://huggingface.co/minishlab/potion-multilingual-128M/resolve/73908c3438cf03b6a01bcb9611d62b23d0726f08/config.json
+        sha256: 595e4cab2093732efd5dbe084fd5c1826b5eea693b73b4c1fd971672867d2e54
+        dest: model
+      - type: file
+        url: https://huggingface.co/minishlab/potion-multilingual-128M/resolve/73908c3438cf03b6a01bcb9611d62b23d0726f08/tokenizer.json
+        sha256: 19f1909063da3cfe3bd83a782381f040dccea475f4816de11116444a73e1b6a1
+        dest: model
+      - type: file
+        url: https://huggingface.co/minishlab/potion-multilingual-128M/resolve/73908c3438cf03b6a01bcb9611d62b23d0726f08/model.safetensors
+        sha256: 14b5eb39cb4ce5666da8ad1f3dc6be4346e9b2d601c073302fa0a31bf7943397
+        dest: model

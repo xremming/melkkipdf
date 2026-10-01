@@ -22,6 +22,17 @@ if flatpak run --command=ldd "$APP_ID" /app/bin/melkkipdf | grep 'not found'; th
     exit 1
 fi
 
+# The model is downloaded and shrunk at build time, so a build that lost
+# either step would still produce a viewer, one that cannot search by
+# meaning.
+echo "Checking the embedding model ships with the viewer."
+for file in config.json tokenizer.json model.safetensors; do
+    if ! flatpak run --command=test "$APP_ID" -s "/app/share/melkkipdf/model/$file"; then
+        echo "The viewer ships without the model's $file." >&2
+        exit 1
+    fi
+done
+
 echo "Validating the desktop entry."
 desktop-file-validate "$app/export/share/applications/$APP_ID.desktop"
 

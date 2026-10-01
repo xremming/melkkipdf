@@ -16,6 +16,7 @@ to host it, and users get automatic updates through `flatpak update`.
 | `check-flatpak.sh`                       | Checks the installed flatpak runs and its metadata validates |
 | `release.sh`                             | Checks a release is ready to tag; the `/release` skill's last stop |
 | `build-macos-app.sh`                     | Builds an ad-hoc signed `target/MelkkiPDF.app` for local use on macOS |
+| `fetch-model.sh`                         | Downloads the embedding model for searching by meaning into `data/model` |
 
 Each script has a task in [`mise.toml`](../mise.toml), which is how CI and
 the steps below run them.
@@ -46,6 +47,20 @@ flatpak run io.github.xremming.MelkkiPDF
 
 `mise run flatpak:check` then checks the installed app the way CI does, given
 `desktop-file-utils` and `appstream`.
+
+## The embedding model
+
+Searching by meaning needs
+[potion-multilingual-128M](https://huggingface.co/minishlab/potion-multilingual-128M),
+half a gigabyte of weights that are not in the repository. The manifest lists
+its three files as sources at the revision `fetch-model.sh` pins, so
+flatpak-builder fetches and checks them like the crates, and the build shrinks
+them to int8 with the `quantize_model` example before installing them under
+`/app/share/melkkipdf/model`. `build-macos-app.sh` does the same from
+`data/model` into the bundle's `Resources/model`, running `fetch-model.sh`
+first. Both places are where the viewer looks for the model beside its
+binary. To move to another revision, change it and the hashes in
+`fetch-model.sh` and the manifest together.
 
 ## After changing dependencies
 

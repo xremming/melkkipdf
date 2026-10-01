@@ -31,13 +31,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes flatpak flatpak-builder appstream desktop-file-utils
 
-      # Keeps the downloaded crate tarballs between runs; there are several
-      # hundred of them.
+      # Keeps the downloaded crate tarballs and the embedding model between
+      # runs; there are several hundred of the former, and the latter is half
+      # a gigabyte.
       - name: Restore the flatpak-builder cache
         uses: actions/cache@v6
         with:
           path: .flatpak-builder
-          key: flatpak-builder-${{ hashFiles('packaging/cargo-sources.json') }}
+          key: flatpak-builder-${{ hashFiles('packaging/cargo-sources.json', 'packaging/io.github.xremming.MelkkiPDF.yml') }}
           restore-keys: flatpak-builder-
 
       - run: mise run flatpak:runtime

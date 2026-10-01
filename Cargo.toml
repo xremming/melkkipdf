@@ -58,3 +58,6 @@ opt-level = 3
 
 [dev-dependencies]
 i-slint-backend-testing = "1.18"
+# The quantize_model example, which the flatpak and the macOS bundle run on
+# the embedding model they ship. The version model2vec-rs reads with.
+safetensors = "0.5"

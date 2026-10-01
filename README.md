@@ -55,18 +55,21 @@ mise run test    # cargo test --features testing
 
 The search sidebar's "Meaning" mode ranks pages by an embedding model,
 [potion-multilingual-128M](https://huggingface.co/minishlab/potion-multilingual-128M),
-which is not in the repository. Download it once, half a gigabyte, with:
+which is not in the repository. The flatpak and the macOS bundle download
+it when they are built and ship it shrunk to int8, about 150 MB. For a
+build from source, download it once, half a gigabyte, with:
 
 ```sh
 mise run model:fetch    # into data/model, where mise points the viewer
 ```
 
-A build run outside mise looks for the model in `MELKKIPDF_MODEL_DIR`, or
-else under the platform's data directory: `~/.local/share/melkkipdf/model`
-on Linux, `~/Library/Application Support/melkkipdf/model` on macOS. Without
-it, the mode says so, and exact search is unaffected. The model is read into
-memory the first time a document is searched by meaning, which takes a few
-seconds and about 500 MB. `mise run test:model` runs the tests that need it.
+A build run outside mise looks for the model in `MELKKIPDF_MODEL_DIR`, then
+beside its own binary where the flatpak and the bundle put it, then under the
+platform's data directory: `~/.local/share/melkkipdf/model` on Linux,
+`~/Library/Application Support/melkkipdf/model` on macOS. Without it, the
+mode says so, and exact search is unaffected. The model is read into memory
+the first time a document is searched by meaning, which takes a few seconds
+and about 500 MB. `mise run test:model` runs the tests that need it.
 
 ## Features
 

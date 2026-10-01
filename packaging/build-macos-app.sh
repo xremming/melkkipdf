@@ -4,7 +4,8 @@
 # The bundle is only ad-hoc signed, which is enough to run it on the machine
 # that built it. Distributing it would need a Developer ID and notarization.
 #
-# Needs rsvg-convert (brew install librsvg) to render the icon.
+# Needs rsvg-convert (brew install librsvg) to render the icon, and downloads
+# the embedding model, half a gigabyte, the first time.
 set -euo pipefail
 
 APP_ID=io.github.xremming.MelkkiPDF
@@ -13,7 +14,11 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
 echo "Building the release binary."
-cargo build --release
+cargo build --release --bins --example quantize_model
+
+# The model for searching by meaning, shrunk to int8 from the download,
+# which fetch-model.sh keeps in data/model.
+packaging/fetch-model.sh
 
 version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
 app=target/MelkkiPDF.app
@@ -22,6 +27,8 @@ echo "Assembling $app."
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/melkkipdf "$app/Contents/MacOS/"
+# Where the viewer looks for the model, beside its binary's directory.
+target/release/examples/quantize_model data/model "$app/Contents/Resources/model"
 
 # iconutil only accepts a directory of PNGs at fixed sizes, not an SVG.
 iconset=$(mktemp -d)/MelkkiPDF.iconset

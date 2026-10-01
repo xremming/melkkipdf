@@ -9,7 +9,7 @@
 //! meaning, on the thread that vectorizes the document, and readers who never
 //! do pay nothing for it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -20,8 +20,12 @@ use slint::Weak;
 use crate::MainWindow;
 
 /// The variable naming the directory the model is in, for a build that
-/// should look somewhere other than [`MODEL_DIR`].
+/// should look somewhere other than where it is shipped.
 const MODEL_DIR_VARIABLE: &str = "MELKKIPDF_MODEL_DIR";
+/// Where the model is shipped, from the directory the viewer's binary is
+/// in: the flatpak installs it under `/app/share`, and the macOS bundle
+/// keeps it beside the binary's directory in `Resources`.
+const SHIPPED_MODEL_DIRS: [&str; 2] = ["../share/melkkipdf/model", "../Resources/model"];
 /// Where the model is looked for otherwise, under the platform's data
 /// directory.
 const MODEL_DIR: &str = "melkkipdf/model";
@@ -64,6 +68,13 @@ enum Source {
     Words,
 }
 
+/// The model shipped beside the binary at `exe` (see
+/// [`SHIPPED_MODEL_DIRS`]), if there is one.
+fn shipped_model_dir(exe: &Path) -> Option<PathBuf> {
+    let beside = exe.parent()?;
+    SHIPPED_MODEL_DIRS.iter().map(|dir| beside.join(dir)).find(|dir| dir.is_dir())
+}
+
 /// A loaded model. Cheap to clone, as the clones share the weights.
 #[derive(Clone)]
 pub enum Loaded {
@@ -73,15 +84,18 @@ pub enum Loaded {
 }
 
 impl EmbeddingModel {
-    /// The model in the directory [`MODEL_DIR_VARIABLE`] names, or in
-    /// [`MODEL_DIR`] under the platform's data directory. Nothing is read
-    /// until [`Self::load`].
+    /// The model in the directory [`MODEL_DIR_VARIABLE`] names, failing
+    /// that the one shipped with the viewer (see [`SHIPPED_MODEL_DIRS`]),
+    /// and failing that [`MODEL_DIR`] under the platform's data directory.
+    /// Nothing is read until [`Self::load`].
     pub fn locate() -> Self {
-        let directory =
-            std::env::var_os(MODEL_DIR_VARIABLE).map(PathBuf::from).unwrap_or_else(|| {
-                dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join(MODEL_DIR)
-            });
-        Self::in_directory(directory)
+        if let Some(directory) = std::env::var_os(MODEL_DIR_VARIABLE) {
+            return Self::in_directory(PathBuf::from(directory));
+        }
+        let shipped = std::env::current_exe().ok().and_then(|exe| shipped_model_dir(&exe));
+        Self::in_directory(shipped.unwrap_or_else(|| {
+            dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join(MODEL_DIR)
+        }))
     }
 
     /// The model in `directory`, read once [`Self::load`] is called.
@@ -381,7 +395,7 @@ impl Vectorizer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Vectors, chunk, head, search, tail, windows};
+    use super::{Vectors, chunk, head, search, shipped_model_dir, tail, windows};
 
     #[test]
     fn a_chunk_takes_a_quarter_of_each_neighbour() {
@@ -415,6 +429,28 @@ mod tests {
         assert_eq!(tail("abcdefgh"), "gh");
         assert_eq!(head("abcdefgh"), "ab");
         assert_eq!(head("日本語の文章です"), "日本");
+    }
+
+    #[test]
+    fn the_shipped_model_is_found_beside_the_binary() {
+        let root = std::env::temp_dir().join(format!("melkkipdf-model-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // Neither layout: nothing shipped.
+        std::fs::create_dir_all(root.join("flatpak/bin")).unwrap();
+        assert_eq!(shipped_model_dir(&root.join("flatpak/bin/melkkipdf")), None);
+        // The flatpak's layout, and the macOS bundle's.
+        std::fs::create_dir_all(root.join("flatpak/share/melkkipdf/model")).unwrap();
+        assert_eq!(
+            shipped_model_dir(&root.join("flatpak/bin/melkkipdf")),
+            Some(root.join("flatpak/bin/../share/melkkipdf/model"))
+        );
+        std::fs::create_dir_all(root.join("App.app/Contents/MacOS")).unwrap();
+        std::fs::create_dir_all(root.join("App.app/Contents/Resources/model")).unwrap();
+        assert_eq!(
+            shipped_model_dir(&root.join("App.app/Contents/MacOS/melkkipdf")),
+            Some(root.join("App.app/Contents/MacOS/../Resources/model"))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
