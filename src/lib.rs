@@ -1093,7 +1093,12 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_viewport_resized({
         let app = app.clone();
+        let weak = window.as_weak();
         move |width, height| {
+            // The window's display may have changed with its size.
+            if let Some(window) = weak.upgrade() {
+                window.set_device_pixel(1.0 / window.window().scale_factor());
+            }
             app.viewport.set((width, height));
             app.with_viewer(|v| v.set_viewport(width, height));
         }

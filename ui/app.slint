@@ -677,25 +677,40 @@ export component MainWindow inherits Window {
     // corners.
     property <length> flag-cut: 5px;
     property <length> flag-corner: 3px;
-    // The outline of a flag `w` by `h`, by its shape (see `shapes`): a tab
-    // with rounded corners, a pennant notched at the end, an arrow brought
-    // to a point, or a half-round end. In pixels, so the cuts keep their
-    // size however wide the flags are.
-    pure function flag-path(shape: int, w: float, h: float) -> string {
-        if (shape == 1) {
-            let cut = root.flag-cut / 1px;
-            return "M 0 0 L \{w} 0 L \{w} \{h} L \{w / 2} \{h - cut} L 0 \{h} Z";
-        }
-        if (shape == 2) {
-            let cut = root.flag-cut / 1px;
-            return "M 0 0 L \{w} 0 L \{w} \{h - cut} L \{w / 2} \{h} L 0 \{h - cut} Z";
+    // A pixel of the display, in logical pixels, from Rust: 1 on a plain
+    // screen and 0.5 on one at 2x.
+    in property <float> device-pixel: 1;
+    // How tall the shaped end of a flag `w` by `h` is, by its shape (see
+    // `shapes`): the cut of a pennant or an arrow, the corners of a tab, or
+    // the largest half-round the flag has room for. The rest of the flag is
+    // a plain rectangle, which the renderer draws to the pixel, and only the
+    // end is a path, whose anti-aliased edges it softens a little past the
+    // geometry and, at a corner, unevenly; so the end is drawn `inset` in
+    // from the flag's sides to land on them, and starts a pixel up under
+    // the rectangle, which hides its top edge.
+    pure function flag-end(shape: int, w: float, h: float, inset: float) -> float {
+        if (shape == 1 || shape == 2) {
+            return root.flag-cut / 1px;
         }
         if (shape == 3) {
-            let r = w / 2;
-            return "M 0 0 L \{w} 0 L \{w} \{h - r} A \{r} \{r} 0 0 1 0 \{h - r} Z";
+            return min((w - 2 * inset) / 2, h / 2);
         }
-        let r = root.flag-corner / 1px;
-        return "M 0 0 L \{w} 0 L \{w} \{h - r} A \{r} \{r} 0 0 1 \{w - r} \{h} L \{r} \{h} A \{r} \{r} 0 0 1 0 \{h - r} Z";
+        return root.flag-corner / 1px;
+    }
+    pure function flag-path(shape: int, w: float, h: float, inset: float) -> string {
+        let x0 = inset;
+        let x1 = w - inset;
+        let y1 = h - inset;
+        let y0 = y1 - root.flag-end(shape, w, h, inset) - 1;
+        let mid = w / 2;
+        if (shape == 1) {
+            return "M \{x0} \{y0} L \{x1} \{y0} L \{x1} \{y1} L \{mid} \{y1 - root.flag-end(shape, w, h, inset)} L \{x0} \{y1} Z";
+        }
+        if (shape == 2) {
+            return "M \{x0} \{y0} L \{x1} \{y0} L \{x1} \{y1 - root.flag-end(shape, w, h, inset)} L \{mid} \{y1} L \{x0} \{y1 - root.flag-end(shape, w, h, inset)} Z";
+        }
+        let r = root.flag-end(shape, w, h, inset);
+        return "M \{x0} \{y0} L \{x1} \{y0} L \{x1} \{y1 - r} A \{r} \{r} 0 0 1 \{x1 - r} \{y1} L \{x0 + r} \{y1} A \{r} \{r} 0 0 1 \{x0} \{y1 - r} Z";
     }
 
     // The help page over the window, with every shortcut. The modifier it
@@ -726,18 +741,22 @@ export component MainWindow inherits Window {
     callback flip-back();
     // Puts the dog-ear on the page being read, for Tab to come back to.
     callback mark-return-page();
-    // Where a flag on a 0-based page sits along a page edge `width` wide: at
-    // the page's depth, at least wide enough to hit, and the last one kept
-    // whole. Only meaningful while a document is open.
     // The strip above the pages that the flags hang from: its edge line,
     // the bar for the page being read, and a pixel between that and the
     // pages.
     property <length> edge-height: 5px;
+    // Where a flag on a 0-based page sits along a page edge `width` wide
+    // whose left is `origin` from the window's: at the page's depth, at
+    // least wide enough to hit, and the last one kept whole. Only meaningful
+    // while a document is open. On whole pixels of the window: a flag is a
+    // path, drawn anti-aliased, and the bar over it a rectangle, drawn
+    // without, and on half a pixel the two come out a pixel apart.
     pure function flag-width(width: length) -> length {
-        return max(12px, width / root.page-count);
+        return round(max(12px, width / root.page-count) / 1px) * 1px;
     }
-    pure function flag-x(page: int, width: length) -> length {
-        return max(0px, min(width - root.flag-width(width), page * width / root.page-count));
+    pure function flag-x(page: int, width: length, origin: length) -> length {
+        let x = max(0px, min(width - root.flag-width(width), page * width / root.page-count));
+        return round((origin + x) / 1px) * 1px - origin;
     }
 
     // The name of the open document, shown in the window title bar.
@@ -1605,20 +1624,26 @@ export component MainWindow inherits Window {
                             height: 16px + root.edge-height - 1px;
 
                             for flag in root.bookmarks: Rectangle {
-                                x: root.flag-x(flag.page, edge.width);
+                                x: root.flag-x(flag.page, edge.width, edge.absolute-position.x);
                                 y: 0;
                                 width: root.flag-width(edge.width);
                                 // A flag pulls out a little under the pointer,
                                 // and on the page being read.
                                 height: root.edge-height - 1px + (flag-touch.has-hover || flag.page == root.current-page - 1 ? 16px : 11px);
                                 animate height { duration: 80ms; }
-                                // The flag itself, in its shape.
+                                // The flag itself: a rectangle down to
+                                // its shaped end, and the end as a path
+                                // (see `flag-end`).
+                                Rectangle {
+                                    y: 0;
+                                    height: parent.height - root.flag-end(flag.shape, parent.width / 1px, parent.height / 1px, root.device-pixel) * 1px - root.device-pixel * 1px;
+                                    background: flag.color;
+                                }
                                 Path {
                                     width: 100%;
                                     height: 100%;
-                                    viewbox-width: self.width / 1px;
-                                    viewbox-height: self.height / 1px;
-                                    commands: root.flag-path(flag.shape, self.width / 1px, self.height / 1px);
+                                    fit: ImageFit.preserve;
+                                    commands: root.flag-path(flag.shape, self.width / 1px, self.height / 1px, root.device-pixel);
                                     fill: flag.color;
                                 }
                                 // The menu offers every colour and shape,
@@ -1681,7 +1706,7 @@ export component MainWindow inherits Window {
 
                             // The page being read, over the flags.
                             Rectangle {
-                                x: root.flag-x(root.current-page - 1, edge.width);
+                                x: root.flag-x(root.current-page - 1, edge.width, edge.absolute-position.x);
                                 y: 0;
                                 width: root.flag-width(edge.width);
                                 height: 3px;
@@ -1694,7 +1719,7 @@ export component MainWindow inherits Window {
                             // view and taking no clicks from it, since Tab
                             // most often leads to a flag's page.
                             if root.return-page >= 0: Path {
-                                x: root.flag-x(root.return-page, edge.width) + (root.flag-width(edge.width) - self.width) / 2;
+                                x: root.flag-x(root.return-page, edge.width, edge.absolute-position.x) + (root.flag-width(edge.width) - self.width) / 2;
                                 // Up under the edge line, so no gap shows
                                 // between the fold and the edge.
                                 y: -1px;
