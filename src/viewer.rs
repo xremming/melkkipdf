@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 
+use crate::images::{ImageKey, ImageSpot};
 use crate::render::{
     RenderControl, RenderRequest, ScreenshotRequest, Shot, ThumbRequest, WorkerMessage,
     buffer_bytes, capped_scale, scale_key,
@@ -571,6 +572,57 @@ struct SelectionState {
     clicks: u32,
 }
 
+/// Which images the sidebar's list leaves out, and whether it gathers the
+/// ones drawn more than once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImageFilters {
+    pub hide_small: bool,
+    pub group_repeats: bool,
+}
+
+impl Default for ImageFilters {
+    fn default() -> Self {
+        Self { hide_small: true, group_repeats: true }
+    }
+}
+
+/// What heads a row of the images list.
+#[derive(Clone, Copy)]
+enum Heading {
+    None,
+    /// The page the row's image is on.
+    Page,
+    /// The images drawn more than once, gathered at the end.
+    Repeated,
+}
+
+impl Heading {
+    fn index(self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Page => 1,
+            Self::Repeated => 2,
+        }
+    }
+}
+
+/// The document's images and the list built from them.
+#[derive(Default)]
+struct ImageState {
+    /// Each page's images, for the pages catalogued so far.
+    catalogue: Vec<Vec<ImageSpot>>,
+    /// The previews rendered, by page and ordinal, which outlive the list
+    /// being built again.
+    previews: HashMap<(usize, usize), Image>,
+    filters: ImageFilters,
+    /// Where the rows gathering the repeated images start; the rows before
+    /// are listed by page.
+    repeated_from: usize,
+    /// How many small images the list leaves out.
+    small: usize,
+}
+
 /// The page being read when `spec` is the row at the top: the page last asked
 /// for if the row holds it, otherwise the row's first page.
 fn reading_page_in(inner: &Inner, spec: &RowSpec) -> usize {
@@ -718,9 +770,12 @@ pub struct Viewer {
     model: Rc<VecModel<PageRow>>,
     /// The sidebar's thumbnails, grouped into rows like the pages.
     thumb_model: Rc<VecModel<PageRow>>,
-    /// The sidebar's list of the document's images, one row each, in page
-    /// order, as far as the pages have been indexed.
-    images: Rc<VecModel<ImageRow>>,
+    /// The document's images as the cataloguer has read them, and what the
+    /// sidebar's list is built from them with.
+    images: RefCell<ImageState>,
+    /// The sidebar's list of the document's images, built once every page
+    /// has been catalogued.
+    image_rows: Rc<VecModel<ImageRow>>,
     window: Weak<MainWindow>,
     /// Whether this viewer's tab is the one shown. Only then may it write to the
     /// window, which every other tab's viewer shares.
@@ -772,6 +827,7 @@ impl Viewer {
         scale_factor: f32,
         workers: Workers,
         settings: &ViewSettings,
+        filters: ImageFilters,
     ) -> Rc<Self> {
         let Workers { pages: sender, thumbnails: thumb_sender, control, vectorizer } = workers;
         let page_count = pages_pt.len();
@@ -813,7 +869,8 @@ impl Viewer {
             }),
             model,
             thumb_model,
-            images: Rc::new(VecModel::default()),
+            images: RefCell::new(ImageState { filters, ..ImageState::default() }),
+            image_rows: Rc::new(VecModel::default()),
             window: window.as_weak(),
             active: Cell::new(false),
             sender,
@@ -883,7 +940,7 @@ impl Viewer {
             let inner = self.inner.borrow();
             window.set_rows(ModelRc::from(self.model.clone()));
             window.set_thumb_rows(ModelRc::from(self.thumb_model.clone()));
-            window.set_image_rows(ModelRc::from(self.images.clone()));
+            window.set_image_rows(ModelRc::from(self.image_rows.clone()));
             window.set_page_count(inner.pages_pt.len() as i32);
             window.set_spread_mode(inner.spread.index());
             window.set_continuous(inner.continuous);
@@ -893,6 +950,7 @@ impl Viewer {
             window.set_search_mode(self.search.borrow().mode.index());
         }
         self.publish_search();
+        self.publish_images();
         let scroll_px = self.inner.borrow().scroll_px;
         self.show_offset(scroll_px);
         self.apply_density();
@@ -1788,7 +1846,6 @@ impl Viewer {
             if first_page != search.index.len() {
                 return;
             }
-            self.list_images(first_page, &pages);
             search.index.extend(pages);
             !search.query.trim().is_empty()
         };
@@ -1800,33 +1857,157 @@ impl Viewer {
         }
     }
 
-    /// Adds the images of `pages`, which the indexer read from `first_page`
-    /// on, to the sidebar's list.
-    fn list_images(&self, first_page: usize, pages: &[PageText]) {
-        let last = self.images.row_count().checked_sub(1).and_then(|row| self.images.row_data(row));
-        let mut headings = last.map_or(0, |row| row.headings);
-        for (offset, text) in pages.iter().enumerate() {
-            let page = (first_page + offset) as i32;
-            for spot in &text.images {
-                if spot.ordinal == 0 {
+    /// Takes in the images of `pages`, which the cataloguer read from
+    /// `first_page` on. The list is built once every page has been read:
+    /// until then the tab says how far the cataloguer has got.
+    pub(crate) fn on_catalogued(&self, first_page: usize, pages: Vec<Vec<ImageSpot>>) {
+        {
+            let mut images = self.images.borrow_mut();
+            if first_page != images.catalogue.len() {
+                return;
+            }
+            images.catalogue.extend(pages);
+        }
+        if self.images_catalogued() {
+            self.build_image_rows();
+        }
+        self.publish_images();
+    }
+
+    /// Whether every page's images have been catalogued.
+    pub fn images_catalogued(&self) -> bool {
+        self.images.borrow().catalogue.len() >= self.inner.borrow().pages_pt.len()
+    }
+
+    /// Sets which images the list leaves out and which it gathers, and
+    /// builds it again that way.
+    pub fn set_image_filters(&self, filters: ImageFilters) {
+        {
+            let mut images = self.images.borrow_mut();
+            if images.filters == filters {
+                return;
+            }
+            images.filters = filters;
+        }
+        if self.images_catalogued() {
+            self.build_image_rows();
+        }
+        self.publish_images();
+    }
+
+    /// Builds the sidebar's list from the catalogue: the images of each
+    /// page under its heading, leaving out the small ones when asked, and
+    /// with the images that are drawn more than once gathered at the end
+    /// when asked, each once. Previews already rendered are kept.
+    fn build_image_rows(&self) {
+        let mut images = self.images.borrow_mut();
+        let ImageState { catalogue, previews, filters, .. } = &*images;
+        // Every image's occurrences, in the order the images first appear.
+        let mut groups: Vec<(ImageKey, Vec<(usize, usize)>)> = Vec::new();
+        let mut group_of: HashMap<ImageKey, usize> = HashMap::new();
+        let mut small = 0;
+        for (page, spots) in catalogue.iter().enumerate() {
+            for spot in spots {
+                if filters.hide_small && spot.is_small() {
+                    small += 1;
+                    continue;
+                }
+                let group = *group_of.entry(spot.key).or_insert_with(|| {
+                    groups.push((spot.key, Vec::new()));
+                    groups.len() - 1
+                });
+                groups[group].1.push((page, spot.ordinal));
+            }
+        }
+        let repeated = |key: &ImageKey| filters.group_repeats && groups[group_of[key]].1.len() > 1;
+
+        let mut rows = Vec::new();
+        let mut headings = 0;
+        let preview = |page: usize, ordinal: usize| {
+            previews.get(&(page, ordinal)).cloned().unwrap_or_default()
+        };
+        for (page, spots) in catalogue.iter().enumerate() {
+            let mut first = true;
+            for spot in spots {
+                if (filters.hide_small && spot.is_small()) || repeated(&spot.key) {
+                    continue;
+                }
+                if first {
                     headings += 1;
                 }
-                self.images.push(ImageRow {
-                    page,
+                rows.push(ImageRow {
+                    page: page as i32,
                     ordinal: spot.ordinal as i32,
-                    first_on_page: spot.ordinal == 0,
+                    heading: if first { Heading::Page } else { Heading::None }.index(),
                     headings,
                     width: spot.width as i32,
                     height: spot.height as i32,
-                    preview: Image::default(),
+                    repeats: 0,
+                    pages: 0,
+                    preview: preview(page, spot.ordinal),
                 });
+                first = false;
             }
         }
+        let repeated_from = rows.len();
+        let mut first = true;
+        for (key, places) in &groups {
+            if !repeated(key) {
+                continue;
+            }
+            if first {
+                headings += 1;
+            }
+            let &(page, ordinal) = &places[0];
+            let spot = &catalogue[page][ordinal];
+            let mut pages: Vec<usize> = places.iter().map(|&(page, _)| page).collect();
+            pages.dedup();
+            rows.push(ImageRow {
+                page: page as i32,
+                ordinal: ordinal as i32,
+                heading: if first { Heading::Repeated } else { Heading::None }.index(),
+                headings,
+                width: spot.width as i32,
+                height: spot.height as i32,
+                repeats: places.len() as i32,
+                pages: pages.len() as i32,
+                preview: preview(page, ordinal),
+            });
+            first = false;
+        }
+        images.repeated_from = repeated_from;
+        images.small = small;
+        self.image_rows.set_vec(rows);
+        drop(images);
         self.follow_images();
     }
 
+    /// Puts the state of the images tab on the window: the list once it is
+    /// built, and until then how far the cataloguer has got.
+    fn publish_images(&self) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let images = self.images.borrow();
+        let (read, total) = (images.catalogue.len(), self.inner.borrow().pages_pt.len());
+        let ready = read >= total;
+        window.set_images_ready(ready);
+        window.set_small_images_hidden(images.small as i32);
+        let status = if !ready {
+            format!("Finding images, {read} of {total} pages.")
+        } else if self.image_rows.row_count() == 0 && images.small > 0 {
+            format!("No images, apart from {} small ones.", images.small)
+        } else if self.image_rows.row_count() == 0 {
+            "No images.".to_string()
+        } else {
+            String::new()
+        };
+        window.set_image_status(status.into());
+    }
+
     /// Tells the window which image row the list follows: the first image
-    /// on the page being read, or on the next page with any.
+    /// on the page being read, or on the next page with any, among the
+    /// rows listed by page.
     fn follow_images(&self) {
         let Some(window) = self.window() else {
             return;
@@ -1834,11 +2015,11 @@ impl Viewer {
         let page = self.reading_page() as i32;
         // The rows are in page order, so the first at or after the page is
         // where they stop being before it.
-        let count = self.images.row_count();
+        let count = self.images.borrow().repeated_from.min(self.image_rows.row_count());
         let (mut low, mut high) = (0, count);
         while low < high {
             let middle = (low + high) / 2;
-            if self.images.row_data(middle).is_some_and(|row| row.page < page) {
+            if self.image_rows.row_data(middle).is_some_and(|row| row.page < page) {
                 low = middle + 1;
             } else {
                 high = middle;
@@ -1850,7 +2031,7 @@ impl Viewer {
     /// The sidebar shows the image at `row` of its list, which wants its
     /// preview.
     pub fn request_preview(&self, row: usize) {
-        if let Some(item) = self.images.row_data(row)
+        if let Some(item) = self.image_rows.row_data(row)
             && item.preview.size().width == 0
         {
             let request = ThumbRequest::Preview { page: item.page, ordinal: item.ordinal as usize };
@@ -1860,34 +2041,35 @@ impl Viewer {
 
     /// The preview of the image drawn `ordinal`-th on `page` has rendered.
     pub fn on_preview_rendered(&self, page: usize, ordinal: usize, preview: Image) {
-        let row = (0..self.images.row_count()).find(|&row| {
-            self.images
+        self.images.borrow_mut().previews.insert((page, ordinal), preview.clone());
+        let row = (0..self.image_rows.row_count()).find(|&row| {
+            self.image_rows
                 .row_data(row)
                 .is_some_and(|item| item.page == page as i32 && item.ordinal == ordinal as i32)
         });
         if let Some(row) = row
-            && let Some(mut item) = self.images.row_data(row)
+            && let Some(mut item) = self.image_rows.row_data(row)
         {
             item.preview = preview;
-            self.images.set_row_data(row, item);
+            self.image_rows.set_row_data(row, item);
         }
     }
 
     /// The reader clicked the image at `row` of the sidebar's list: it is
     /// copied as it is embedded, and its outline flashes on its page.
     pub fn copy_image(&self, row: usize) {
-        let Some(item) = self.images.row_data(row) else {
+        let Some(item) = self.image_rows.row_data(row) else {
             return;
         };
         let (page, ordinal) = (item.page as usize, item.ordinal as usize);
         let request = ScreenshotRequest { page: page as i32, shot: Shot::Image { ordinal } };
         let _ = self.sender.send(WorkerMessage::Screenshot(request));
         let bounds = self
-            .search
+            .images
             .borrow()
-            .index
+            .catalogue
             .get(page)
-            .and_then(|text| text.images.get(ordinal))
+            .and_then(|spots| spots.get(ordinal))
             .map(|spot| spot.bounds);
         if let Some(bounds) = bounds
             && let Some(window) = self.window()
@@ -2946,6 +3128,7 @@ mod tests {
             1.0,
             workers(&window, sender),
             &super::ViewSettings::default(),
+            super::ImageFilters::default(),
         );
         viewer.activate();
 
@@ -2971,6 +3154,7 @@ mod tests {
             1.0,
             workers(&window, sender),
             &super::ViewSettings::default(),
+            super::ImageFilters::default(),
         );
         viewer.activate();
         // Paged mode avoids touching the scroll offset property.

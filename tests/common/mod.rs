@@ -97,9 +97,10 @@ pub fn write_text_pdf(path: &Path, pages: &[&[&str]]) {
 }
 
 /// An image to embed in a PDF: where it is drawn on the page, in points
-/// from the top-left corner, how many pixels it has of its own, and whether
-/// it is drawn through a soft mask made from a gray image of its own, as a
-/// drop shadow or a feathered edge is.
+/// from the top-left corner, how many pixels it has of its own, whether it
+/// is drawn through a soft mask made from a gray image of its own, as a
+/// drop shadow or a feathered edge is, and which colour fills it, so two
+/// entries with the same fill and pixels are the same image.
 pub struct Embedded {
     pub x: f32,
     pub y: f32,
@@ -107,17 +108,24 @@ pub struct Embedded {
     pub height: f32,
     pub pixels: (u32, u32),
     pub masked: bool,
+    pub fill: [u8; 3],
 }
 
 impl Embedded {
     pub fn at(x: f32, y: f32, width: f32, height: f32, pixels: (u32, u32)) -> Self {
-        Self { x, y, width, height, pixels, masked: false }
+        Self { x, y, width, height, pixels, masked: false, fill: [0, 0, 0] }
+    }
+
+    pub fn filled(mut self, fill: [u8; 3]) -> Self {
+        self.fill = fill;
+        self
     }
 }
 
 /// Writes a PDF of US Letter pages with the given images drawn on them, one
-/// page per entry. Every image is uncompressed, filled with a colour of its
-/// own, and the first of every page is drawn first.
+/// page per entry. Every image is uncompressed and filled with its colour,
+/// or with one of its own when it was given none, and the first of every
+/// page is drawn first.
 pub fn write_image_pdf(path: &Path, pages: &[&[Embedded]]) {
     let mut objects: Vec<Vec<u8>> = Vec::new();
     let mut add = |object: Vec<u8>| -> usize {
@@ -148,7 +156,11 @@ pub fn write_image_pdf(path: &Path, pages: &[&[Embedded]]) {
         let mut stream = String::new();
         for (ordinal, image) in images.iter().enumerate() {
             let (width, height) = image.pixels;
-            let fill = [(40 * (index + 1)) as u8, (60 * (ordinal + 1)) as u8, 200];
+            let fill = if image.fill == [0, 0, 0] {
+                [(40 * (index + 1)) as u8, (60 * (ordinal + 1)) as u8, 200]
+            } else {
+                image.fill
+            };
             let number = add(image_object(width, height, &fill, "DeviceRGB"));
             xobjects.push_str(&format!("/Im{ordinal} {number} 0 R "));
             // PDF places images from the bottom-left corner, y upwards.

@@ -13,7 +13,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
-use mupdf::{ColorParams, Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap, Rect};
+use mupdf::{Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap, Rect};
 use slint::{Image, Rgb8Pixel, Rgba8Pixel, SharedPixelBuffer, Weak};
 
 use crate::MainWindow;
@@ -511,7 +511,7 @@ fn render_screenshot(document: &Document, request: &ScreenshotRequest) -> Result
             let image = images::drawn_nth(&page, ordinal)?;
             let (width, height) = (image.width() as f32, image.height() as f32);
             let scale = (MAX_RENDER_PX / width.max(height)).min(1.0);
-            return Ok(picture(&draw_image(&image, width * scale, height * scale)?));
+            return Ok(picture(&images::draw(&image, width * scale, height * scale)?));
         }
     };
     if area.is_empty() {
@@ -528,44 +528,6 @@ fn render_screenshot(document: &Document, request: &ScreenshotRequest) -> Result
         page.run(&device, &ctm)?;
     }
     Ok(picture(&pixmap))
-}
-
-/// Draws an embedded image into a pixmap of `width`×`height` pixels, as
-/// MuPDF draws it on a page: through its colour space, with its soft mask
-/// applied, which leaves the pixmap transparent where the mask hides it,
-/// and a stencil mask painted black. The mask is applied the way the page
-/// interpreter applies it, as a clip, since decoding alone leaves it out.
-/// Drawing the image smaller than it is has MuPDF decode it smaller, which
-/// keeps a huge scan affordable.
-fn draw_image(image: &mupdf::Image, width: f32, height: f32) -> Result<Pixmap, Error> {
-    let bbox = Rect::new(0.0, 0.0, width, height).round();
-    let mut pixmap = Pixmap::new_with_rect(&Colorspace::device_rgb(), bbox, true)?;
-    pixmap.clear()?;
-    {
-        let device = Device::from_pixmap(&pixmap)?;
-        let ctm = Matrix::new(width, 0.0, 0.0, height, 0.0, 0.0);
-        if image.color_space().is_some() {
-            let mask = image.mask();
-            if let Some(mask) = &mask {
-                device.clip_image_mask(mask, &ctm)?;
-            }
-            device.fill_image(image, &ctm, 1.0, ColorParams::default())?;
-            if mask.is_some() {
-                device.pop_clip()?;
-            }
-        } else {
-            let black = [0.0, 0.0, 0.0];
-            device.fill_image_mask(
-                image,
-                &ctm,
-                &Colorspace::device_rgb(),
-                &black,
-                1.0,
-                ColorParams::default(),
-            )?;
-        }
-    }
-    Ok(pixmap)
 }
 
 /// A pixmap's pixels as a picture for the clipboard: an opaque RGB pixmap
@@ -692,7 +654,7 @@ fn render_preview(
     let image = images::drawn_nth(&page, ordinal)?;
     let (width, height) = (image.width().max(1) as f32, image.height().max(1) as f32);
     let scale = (PREVIEW_PX / width.max(height)).min(1.0);
-    let pixmap = draw_image(&image, (width * scale).max(1.0), (height * scale).max(1.0))?;
+    let pixmap = images::draw(&image, (width * scale).max(1.0), (height * scale).max(1.0))?;
     let (width, height) = (pixmap.width(), pixmap.height());
     let stride = pixmap.stride() as usize;
     let samples = pixmap.samples();

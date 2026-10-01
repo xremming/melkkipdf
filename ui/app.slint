@@ -82,18 +82,21 @@ export struct PageRow {
 }
 
 // An image embedded in the document, for the sidebar's list: the 0-based
-// page it is drawn on, its place among that page's images, whether it is
-// the first there, so the page's heading goes above it, how many headings
-// there are up to and including its own, which places the row in the list,
-// how many pixels it has of its own, and its preview once rendered (an
-// empty image until).
+// page it is drawn on, its place among that page's images, what heads the
+// row (0 nothing, 1 its page, 2 the repeated images gathered at the end),
+// how many headings there are up to and including its own, which places
+// the row in the list, how many pixels it has of its own, how many times
+// and on how many pages it is drawn when gathered as repeated (0 when
+// listed by page), and its preview once rendered (an empty image until).
 export struct ImageRow {
     page: int,
     ordinal: int,
-    first-on-page: bool,
+    heading: int,
     headings: int,
     width: int,
     height: int,
+    repeats: int,
+    pages: int,
     preview: image,
 }
 
@@ -130,6 +133,55 @@ export struct FlagShape {
     name: string,
     shape: int,
     icon: image,
+}
+
+// A checkbox with a label, in the sidebar's colours, for what the images
+// list leaves out.
+component FilterCheck inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    callback toggled();
+    height: 22px;
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checked: root.checked;
+    accessible-action-default => { root.toggled(); }
+    box := Rectangle {
+        x: 0;
+        y: (root.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        border-width: 1px;
+        border-color: touch.has-hover ? #8a8a8a : #6a6a6a;
+        background: root.checked ? #3390ff : (touch.has-hover ? #404040 : #2f2f2f);
+        if root.checked: Path {
+            width: 8px;
+            height: 8px;
+            x: 3px;
+            y: 3px;
+            viewbox-width: 8;
+            viewbox-height: 8;
+            commands: "M 1 4 L 3.2 6.2 L 7 1.5";
+            stroke: #ffffff;
+            stroke-width: 1.6px;
+        }
+    }
+    // Placed by its own height rather than stretched to the row's, since
+    // centring a stretched text puts the glyphs a touch high.
+    text := Text {
+        x: box.width + 8px;
+        y: (root.height - self.height) / 2 + 1px;
+        width: root.width - self.x;
+        height: self.preferred-height;
+        text: root.label;
+        color: touch.has-hover ? #eeeeee : #cccccc;
+        font-size: 12px;
+        overflow: elide;
+    }
+    touch := TouchArea {
+        clicked => { root.toggled(); }
+    }
 }
 
 // A single page: white paper with the rendered image on top. Sized from the
@@ -733,6 +785,19 @@ export component MainWindow inherits Window {
     callback request-preview(int);
     callback preview-rendered(int, int, int, image);
     callback copy-image(int);
+    // The list is built once every page's images are known; until then
+    // `image-status` says how far that has got, and after, it says why
+    // the list is empty when it is. Invoked from Rust when a cataloguer has
+    // read more pages.
+    in property <bool> images-ready;
+    in property <string> image-status;
+    callback images-catalogued();
+    // Which images the list leaves out and whether it gathers the repeated
+    // ones at its end, and how many small ones it leaves out.
+    in-out property <bool> hide-small-images: true;
+    in-out property <bool> group-repeated-images: true;
+    in property <int> small-images-hidden;
+    callback image-filters-changed(bool, bool);
     // The row of the first image on the page being read, or on the next
     // page with any, which the list follows (see the list). -1 while there
     // is none.
@@ -1700,15 +1765,46 @@ export component MainWindow inherits Window {
                         }
 
                         // The document's images, under the page each is on,
-                        // as far as the pages have been indexed. A click
-                        // copies the image as it is embedded.
-                        if root.sidebar-tab == 2 && root.image-rows.length == 0: Text {
-                            text: root.page-count > 0 ? "No images so far." : "";
+                        // with the ones drawn more than once gathered at the
+                        // end, once the cataloguer has read every page. A
+                        // click copies the image as it is embedded.
+                        if root.sidebar-tab == 2 && root.image-status != "": Text {
+                            text: root.image-status;
                             color: #999999;
                             horizontal-alignment: center;
                             vertical-alignment: center;
+                            wrap: word-wrap;
                         }
-                        if root.sidebar-tab == 2: Rectangle {
+                        if root.sidebar-tab == 2 && root.images-ready: VerticalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 10px;
+                            padding-bottom: 10px;
+                            spacing: 6px;
+                            FilterCheck {
+                                label: root.small-images-hidden > 0
+                                    ? "Hide small images (\{root.small-images-hidden})"
+                                    : "Hide small images";
+                                checked: root.hide-small-images;
+                                toggled => {
+                                    root.hide-small-images = !root.hide-small-images;
+                                    root.image-filters-changed(root.hide-small-images, root.group-repeated-images);
+                                }
+                            }
+                            FilterCheck {
+                                label: "Gather repeated images at the end";
+                                checked: root.group-repeated-images;
+                                toggled => {
+                                    root.group-repeated-images = !root.group-repeated-images;
+                                    root.image-filters-changed(root.hide-small-images, root.group-repeated-images);
+                                }
+                            }
+                        }
+                        if root.sidebar-tab == 2 && root.images-ready: Rectangle {
+                            height: 1px;
+                            background: #444444;
+                        }
+                        if root.sidebar-tab == 2 && root.images-ready && root.image-status == "": Rectangle {
                             // On opening, the list knows neither its height
                             // nor its rows' until it has been laid out, and
                             // clamps a scroll set before that to the top, so
@@ -1737,27 +1833,28 @@ export component MainWindow inherits Window {
                                     }
                                     let item = root.image-rows[self.current];
                                     let top = self.current * root.image-row-height
-                                        + (item.headings - (item.first-on-page ? 1 : 0)) * root.image-heading-height;
+                                        + (item.headings - (item.heading != 0 ? 1 : 0)) * root.image-heading-height;
                                     let bottom = top + root.image-row-height
-                                        + (item.first-on-page ? root.image-heading-height : 0px);
+                                        + (item.heading != 0 ? root.image-heading-height : 0px);
                                     let view-top = -self.content-y;
                                     if (always || top < view-top || bottom > view-top + self.visible-height) {
                                         self.content-y = -top;
                                     }
                                 }
                                 for item[idx] in root.image-rows: Rectangle {
-                                    height: (item.first-on-page ? root.image-heading-height : 0) + root.image-row-height;
+                                    height: (item.heading != 0 ? root.image-heading-height : 0) + root.image-row-height;
                                     VerticalLayout {
-                                        if item.first-on-page: HorizontalLayout {
+                                        if item.heading != 0: HorizontalLayout {
                                             height: root.image-heading-height;
                                             padding-left: 10px;
                                             padding-right: 10px;
                                             Text {
-                                                text: "Page \{item.page + 1}";
-                                                color: item.page == root.current-page - 1 ? #dddddd : #999999;
+                                                text: item.heading == 2 ? "Repeated images" : "Page \{item.page + 1}";
+                                                color: item.heading == 1 && item.page == root.current-page - 1 ? #dddddd : #999999;
                                                 vertical-alignment: center;
                                             }
                                             heading-touch := TouchArea {
+                                                enabled: item.heading == 1;
                                                 clicked => {
                                                     root.go-to-page-index(item.page);
                                                 }
@@ -1786,7 +1883,11 @@ export component MainWindow inherits Window {
                                                     }
                                                 }
                                                 Text {
-                                                    text: "\{item.width} × \{item.height}";
+                                                    text: item.repeats == 0
+                                                        ? "\{item.width} × \{item.height}"
+                                                        : (item.pages > 1
+                                                            ? "\{item.width} × \{item.height}, on \{item.pages} pages"
+                                                            : "\{item.width} × \{item.height}, \{item.repeats} times on page \{item.page + 1}");
                                                     color: #999999;
                                                     horizontal-alignment: center;
                                                 }

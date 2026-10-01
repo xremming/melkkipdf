@@ -21,11 +21,14 @@ use crate::render::{RenderControl, ScreenshotRequest, WorkerMessage};
 use crate::search::{PageText, PageTextBuilder};
 use crate::semantic::{Vectorized, Vectorizer};
 use crate::settings::Store;
-use crate::{App, FileDrag, MainWindow, OutlineItem, PageLayout, ViewSettings, Viewer, Workers};
+use crate::{
+    App, FileDrag, ImageFilters, MainWindow, OutlineItem, PageLayout, ViewSettings, Viewer, Workers,
+};
 
 pub use crate::Screenshot;
+pub use crate::images::{ImageKey, ImageSpot};
 pub use crate::render::{Shot, ThumbRequest};
-pub use crate::search::{Area, ImageSpot};
+pub use crate::search::Area;
 pub use crate::semantic::EmbeddingModel;
 
 /// A window + viewer pair for tests, plus convenience accessors.
@@ -91,7 +94,14 @@ impl Harness {
             control: RenderControl::inert(),
             vectorizer,
         };
-        let viewer = Viewer::new(&window, pages, 1.0, workers, &ViewSettings::default());
+        let viewer = Viewer::new(
+            &window,
+            pages,
+            1.0,
+            workers,
+            &ViewSettings::default(),
+            ImageFilters::default(),
+        );
         viewer.activate();
         Self { window, viewer, requests, shots: RefCell::new(Vec::new()), thumb_requests, vectors }
     }
@@ -206,16 +216,22 @@ impl Harness {
         self.viewer.on_text_indexed(first_page, text_pages(pages));
     }
 
-    /// Indexes pages from `first_page` on that have no text but the given
-    /// images, each as `(bounds, pixel width, pixel height)`, as one of the
-    /// batches the indexer sends.
-    pub fn index_images_from(&self, first_page: usize, pages: &[&[(Area, u32, u32)]]) {
-        self.viewer.on_text_indexed(first_page, image_pages(pages));
+    /// Catalogues pages from `first_page` on with the given images, each as
+    /// `(bounds, pixel width, pixel height, identity)`, where two images
+    /// with the same identity and size are the same image, as one of the
+    /// batches the cataloguer sends.
+    pub fn catalogue_from(&self, first_page: usize, pages: &[&[(Area, u32, u32, u8)]]) {
+        self.viewer.on_catalogued(first_page, image_pages(pages));
     }
 
-    /// The sidebar's list of images, as (page, ordinal, first on its page,
-    /// width, height, whether its preview has arrived).
-    pub fn image_rows(&self) -> Vec<(i32, i32, bool, i32, i32, bool)> {
+    /// Sets which images the list leaves out and gathers.
+    pub fn set_image_filters(&self, hide_small: bool, group_repeats: bool) {
+        self.viewer.set_image_filters(ImageFilters { hide_small, group_repeats });
+    }
+
+    /// The sidebar's list of images, as (page, ordinal, heading, width,
+    /// height, repeats, whether its preview has arrived).
+    pub fn image_rows(&self) -> Vec<ImageRowView> {
         image_rows(&self.window)
     }
 
@@ -318,30 +334,33 @@ impl Harness {
 /// Page text as the indexer would read it, each page a list of lines. Lines
 /// start 72pt from the top and are 14pt tall and 20pt apart, and each
 /// character is 7pt wide from 72pt in.
-/// Pages with no text but images, for [`Harness::index_images_from`].
-fn image_pages(pages: &[&[(Area, u32, u32)]]) -> Vec<PageText> {
+/// A row of the sidebar's list of images, as the tests see it: (page,
+/// ordinal, heading, width, height, repeats, whether its preview has
+/// arrived).
+pub type ImageRowView = (i32, i32, i32, i32, i32, i32, bool);
+
+/// Pages of images for [`Harness::catalogue_from`].
+fn image_pages(pages: &[&[(Area, u32, u32, u8)]]) -> Vec<Vec<ImageSpot>> {
     pages
         .iter()
         .map(|images| {
-            let mut page = PageTextBuilder::default().finish();
-            page.images = images
+            images
                 .iter()
                 .enumerate()
-                .map(|(ordinal, &(bounds, width, height))| ImageSpot {
+                .map(|(ordinal, &(bounds, width, height, identity))| ImageSpot {
                     ordinal,
                     bounds,
                     width,
                     height,
+                    key: ImageKey { width, height, digest: [identity; 16] },
                 })
-                .collect();
-            page
+                .collect()
         })
         .collect()
 }
 
-/// The window's list of images, as (page, ordinal, first on its page,
-/// width, height, whether its preview has arrived).
-fn image_rows(window: &MainWindow) -> Vec<(i32, i32, bool, i32, i32, bool)> {
+/// The window's list of images.
+fn image_rows(window: &MainWindow) -> Vec<ImageRowView> {
     let model = window.get_image_rows();
     (0..model.row_count())
         .filter_map(|index| model.row_data(index))
@@ -349,9 +368,10 @@ fn image_rows(window: &MainWindow) -> Vec<(i32, i32, bool, i32, i32, bool)> {
             (
                 row.page,
                 row.ordinal,
-                row.first_on_page,
+                row.heading,
                 row.width,
                 row.height,
+                row.repeats,
                 row.preview.size().width > 0,
             )
         })
@@ -676,10 +696,34 @@ impl Tabs {
         self.viewer(index).on_text_indexed(0, text_pages(pages));
     }
 
-    /// The sidebar's list of images, as (page, ordinal, first on its page,
-    /// width, height, whether its preview has arrived).
-    pub fn image_rows(&self) -> Vec<(i32, i32, bool, i32, i32, bool)> {
+    /// The sidebar's list of images.
+    pub fn image_rows(&self) -> Vec<ImageRowView> {
         image_rows(&self.window)
+    }
+
+    /// Sets which images every document's list leaves out and gathers, as
+    /// the chips over the list do.
+    pub fn set_image_filters(&self, hide_small: bool, group_repeats: bool) {
+        self.app.set_image_filters(ImageFilters { hide_small, group_repeats });
+    }
+
+    /// Waits for every open document's cataloguer to read all of its
+    /// images, and takes them in as the event loop would.
+    pub fn finish_cataloguing(&self) {
+        let pending = || {
+            self.app.tabs.borrow().iter().any(|tab| {
+                tab.cataloguer.is_some()
+                    && tab.viewer.as_ref().is_some_and(|viewer| !viewer.images_catalogued())
+            })
+        };
+        while pending() {
+            let catalogued = self
+                .app
+                .catalogues
+                .recv_timeout(Duration::from_secs(60))
+                .expect("a document took too long to catalogue");
+            self.app.take_catalogued(catalogued);
+        }
     }
 
     /// The 0-based pages of the flags on the page edge, in the order drawn,

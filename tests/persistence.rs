@@ -149,3 +149,19 @@ fn closing_every_tab_leaves_nothing_to_reopen() {
     assert!(run.titles().is_empty());
     assert_eq!(run.window.get_page_count(), 0);
 }
+
+#[test]
+fn how_the_images_are_listed_is_remembered_across_runs() {
+    let directory = Scratch::new("image-filters");
+    let file = directory.join("documents.json");
+    {
+        let t = run_with(&file);
+        assert!(t.window.get_hide_small_images());
+        assert!(t.window.get_group_repeated_images());
+        t.window.invoke_image_filters_changed(false, true);
+        t.save();
+    }
+    let t = run_with(&file);
+    assert!(!t.window.get_hide_small_images());
+    assert!(t.window.get_group_repeated_images());
+}

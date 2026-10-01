@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ViewSettings;
+use crate::{ImageFilters, ViewSettings};
 
 /// Bumped whenever the file's layout changes incompatibly, so an old build
 /// never misreads a newer file as its own, nor overwrites it. Version 2 added
@@ -35,6 +35,10 @@ struct StateFile {
     documents: Vec<DocumentEntry>,
     #[serde(default)]
     session: Session,
+    /// How the reader likes the sidebar's list of images, whatever the
+    /// document.
+    #[serde(default)]
+    image_filters: ImageFilters,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -122,6 +126,7 @@ pub struct Store {
     file: Option<PathBuf>,
     documents: HashMap<PathBuf, DocumentEntry>,
     session: Session,
+    image_filters: ImageFilters,
     dirty: bool,
 }
 
@@ -144,7 +149,13 @@ impl Store {
 
     /// A store that starts empty and never touches the disk.
     pub fn in_memory() -> Self {
-        Self { file: None, documents: HashMap::new(), session: Session::default(), dirty: false }
+        Self {
+            file: None,
+            documents: HashMap::new(),
+            session: Session::default(),
+            image_filters: ImageFilters::default(),
+            dirty: false,
+        }
     }
 
     /// Loads the store from `file`. A missing file is simply an empty store. An
@@ -194,6 +205,7 @@ impl Store {
                 store.documents =
                     state.documents.into_iter().map(|entry| (entry.path.clone(), entry)).collect();
                 store.session = state.session;
+                store.image_filters = state.image_filters;
             }
             Err(err) => {
                 let backup = backup_path(&file);
@@ -327,6 +339,17 @@ impl Store {
         }
     }
 
+    pub fn image_filters(&self) -> ImageFilters {
+        self.image_filters
+    }
+
+    pub fn set_image_filters(&mut self, filters: ImageFilters) {
+        if self.image_filters != filters {
+            self.image_filters = filters;
+            self.dirty = true;
+        }
+    }
+
     /// Writes the store out if anything changed since it was last written.
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
@@ -359,7 +382,8 @@ impl Store {
             }
             session.tabs.push(tab.clone());
         }
-        let state = StateFile { version: VERSION, documents, session };
+        let state =
+            StateFile { version: VERSION, documents, session, image_filters: self.image_filters };
         let contents = serde_json::to_vec_pretty(&state).map_err(io::Error::other)?;
 
         if let Some(directory) = file.parent() {

@@ -31,13 +31,14 @@ use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
 use clipboard::Clipboard;
+use images::{CatalogueHandle, Catalogued};
 use render::{Loaded, RenderControl, Screenshot as Shot, WorkerMessage};
 use search::{IndexHandle, Indexed};
 use semantic::{Vectorized, Vectorizer};
 use settings::{Bookmark, PALETTE, SHAPES, Session, Shape, Store};
 
 pub use render::ThumbRequest;
-pub use viewer::{FitMode, SearchMode, Spread, ViewSettings, Viewer, Workers};
+pub use viewer::{FitMode, ImageFilters, SearchMode, Spread, ViewSettings, Viewer, Workers};
 
 slint::include_modules!();
 
@@ -96,6 +97,9 @@ struct Tab {
     /// The indexer reading the document's text for search, which stops when
     /// the tab closes.
     indexer: Option<IndexHandle>,
+    /// The cataloguer reading the document's images for the sidebar, which
+    /// stops when the tab closes.
+    cataloguer: Option<CatalogueHandle>,
 }
 
 /// Holds the live window and a tab per open document. There is one window and
@@ -128,6 +132,9 @@ pub(crate) struct App {
     /// Where each document's vectorizer sends the page vectors it has made.
     vectors: Receiver<Vectorized>,
     vector_sender: Sender<Vectorized>,
+    /// Where each document's cataloguer sends the images it has read.
+    catalogues: Receiver<Catalogued>,
+    catalogue_sender: Sender<Catalogued>,
     /// The model every document's vectorizer shares, loaded once at most.
     model: Arc<semantic::EmbeddingModel>,
     /// Where each document's worker delivers the screenshots taken of it.
@@ -152,6 +159,7 @@ impl App {
         let (index_sender, indexes) = mpsc::channel();
         let (vector_sender, vectors) = mpsc::channel();
         let (shot_sender, shots) = mpsc::channel();
+        let (catalogue_sender, catalogues) = mpsc::channel();
         let app = Rc::new(Self {
             window: window.as_weak(),
             tabs: RefCell::new(Vec::new()),
@@ -168,11 +176,16 @@ impl App {
             index_sender,
             vectors,
             vector_sender,
+            catalogues,
+            catalogue_sender,
             model: Arc::new(model),
             shots,
             shot_sender,
             clipboard,
         });
+        let filters = app.store.borrow().image_filters();
+        window.set_hide_small_images(filters.hide_small);
+        window.set_group_repeated_images(filters.group_repeats);
         app.show_empty();
         wire_callbacks(window, &app);
         app
@@ -241,6 +254,7 @@ impl App {
             return_page: None,
             loading: Some(Loading { path, pages, control }),
             indexer: None,
+            cataloguer: None,
         }))
     }
 
@@ -298,6 +312,12 @@ impl App {
             window.as_weak(),
             self.index_sender.clone(),
         );
+        let cataloguer = images::spawn_cataloguer(
+            loading.path.clone(),
+            loaded.doc,
+            window.as_weak(),
+            self.catalogue_sender.clone(),
+        );
         let thumbnails = render::spawn_thumbnails(loading.path, loaded.doc, window.as_weak());
         let workers = Workers {
             pages: loading.pages,
@@ -313,6 +333,7 @@ impl App {
             tab.viewer = Some(viewer);
             tab.outline = ModelRc::new(VecModel::from(outline));
             tab.indexer = Some(indexer);
+            tab.cataloguer = Some(cataloguer);
             // The flags were shown before the outline arrived to name them.
             let bookmarks = self.store.borrow().bookmarks(&tab.path);
             tab.bookmarks.set_vec(flags(&bookmarks, &tab.outline));
@@ -353,6 +374,7 @@ impl App {
             return_page: None,
             loading: None,
             indexer: None,
+            cataloguer: None,
         }))
     }
 
@@ -368,6 +390,31 @@ impl App {
     pub(crate) fn take_indexed(&self, indexed: Indexed) {
         let Indexed { doc, first_page, pages } = indexed;
         self.with_document(doc, |viewer| viewer.on_text_indexed(first_page, pages));
+    }
+
+    /// Takes in the images every document's cataloguer has read since last
+    /// time.
+    pub(crate) fn receive_catalogues(&self) {
+        while let Ok(catalogued) = self.catalogues.try_recv() {
+            self.take_catalogued(catalogued);
+        }
+    }
+
+    /// Hands pages a cataloguer has read to its document's viewer.
+    pub(crate) fn take_catalogued(&self, catalogued: Catalogued) {
+        let Catalogued { doc, first_page, pages } = catalogued;
+        self.with_document(doc, |viewer| viewer.on_catalogued(first_page, pages));
+    }
+
+    /// Sets which images every document's list leaves out and gathers,
+    /// which is remembered across runs.
+    pub(crate) fn set_image_filters(&self, filters: ImageFilters) {
+        self.store.borrow_mut().set_image_filters(filters);
+        let viewers: Vec<Rc<Viewer>> =
+            self.tabs.borrow().iter().filter_map(|tab| tab.viewer.clone()).collect();
+        for viewer in viewers {
+            viewer.set_image_filters(filters);
+        }
     }
 
     /// Takes in the page vectors every document's vectorizer has made since
@@ -416,13 +463,13 @@ impl App {
         pages_pt: Vec<(f32, f32)>,
         workers: Workers,
     ) -> Rc<Viewer> {
-        let settings = {
+        let (settings, filters) = {
             let mut store = self.store.borrow_mut();
             let settings = store.document(path).unwrap_or_default();
             store.record_open(path);
-            settings
+            (settings, store.image_filters())
         };
-        Viewer::new(window, pages_pt, window.window().scale_factor(), workers, &settings)
+        Viewer::new(window, pages_pt, window.window().scale_factor(), workers, &settings, filters)
     }
 
     /// A fresh id to tag a new document's renders with.
@@ -1355,6 +1402,16 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_screenshot_taken({
         let app = app.clone();
         move || app.receive_screenshots()
+    });
+    window.on_images_catalogued({
+        let app = app.clone();
+        move || app.receive_catalogues()
+    });
+    window.on_image_filters_changed({
+        let app = app.clone();
+        move |hide_small, group_repeats| {
+            app.set_image_filters(ImageFilters { hide_small, group_repeats })
+        }
     });
     window.on_capture_cancel({
         let app = app.clone();
