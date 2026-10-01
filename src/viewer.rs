@@ -1922,7 +1922,6 @@ impl Viewer {
         let repeated = |key: &ImageKey| filters.group_repeats && groups[group_of[key]].1.len() > 1;
 
         let mut rows = Vec::new();
-        let mut headings = 0;
         let preview = |page: usize, ordinal: usize| {
             previews.get(&(page, ordinal)).cloned().unwrap_or_default()
         };
@@ -1932,14 +1931,10 @@ impl Viewer {
                 if (filters.hide_small && spot.is_small()) || repeated(&spot.key) {
                     continue;
                 }
-                if first {
-                    headings += 1;
-                }
                 rows.push(ImageRow {
                     page: page as i32,
                     ordinal: spot.ordinal as i32,
                     heading: if first { Heading::Page } else { Heading::None }.index(),
-                    headings,
                     width: spot.width as i32,
                     height: spot.height as i32,
                     repeats: 0,
@@ -1955,9 +1950,6 @@ impl Viewer {
             if !repeated(key) {
                 continue;
             }
-            if first {
-                headings += 1;
-            }
             let &(page, ordinal) = &places[0];
             let spot = &catalogue[page][ordinal];
             let mut pages: Vec<usize> = places.iter().map(|&(page, _)| page).collect();
@@ -1966,7 +1958,6 @@ impl Viewer {
                 page: page as i32,
                 ordinal: ordinal as i32,
                 heading: if first { Heading::Repeated } else { Heading::None }.index(),
-                headings,
                 width: spot.width as i32,
                 height: spot.height as i32,
                 repeats: places.len() as i32,

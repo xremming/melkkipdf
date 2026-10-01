@@ -84,15 +84,13 @@ export struct PageRow {
 // An image embedded in the document, for the sidebar's list: the 0-based
 // page it is drawn on, its place among that page's images, what heads the
 // row (0 nothing, 1 its page, 2 the repeated images gathered at the end),
-// how many headings there are up to and including its own, which places
-// the row in the list, how many pixels it has of its own, how many times
-// and on how many pages it is drawn when gathered as repeated (0 when
-// listed by page), and its preview once rendered (an empty image until).
+// how many pixels it has of its own, how many times and on how many pages
+// it is drawn when gathered as repeated (0 when listed by page), and its
+// preview once rendered (an empty image until).
 export struct ImageRow {
     page: int,
     ordinal: int,
     heading: int,
-    headings: int,
     width: int,
     height: int,
     repeats: int,
@@ -802,8 +800,12 @@ export component MainWindow inherits Window {
     // page with any, which the list follows (see the list). -1 while there
     // is none.
     in property <int> image-current: -1;
-    property <length> image-row-height: 150px;
-    property <length> image-heading-height: 28px;
+    // Every row is the same height, the heading's band included, with the
+    // band empty but for the first image of a page: the list places rows by
+    // the average height of those it has built, so rows of two heights
+    // would land it off the mark.
+    property <length> image-row-height: 174px;
+    property <length> image-heading-height: 24px;
     // The row last clicked pulses: it is lit for one tick of the timer and
     // fades out from there, as the page outline does for a screenshot.
     in-out property <int> copied-row: -1;
@@ -1815,53 +1817,39 @@ export component MainWindow inherits Window {
                                 running: parent.opening;
                                 triggered => {
                                     parent.opening = false;
-                                    image-list.follow(true);
+                                    image-list.follow();
                                 }
                             }
                             image-list := ListView {
                                 // When the page being read changes, its row goes
-                                // to the top of the list unless it is in view
-                                // already, and it starts there when the tab
-                                // opens. The list only builds the rows it shows,
-                                // so where the row sits is worked out from the
-                                // headings above it.
+                                // to the top of the list, and it starts there
+                                // when the tab opens.
                                 property <int> current: root.image-current;
-                                changed current => { self.follow(false); }
-                                function follow(always: bool) {
-                                    if (self.current < 0 || self.current >= root.image-rows.length) {
-                                        return;
-                                    }
-                                    let item = root.image-rows[self.current];
-                                    let top = self.current * root.image-row-height
-                                        + (item.headings - (item.heading != 0 ? 1 : 0)) * root.image-heading-height;
-                                    let bottom = top + root.image-row-height
-                                        + (item.heading != 0 ? root.image-heading-height : 0px);
-                                    let view-top = -self.content-y;
-                                    if (always || top < view-top || bottom > view-top + self.visible-height) {
-                                        self.content-y = -top;
+                                changed current => { self.follow(); }
+                                function follow() {
+                                    if (self.current >= 0 && self.current < root.image-rows.length) {
+                                        self.content-y = -self.current * root.image-row-height;
                                     }
                                 }
                                 for item[idx] in root.image-rows: Rectangle {
-                                    height: (item.heading != 0 ? root.image-heading-height : 0) + root.image-row-height;
+                                    height: root.image-row-height;
                                     VerticalLayout {
-                                        if item.heading != 0: HorizontalLayout {
+                                        HorizontalLayout {
                                             height: root.image-heading-height;
                                             padding-left: 10px;
                                             padding-right: 10px;
-                                            Text {
+                                            if item.heading != 0: Text {
                                                 text: item.heading == 2 ? "Repeated images" : "Page \{item.page + 1}";
                                                 color: item.heading == 1 && item.page == root.current-page - 1 ? #dddddd : #999999;
                                                 vertical-alignment: center;
                                             }
-                                            heading-touch := TouchArea {
-                                                enabled: item.heading == 1;
+                                            if item.heading == 1: heading-touch := TouchArea {
                                                 clicked => {
                                                     root.go-to-page-index(item.page);
                                                 }
                                             }
                                         }
                                         Rectangle {
-                                            height: root.image-row-height;
                                             background: image-touch.has-hover ? #333333 : transparent;
                                             VerticalLayout {
                                                 padding-top: 6px;

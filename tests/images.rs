@@ -42,11 +42,6 @@ fn the_list_waits_for_every_page_and_says_how_far_it_has_got() {
         h.image_rows(),
         [row(1, 0, 1, 400, 200), row(1, 1, 0, 400, 200), row(2, 0, 1, 400, 200)]
     );
-    // Each row knows how many headings there are up to its own.
-    let rows = h.window.get_image_rows();
-    let headings: Vec<i32> =
-        (0..rows.row_count()).map(|row| rows.row_data(row).unwrap().headings).collect();
-    assert_eq!(headings, [1, 1, 2]);
 }
 
 #[test]
@@ -100,9 +95,6 @@ fn repeated_images_are_gathered_at_the_end_once_each() {
     let rows = h.window.get_image_rows();
     assert_eq!(rows.row_data(2).unwrap().pages, 3);
     assert_eq!(rows.row_data(3).unwrap().pages, 1);
-    let headings: Vec<i32> =
-        (0..rows.row_count()).map(|row| rows.row_data(row).unwrap().headings).collect();
-    assert_eq!(headings, [1, 2, 3, 3]);
 
     // Not gathered, every image is under its page.
     h.set_image_filters(true, false);
