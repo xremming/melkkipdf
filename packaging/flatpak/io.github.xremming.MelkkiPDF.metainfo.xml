@@ -46,6 +46,19 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.10.0" date="2026-10-01">
+      <description>
+        <p>
+          Search by meaning: the sidebar's new Meaning mode, Ctrl+Shift+F
+          away, lists the pages most like what you type, whatever words they
+          use and in whichever language, and outlines the passage each
+          matched by. The field grows with the query, and Enter still steps
+          between hits. Exact search stays the default. The model comes with
+          the app and loads in the background on first use, with the sidebar
+          showing its progress.
+        </p>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-10-01">
       <description>
         <p>
