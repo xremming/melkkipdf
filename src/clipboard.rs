@@ -21,6 +21,7 @@ enum Connection {
     Open(arboard::Clipboard),
     /// The clipboard could not be reached, which has been reported once.
     Unreachable,
+    #[cfg(feature = "testing")]
     Detached,
 }
 
