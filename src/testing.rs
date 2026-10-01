@@ -473,6 +473,17 @@ impl Tabs {
         self.window.get_palette().iter().map(|color| (color.name.into(), color.hue)).collect()
     }
 
+    /// The shape of each flag, in the order drawn, as an index into the
+    /// shapes the menu offers.
+    pub fn flag_shapes(&self) -> Vec<i32> {
+        self.window.get_bookmarks().iter().map(|flag| flag.shape).collect()
+    }
+
+    /// The names of the shapes a flag's menu offers, in order.
+    pub fn shapes(&self) -> Vec<String> {
+        self.window.get_shapes().iter().map(|shape| shape.name.into()).collect()
+    }
+
     /// The 0-based page Tab flips back to, or `None` while there is
     /// none.
     pub fn return_page(&self) -> Option<i32> {

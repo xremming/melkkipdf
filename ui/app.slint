@@ -80,6 +80,8 @@ export struct BookmarkFlag {
     page: int,
     color: color,
     hue: int,
+    // Its shape, as an index into the window's `shapes`.
+    shape: int,
     label: string,
 }
 
@@ -89,6 +91,14 @@ export struct FlagColor {
     name: string,
     hue: int,
     swatch: image,
+}
+
+// A shape a flag can be given, from the flag's menu: its name, its index,
+// and a picture of it for the menu.
+export struct FlagShape {
+    name: string,
+    shape: int,
+    icon: image,
 }
 
 // A single page: white paper with the rendered image on top. Sized from the
@@ -660,8 +670,33 @@ export component MainWindow inherits Window {
     // 0-based page Tab flips back to (-1 while there is none).
     in property <[BookmarkFlag]> bookmarks;
     in property <int> return-page: -1;
-    // The colours a flag's menu offers.
+    // The colours and the shapes a flag's menu offers.
     in property <[FlagColor]> palette;
+    in property <[FlagShape]> shapes;
+    // How far a flag's end is cut into or out to, and the radius of a tab's
+    // corners.
+    property <length> flag-cut: 5px;
+    property <length> flag-corner: 3px;
+    // The outline of a flag `w` by `h`, by its shape (see `shapes`): a tab
+    // with rounded corners, a pennant notched at the end, an arrow brought
+    // to a point, or a half-round end. In pixels, so the cuts keep their
+    // size however wide the flags are.
+    pure function flag-path(shape: int, w: float, h: float) -> string {
+        if (shape == 1) {
+            let cut = root.flag-cut / 1px;
+            return "M 0 0 L \{w} 0 L \{w} \{h} L \{w / 2} \{h - cut} L 0 \{h} Z";
+        }
+        if (shape == 2) {
+            let cut = root.flag-cut / 1px;
+            return "M 0 0 L \{w} 0 L \{w} \{h - cut} L \{w / 2} \{h} L 0 \{h - cut} Z";
+        }
+        if (shape == 3) {
+            let r = w / 2;
+            return "M 0 0 L \{w} 0 L \{w} \{h - r} A \{r} \{r} 0 0 1 0 \{h - r} Z";
+        }
+        let r = root.flag-corner / 1px;
+        return "M 0 0 L \{w} 0 L \{w} \{h - r} A \{r} \{r} 0 0 1 \{w - r} \{h} L \{r} \{h} A \{r} \{r} 0 0 1 0 \{h - r} Z";
+    }
 
     // The help page over the window, with every shortcut. The modifier it
     // names is Cmd on macOS, where Slint reports it as control, and Ctrl
@@ -679,8 +714,10 @@ export component MainWindow inherits Window {
     callback toggle-bookmark();
     // Takes the flag off a 0-based page.
     callback remove-bookmark(int);
-    // Gives the flag on a 0-based page the colour of a hue in degrees.
+    // Gives the flag on a 0-based page the colour of a hue in degrees, or
+    // the shape at an index into `shapes`.
     callback color-bookmark(int, int);
+    callback shape-bookmark(int, int);
     // Jumps to a flagged 0-based page, remembering where it was left from.
     callback go-to-bookmark(int);
     // Jumps to the next (1) or previous (-1) flag, wrapping around.
@@ -1574,15 +1611,21 @@ export component MainWindow inherits Window {
                                 // A flag pulls out a little under the pointer,
                                 // and on the page being read.
                                 height: root.edge-height - 1px + (flag-touch.has-hover || flag.page == root.current-page - 1 ? 16px : 11px);
-                                background: flag.color;
-                                border-bottom-left-radius: 3px;
-                                border-bottom-right-radius: 3px;
                                 animate height { duration: 80ms; }
-                                // The menu offers every colour, with a
-                                // check on the flag's own. Activating a
-                                // checkable item flips its check, but every
-                                // change replaces the flags wholesale, so
-                                // the menu is built afresh with the check
+                                // The flag itself, in its shape.
+                                Path {
+                                    width: 100%;
+                                    height: 100%;
+                                    viewbox-width: self.width / 1px;
+                                    viewbox-height: self.height / 1px;
+                                    commands: root.flag-path(flag.shape, self.width / 1px, self.height / 1px);
+                                    fill: flag.color;
+                                }
+                                // The menu offers every colour and shape,
+                                // with a check on the flag's own. Activating
+                                // a checkable item flips its check, but
+                                // every change replaces the flags wholesale,
+                                // so the menu is built afresh with the check
                                 // where it belongs.
                                 flag-menu := ContextMenuArea {
                                     Menu {
@@ -1593,6 +1636,16 @@ export component MainWindow inherits Window {
                                             checked: color.hue == flag.hue;
                                             activated => {
                                                 root.color-bookmark(flag.page, color.hue);
+                                            }
+                                        }
+                                        MenuSeparator { }
+                                        for shape in root.shapes: MenuItem {
+                                            title: shape.name;
+                                            icon: shape.icon;
+                                            checkable: true;
+                                            checked: shape.shape == flag.shape;
+                                            activated => {
+                                                root.shape-bookmark(flag.page, shape.shape);
                                             }
                                         }
                                         MenuSeparator { }
@@ -2008,7 +2061,7 @@ export component MainWindow inherits Window {
                     HelpSection {
                         title: "How bookmarks work";
                         Text {
-                            text: "Flags are sticky bookmarks on a closed book. Each hangs from the top edge over the pages at its page's depth in the document, so every one is in view at once, and a click on one, or B, goes there. Each new flag takes the next colour of the palette, and a right click on one picks its colour or takes it away.";
+                            text: "Flags are sticky bookmarks on a closed book. Each hangs from the top edge over the pages at its page's depth in the document, so every one is in view at once, and a click on one, or B, goes there. Each new flag takes the next colour and shape in turn, and a right click on one picks its colour or shape, or takes it away.";
                             color: #bbbbbb;
                             font-size: 13px;
                             wrap: word-wrap;

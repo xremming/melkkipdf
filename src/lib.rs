@@ -28,7 +28,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use clipboard::Clipboard;
 use render::{Loaded, RenderControl, WorkerMessage};
 use search::{IndexHandle, Indexed};
-use settings::{Bookmark, PALETTE, Session, Store};
+use settings::{Bookmark, PALETTE, SHAPES, Session, Shape, Store};
 
 pub use viewer::{FitMode, Spread, ViewSettings, Viewer};
 
@@ -134,6 +134,7 @@ impl App {
         let titles = Rc::new(VecModel::default());
         window.set_tabs(ModelRc::from(titles.clone()));
         window.set_palette(ModelRc::new(VecModel::from(palette())));
+        window.set_shapes(ModelRc::new(VecModel::from(shapes())));
         let (load_sender, loads) = mpsc::channel();
         let (index_sender, indexes) = mpsc::channel();
         let app = Rc::new(Self {
@@ -535,6 +536,17 @@ impl App {
         self.set_flags(index, &bookmarks);
     }
 
+    /// Gives the flag on `page` of the active tab's document the shape
+    /// `shape`.
+    pub(crate) fn shape_bookmark(&self, page: usize, shape: Shape) {
+        let Some(index) = self.active.get() else {
+            return;
+        };
+        let path = self.tabs.borrow()[index].path.clone();
+        let bookmarks = self.store.borrow_mut().set_bookmark_shape(&path, page, shape);
+        self.set_flags(index, &bookmarks);
+    }
+
     /// Takes the flag off `page` of the active tab's document.
     pub(crate) fn remove_bookmark(&self, page: usize) {
         let Some(index) = self.active.get() else {
@@ -910,6 +922,7 @@ fn flags(bookmarks: &[Bookmark], outline: &ModelRc<OutlineItem>) -> Vec<Bookmark
                 page,
                 color: flag_color(bookmark.hue),
                 hue: i32::from(bookmark.hue),
+                shape: bookmark.shape.index() as i32,
                 label: label.into(),
             }
         })
@@ -921,35 +934,91 @@ fn flag_color(hue: u16) -> slint::Color {
     slint::Color::from_hsva(f32::from(hue), FLAG_SATURATION, FLAG_VALUE, 1.0)
 }
 
-/// The size of a colour's swatch in a flag's menu, in pixels.
-const SWATCH_SIZE: u32 = 16;
+/// The size of an icon in a flag's menu, in pixels.
+const ICON_SIZE: u32 = 16;
+/// How many samples across a pixel an icon's edge is judged by, so it is
+/// not jagged.
+const ICON_SAMPLES: u32 = 4;
+/// The grey of a shape's icon, which shows on a light or a dark menu.
+const SHAPE_GREY: u8 = 0x8c;
+
+/// An icon of `color` covering the points for which `inside` holds, in
+/// pixels from the icon's top-left corner.
+fn icon(color: slint::Color, inside: impl Fn(f32, f32) -> bool) -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(ICON_SIZE, ICON_SIZE);
+    let step = 1.0 / ICON_SAMPLES as f32;
+    for (index, pixel) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let (x, y) = ((index as u32 % ICON_SIZE) as f32, (index as u32 / ICON_SIZE) as f32);
+        let hits = (0..ICON_SAMPLES * ICON_SAMPLES)
+            .filter(|&sample| {
+                let dx = ((sample % ICON_SAMPLES) as f32 + 0.5) * step;
+                let dy = ((sample / ICON_SAMPLES) as f32 + 0.5) * step;
+                inside(x + dx, y + dy)
+            })
+            .count();
+        let alpha = hits as f32 / (ICON_SAMPLES * ICON_SAMPLES) as f32;
+        *pixel = slint::Rgba8Pixel {
+            r: color.red(),
+            g: color.green(),
+            b: color.blue(),
+            a: (alpha * 255.0).round() as u8,
+        };
+    }
+    slint::Image::from_rgba8(buffer)
+}
 
 /// The colours a flag's menu offers, each with a round swatch of it.
 fn palette() -> Vec<FlagColor> {
+    let centre = ICON_SIZE as f32 / 2.0;
     PALETTE
         .iter()
-        .map(|&(name, hue)| {
-            let color = flag_color(hue);
-            let mut buffer =
-                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(SWATCH_SIZE, SWATCH_SIZE);
-            let centre = SWATCH_SIZE as f32 / 2.0;
-            for (index, pixel) in buffer.make_mut_slice().iter_mut().enumerate() {
-                let x = (index as u32 % SWATCH_SIZE) as f32 + 0.5 - centre;
-                let y = (index as u32 / SWATCH_SIZE) as f32 + 0.5 - centre;
-                // The edge fades over a pixel, so the disc is not jagged.
-                let coverage = (centre - (x * x + y * y).sqrt()).clamp(0.0, 1.0);
-                *pixel = slint::Rgba8Pixel {
-                    r: color.red(),
-                    g: color.green(),
-                    b: color.blue(),
-                    a: (coverage * 255.0).round() as u8,
-                };
-            }
-            FlagColor {
-                name: name.into(),
-                hue: i32::from(hue),
-                swatch: slint::Image::from_rgba8(buffer),
-            }
+        .map(|&(name, hue)| FlagColor {
+            name: name.into(),
+            hue: i32::from(hue),
+            swatch: icon(flag_color(hue), |x, y| {
+                (x - centre).powi(2) + (y - centre).powi(2) <= centre * centre
+            }),
+        })
+        .collect()
+}
+
+/// The shapes a flag's menu offers, each with a picture of a flag cut that
+/// way, as the window draws them (see `flag-path` there).
+fn shapes() -> Vec<FlagShape> {
+    let (width, height) = (10.0, 14.0);
+    let (left, top) = ((ICON_SIZE as f32 - width) / 2.0, (ICON_SIZE as f32 - height) / 2.0);
+    let cut = 4.0;
+    let corner = 2.5;
+    SHAPES
+        .iter()
+        .map(|&(name, shape)| FlagShape {
+            name: name.into(),
+            shape: shape.index() as i32,
+            icon: icon(
+                slint::Color::from_rgb_u8(SHAPE_GREY, SHAPE_GREY, SHAPE_GREY),
+                move |x, y| {
+                    let (x, y) = (x - left, y - top);
+                    if !(0.0..=width).contains(&x) || !(0.0..=height).contains(&y) {
+                        return false;
+                    }
+                    // How far across the flag the point is, 0 at the edges and 1
+                    // in the middle, which the cuts of the end follow.
+                    let across = 1.0 - (x - width / 2.0).abs() / (width / 2.0);
+                    let rounded = |radius: f32| {
+                        let (cx, cy) = (
+                            (x - width / 2.0).abs() - (width / 2.0 - radius),
+                            y - (height - radius),
+                        );
+                        cx <= 0.0 || cy <= 0.0 || cx * cx + cy * cy <= radius * radius
+                    };
+                    match shape {
+                        Shape::Tab => rounded(corner),
+                        Shape::Pennant => y <= height - cut * across,
+                        Shape::Arrow => y <= height - cut + cut * across,
+                        Shape::Round => rounded(width / 2.0),
+                    }
+                },
+            ),
         })
         .collect()
 }
@@ -1193,6 +1262,16 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         move |page, hue| {
             if let (Some(page), Ok(hue)) = (index(page), u16::try_from(hue)) {
                 app.color_bookmark(page, hue);
+            }
+        }
+    });
+    window.on_shape_bookmark({
+        let app = app.clone();
+        move |page, shape| {
+            if let (Some(page), Some(shape)) =
+                (index(page), index(shape).and_then(Shape::from_index))
+            {
+                app.shape_bookmark(page, shape);
             }
         }
     });

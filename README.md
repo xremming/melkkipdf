@@ -62,7 +62,7 @@ mise run test    # cargo test --features testing
 - Outline sidebar with page thumbnails
 - Bookmarks that hang from the page edge like flags on a book, so every
   marked page is in view and one press flips there and back, each in the
-  next colour of a palette, or one picked from its right-click menu
+  next colour and shape in turn, or ones picked from its right-click menu
 - Full-text search that ignores case, accents, and most punctuation, with every
   hit listed in a sidebar and outlined on its page
 - Text selection with the pointer, across pages and spreads, with a double

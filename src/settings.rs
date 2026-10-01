@@ -57,6 +57,47 @@ pub struct Bookmark {
     /// flags are added so they are told apart at a glance, or whatever the
     /// reader picked for it.
     pub hue: u16,
+    /// The shape of its flag: one of [`SHAPES`], given in turn as flags are
+    /// added like the hue, or whatever the reader picked for it. A flag
+    /// saved before there were shapes is a tab.
+    #[serde(default)]
+    pub shape: Shape,
+}
+
+/// The shape of a flag: how its end is cut.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Shape {
+    /// Rounded corners, as a tab sticking out of a file.
+    #[default]
+    Tab,
+    /// A notch cut into the end, as a ribbon's.
+    Pennant,
+    /// The end brought to a point.
+    Arrow,
+    /// A half-round end.
+    Round,
+}
+
+/// The shapes a flag can have, with their names, in the order the menu
+/// lists them and new flags take them (see [`next_hue`]).
+pub const SHAPES: [(&str, Shape); 4] = [
+    ("Tab", Shape::Tab),
+    ("Pennant", Shape::Pennant),
+    ("Arrow", Shape::Arrow),
+    ("Round", Shape::Round),
+];
+
+impl Shape {
+    /// The shape's place in [`SHAPES`], which the window tells shapes by.
+    pub fn index(self) -> usize {
+        SHAPES.iter().position(|&(_, shape)| shape == self).expect("every shape is listed")
+    }
+
+    /// The shape at `index` in [`SHAPES`], if there is one.
+    pub fn from_index(index: usize) -> Option<Self> {
+        SHAPES.get(index).map(|&(_, shape)| shape)
+    }
 }
 
 /// The colours a flag can have, as names and hues in degrees. A new flag
@@ -215,7 +256,8 @@ impl Store {
         let entry = self.documents.get_mut(path).expect("the document was just recorded");
         let at = entry.bookmarks.partition_point(|bookmark| bookmark.page < page);
         let hue = next_hue(&entry.bookmarks);
-        entry.bookmarks.insert(at, Bookmark { page, hue });
+        let shape = next_shape(&entry.bookmarks);
+        entry.bookmarks.insert(at, Bookmark { page, hue, shape });
         self.dirty = true;
         entry.bookmarks.clone()
     }
@@ -231,6 +273,21 @@ impl Store {
             && bookmark.hue != hue
         {
             bookmark.hue = hue;
+            self.dirty = true;
+        }
+        entry.bookmarks.clone()
+    }
+
+    /// Gives the flag on `page` of the document at `path` the shape `shape`,
+    /// if it has one, and returns the document's bookmarks as they are now.
+    pub fn set_bookmark_shape(&mut self, path: &Path, page: usize, shape: Shape) -> Vec<Bookmark> {
+        let Some(entry) = self.documents.get_mut(path) else {
+            return Vec::new();
+        };
+        if let Some(bookmark) = entry.bookmarks.iter_mut().find(|bookmark| bookmark.page == page)
+            && bookmark.shape != shape
+        {
+            bookmark.shape = shape;
             self.dirty = true;
         }
         entry.bookmarks.clone()
@@ -347,11 +404,30 @@ impl Store {
 /// The hue for a flag added to `bookmarks`: the first of [`PALETTE`] that
 /// the fewest of them have.
 fn next_hue(bookmarks: &[Bookmark]) -> u16 {
-    PALETTE
-        .iter()
-        .map(|&(_, hue)| (bookmarks.iter().filter(|bookmark| bookmark.hue == hue).count(), hue))
+    least_used(PALETTE.iter().map(|&(_, hue)| hue), bookmarks.iter().map(|bookmark| bookmark.hue))
+}
+
+/// The shape for a flag added to `bookmarks`: the first of [`SHAPES`] that
+/// the fewest of them have.
+fn next_shape(bookmarks: &[Bookmark]) -> Shape {
+    least_used(
+        SHAPES.iter().map(|&(_, shape)| shape),
+        bookmarks.iter().map(|bookmark| bookmark.shape),
+    )
+}
+
+/// The first of `choices` that appears fewest times in `taken`, so handing
+/// them out this way goes round the choices in order and takes a freed one
+/// again.
+fn least_used<T: Copy + PartialEq>(
+    choices: impl Iterator<Item = T>,
+    taken: impl Iterator<Item = T> + Clone,
+) -> T {
+    choices
+        .map(|choice| (taken.clone().filter(|&used| used == choice).count(), choice))
         .min_by_key(|&(used, _)| used)
-        .map_or(0, |(_, hue)| hue)
+        .map(|(_, choice)| choice)
+        .expect("there is always a choice")
 }
 
 /// Where to move an unreadable settings `file`: `<file>.bak`, or the first of
@@ -372,7 +448,7 @@ fn backup_path(file: &Path) -> PathBuf {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{MAX_DOCUMENTS, PALETTE, Session, Store};
+    use super::{MAX_DOCUMENTS, PALETTE, SHAPES, Session, Shape, Store};
     use crate::{FitMode, Spread, ViewSettings};
 
     /// A fresh, empty directory for one test's settings file, removed again
@@ -448,6 +524,27 @@ mod tests {
         assert_eq!(bookmarks.last().map(|bookmark| bookmark.hue), Some(PALETTE[6].1));
         assert_eq!(hues(&store)[0], PALETTE[0].1);
         assert!(store.set_bookmark_hue(path, 999, 0).len() == bookmarks.len());
+    }
+
+    #[test]
+    fn flags_go_round_the_shapes_too() {
+        let mut store = Store::in_memory();
+        let path = Path::new("/docs/a.pdf");
+        let shapes = |store: &Store| -> Vec<Shape> {
+            store.bookmarks(path).iter().map(|bookmark| bookmark.shape).collect()
+        };
+        for page in 0..SHAPES.len() + 1 {
+            store.toggle_bookmark(path, page);
+        }
+        let mut expected: Vec<Shape> = SHAPES.iter().map(|&(_, shape)| shape).collect();
+        expected.push(Shape::Tab);
+        assert_eq!(shapes(&store), expected);
+
+        store.set_bookmark_shape(path, 1, Shape::Arrow);
+        assert_eq!(shapes(&store)[1], Shape::Arrow);
+        assert_eq!(shapes(&store)[0], Shape::Tab);
+        assert_eq!(Shape::from_index(Shape::Arrow.index()), Some(Shape::Arrow));
+        assert_eq!(Shape::from_index(SHAPES.len()), None);
     }
 
     #[test]

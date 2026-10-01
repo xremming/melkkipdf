@@ -267,6 +267,24 @@ fn flags_take_the_palettes_colours_in_turn_and_the_menu_can_change_one() {
 }
 
 #[test]
+fn flags_take_the_shapes_in_turn_and_the_menu_can_change_one() {
+    let t = tabs();
+    t.open("a.pdf", 20);
+    assert_eq!(t.shapes(), ["Tab", "Pennant", "Arrow", "Round"]);
+    for page in ["3", "7"] {
+        t.viewer(0).go_to_page(page);
+        press(&t, &[], "d");
+    }
+    assert_eq!(t.flag_shapes(), [0, 1]);
+
+    t.window.invoke_shape_bookmark(6, 2);
+    assert_eq!(t.flag_shapes(), [0, 2]);
+    // A shape the menu does not offer changes nothing.
+    t.window.invoke_shape_bookmark(6, 9);
+    assert_eq!(t.flag_shapes(), [0, 2]);
+}
+
+#[test]
 fn flags_survive_a_restart() {
     let directory = Scratch::new("restart");
     let settings = directory.join("documents.json");
@@ -281,6 +299,7 @@ fn flags_survive_a_restart() {
         run.viewer(0).go_to_page("2");
         run.window.invoke_toggle_bookmark();
         run.window.invoke_color_bookmark(1, 272);
+        run.window.invoke_shape_bookmark(8, 3);
         run.save();
     }
 
@@ -288,6 +307,8 @@ fn flags_survive_a_restart() {
     run.restore();
     assert_eq!(flagged(&run), [1, 8]);
     assert_eq!(run.flag_hues(), [272, 0]);
+    // Page 9 was flagged first and got the first shape; page 2 the second.
+    assert_eq!(run.flag_shapes(), [1, 3]);
     // Where a flip came from is not worth remembering across runs.
     assert_eq!(run.return_page(), None);
 }
