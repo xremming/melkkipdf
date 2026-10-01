@@ -6,6 +6,7 @@
 
 #[cfg(unix)]
 mod clipboard;
+mod color;
 mod instance;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -895,10 +896,10 @@ fn index(value: i32) -> Option<usize> {
     usize::try_from(value).ok()
 }
 
-/// Flag saturation and value: strong enough to stand out on the dark chrome
-/// whatever the hue, yet not glaring.
-const FLAG_SATURATION: f32 = 0.6;
-const FLAG_VALUE: f32 = 0.9;
+/// How light a flag is at least, in OKLCH. Each flag is the strongest
+/// colour of its hue, a neon, and blue and purple are strongest dark, where
+/// they would sink into the chrome, so those are lifted to this.
+const FLAG_MIN_LIGHTNESS: f64 = 0.6;
 
 /// The flags to draw for `bookmarks`, each named after the last entry of
 /// `outline` that starts on or before its page, since a flag has no name of
@@ -929,9 +930,9 @@ fn flags(bookmarks: &[Bookmark], outline: &ModelRc<OutlineItem>) -> Vec<Bookmark
         .collect()
 }
 
-/// The colour of a flag with `hue`.
+/// The colour of a flag with `hue`, in degrees of OKLCH.
 fn flag_color(hue: u16) -> slint::Color {
-    slint::Color::from_hsva(f32::from(hue), FLAG_SATURATION, FLAG_VALUE, 1.0)
+    color::neon(f64::from(hue), FLAG_MIN_LIGHTNESS)
 }
 
 /// The size of an icon in a flag's menu, in pixels.

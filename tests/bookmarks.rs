@@ -247,7 +247,7 @@ fn flags_take_the_palettes_colours_in_turn_and_the_menu_can_change_one() {
     let t = tabs();
     t.open("a.pdf", 20);
     let palette = t.palette();
-    assert_eq!(palette.len(), 7);
+    assert_eq!(palette.len(), 6);
     assert_eq!(palette[0].0, "Red");
     for page in ["3", "7", "12"] {
         t.viewer(0).go_to_page(page);
@@ -259,11 +259,13 @@ fn flags_take_the_palettes_colours_in_turn_and_the_menu_can_change_one() {
     // The menu gives a flag the colour picked, and leaves the others.
     t.window.invoke_color_bookmark(6, hues[5]);
     assert_eq!(t.flag_hues(), [hues[0], hues[5], hues[2]]);
-    // The flag's colour follows its hue.
+    // The flag's colour follows its hue: two flags of one hue match, and
+    // flags of different hues differ.
+    t.window.invoke_color_bookmark(11, hues[5]);
     let colors: Vec<slint::Color> =
         t.window.get_bookmarks().iter().map(|flag| flag.color).collect();
     assert_ne!(colors[0], colors[1]);
-    assert_eq!(colors[1], slint::Color::from_hsva(hues[5] as f32, 0.6, 0.9, 1.0));
+    assert_eq!(colors[1], colors[2]);
 }
 
 #[test]
@@ -298,7 +300,7 @@ fn flags_survive_a_restart() {
         run.window.invoke_toggle_bookmark();
         run.viewer(0).go_to_page("2");
         run.window.invoke_toggle_bookmark();
-        run.window.invoke_color_bookmark(1, 272);
+        run.window.invoke_color_bookmark(1, 310);
         run.window.invoke_shape_bookmark(8, 3);
         run.save();
     }
@@ -306,7 +308,8 @@ fn flags_survive_a_restart() {
     let run = run_with(&settings);
     run.restore();
     assert_eq!(flagged(&run), [1, 8]);
-    assert_eq!(run.flag_hues(), [272, 0]);
+    // The picked colour, and the first of the palette.
+    assert_eq!(run.flag_hues(), [310, 25]);
     // Page 9 was flagged first and got the first shape; page 2 the second.
     assert_eq!(run.flag_shapes(), [1, 3]);
     // Where a flip came from is not worth remembering across runs.

@@ -53,9 +53,9 @@ struct DocumentEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Bookmark {
     pub page: usize,
-    /// The hue of its flag in degrees: one of [`PALETTE`], given in turn as
-    /// flags are added so they are told apart at a glance, or whatever the
-    /// reader picked for it.
+    /// The hue of its flag in degrees of OKLCH: one of [`PALETTE`], given in
+    /// turn as flags are added so they are told apart at a glance, or
+    /// whatever the reader picked for it.
     pub hue: u16,
     /// The shape of its flag: one of [`SHAPES`], given in turn as flags are
     /// added like the hue, or whatever the reader picked for it. A flag
@@ -100,18 +100,12 @@ impl Shape {
     }
 }
 
-/// The colours a flag can have, as names and hues in degrees. A new flag
-/// takes the first of them used by the fewest of the document's flags, so
-/// flags go round the palette and a colour freed up is taken again.
-pub const PALETTE: [(&str, u16); 7] = [
-    ("Red", 0),
-    ("Orange", 28),
-    ("Yellow", 52),
-    ("Green", 125),
-    ("Teal", 178),
-    ("Blue", 212),
-    ("Purple", 272),
-];
+/// The colours a flag can have, as names and hues in degrees of OKLCH, far
+/// enough apart to be told from one another at a glance. A new flag takes
+/// the first of them used by the fewest of the document's flags, so flags
+/// go round the palette and a colour freed up is taken again.
+pub const PALETTE: [(&str, u16); 6] =
+    [("Red", 25), ("Orange", 60), ("Yellow", 108), ("Green", 145), ("Blue", 265), ("Purple", 310)];
 
 /// The tabs that were open, in order, and which of them was shown.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -520,8 +514,8 @@ mod tests {
         assert_eq!(hues(&store).last(), Some(&PALETTE[3].1));
 
         // A colour the reader picks sticks, and only that flag changes.
-        let bookmarks = store.set_bookmark_hue(path, 20, PALETTE[6].1);
-        assert_eq!(bookmarks.last().map(|bookmark| bookmark.hue), Some(PALETTE[6].1));
+        let bookmarks = store.set_bookmark_hue(path, 20, PALETTE[5].1);
+        assert_eq!(bookmarks.last().map(|bookmark| bookmark.hue), Some(PALETTE[5].1));
         assert_eq!(hues(&store)[0], PALETTE[0].1);
         assert!(store.set_bookmark_hue(path, 999, 0).len() == bookmarks.len());
     }
