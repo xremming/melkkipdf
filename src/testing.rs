@@ -17,12 +17,14 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::clipboard::Clipboard;
-use crate::render::{RenderControl, WorkerMessage};
+use crate::render::{RenderControl, ScreenshotRequest, WorkerMessage};
 use crate::search::{PageText, PageTextBuilder};
 use crate::semantic::{Vectorized, Vectorizer};
 use crate::settings::Store;
 use crate::{App, FileDrag, MainWindow, OutlineItem, PageLayout, ViewSettings, Viewer, Workers};
 
+pub use crate::Screenshot;
+pub use crate::render::Area;
 pub use crate::semantic::EmbeddingModel;
 
 /// A window + viewer pair for tests, plus convenience accessors.
@@ -32,6 +34,9 @@ pub struct Harness {
     // Kept so render requests the viewer sends have a live receiver; tests can
     // drain it to see which pages were requested and in what order.
     requests: Receiver<WorkerMessage>,
+    // Screenshot requests taken off the channel while looking for renders,
+    // kept for [`Harness::take_screenshot_requests`].
+    shots: RefCell<Vec<ScreenshotRequest>>,
     // Kept alive so thumbnail requests have a receiver.
     _thumb_requests: Receiver<i32>,
     // Where the viewer's vectorizer sends page vectors, which
@@ -86,7 +91,7 @@ impl Harness {
         };
         let viewer = Viewer::new(&window, pages, 1.0, workers, &ViewSettings::default());
         viewer.activate();
-        Self { window, viewer, requests, _thumb_requests, vectors }
+        Self { window, viewer, requests, shots: RefCell::new(Vec::new()), _thumb_requests, vectors }
     }
 
     /// Waits for the viewer's vectorizer to finish each batch it has going
@@ -122,11 +127,49 @@ impl Harness {
     pub fn take_render_requests_full(&self) -> Vec<(i32, u64, bool)> {
         let mut requests = Vec::new();
         while let Ok(message) = self.requests.try_recv() {
-            if let WorkerMessage::Render(request) = message {
-                requests.push((request.page, request.generation, request.prefetch));
+            match message {
+                WorkerMessage::Render(request) => {
+                    requests.push((request.page, request.generation, request.prefetch));
+                }
+                WorkerMessage::Screenshot(request) => self.shots.borrow_mut().push(request),
+                WorkerMessage::ClearCache => {}
             }
         }
         requests
+    }
+
+    /// Drains and returns the screenshots the viewer has asked its worker
+    /// for, in order.
+    pub fn take_screenshot_requests(&self) -> Vec<ScreenshotRequest> {
+        self.take_render_requests_full();
+        self.shots.take()
+    }
+
+    /// Whether the window is in screenshot mode.
+    pub fn screenshot_mode(&self) -> bool {
+        self.window.global::<Screenshot>().get_active()
+    }
+
+    /// Turns screenshot mode on or off, as the toolbar button does.
+    pub fn set_screenshot_mode(&self, on: bool) {
+        self.window.global::<Screenshot>().set_active(on);
+    }
+
+    /// The outline the window shows for the screenshot being dragged out or
+    /// just taken, as (page, x, y, width, height) in points, with whether it
+    /// is fading out, or `None` while there is none.
+    pub fn screenshot_outline(&self) -> Option<(i32, Area, bool)> {
+        let shot = self.window.global::<Screenshot>();
+        if !shot.get_dragging() && !shot.get_flashing() {
+            return None;
+        }
+        let area = Area {
+            x: shot.get_x(),
+            y: shot.get_y(),
+            width: shot.get_width(),
+            height: shot.get_height(),
+        };
+        Some((shot.get_page(), area, shot.get_flashing()))
     }
 
     /// Whether the viewer shows a rendered image for the 0-based `page`.
@@ -485,6 +528,36 @@ impl Tabs {
     /// The text last copied.
     pub fn copied(&self) -> String {
         self.app.clipboard.copied()
+    }
+
+    /// Drains and returns the screenshots every document opened with
+    /// [`Tabs::open`] has asked its worker for, in order.
+    pub fn take_screenshot_requests(&self) -> Vec<ScreenshotRequest> {
+        let mut requests = Vec::new();
+        for (pages, _) in self.receivers.borrow().iter() {
+            while let Ok(message) = pages.try_recv() {
+                if let WorkerMessage::Screenshot(request) = message {
+                    requests.push(request);
+                }
+            }
+        }
+        requests
+    }
+
+    /// The width and height of the image last copied, if any.
+    pub fn copied_image(&self) -> Option<(u32, u32)> {
+        self.app.clipboard.copied_image()
+    }
+
+    /// Waits for the screenshot a document's worker is taking and puts it
+    /// on the clipboard, as the event loop would.
+    pub fn finish_screenshot(&self) {
+        let shot = self
+            .app
+            .shots
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the screenshot took too long");
+        self.app.take_screenshot(shot);
     }
 
     /// Writes out what the app remembers, as it does when a tab closes, the

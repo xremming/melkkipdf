@@ -90,6 +90,8 @@ and about 500 MB. `mise run test:model` runs the tests that need it.
   matched by outlined on it (see below)
 - Text selection with the pointer, across pages and spreads, with a double
   or triple click for a word or a line, and Ctrl+C to copy
+- Screenshots to the clipboard, of a page or of a part of one dragged over,
+  rendered at 300 dots per inch whatever the window's size and zoom
 - Keyboard-driven navigation
 
 ## Keyboard shortcuts
@@ -118,6 +120,8 @@ alone. Ctrl is ⌘ on macOS.
 | Ctrl+C                                 | Copy the selected text                        |
 | Ctrl+A                                 | Select the whole document                     |
 | Esc                                    | Let the selection go                          |
+| Y, Ctrl+Shift+C                        | Screenshot the next page clicked or part dragged over |
+| Esc                                    | Leave screenshot mode without taking one      |
 | D                                      | Flag the page, or take its flag away          |
 | B, Shift+B                             | Next or previous flag                         |
 | M                                      | Dog-ear the page, to flip back to it          |

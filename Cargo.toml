@@ -22,8 +22,9 @@ icu_casemap = "2.3"
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 icu_properties = "2.3"
 # Slint gives the clipboard only to its own text fields, so copying goes
-# through arboard directly, which Slint's winit backend links anyway.
-arboard = { version = "3.6", default-features = false }
+# through arboard directly, which Slint's winit backend links anyway. The
+# image data feature is what puts a screenshot on the clipboard.
+arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 # Static embeddings for searching by meaning. The model is read from disk
 # only, as the flatpak has no network, and the tokenizer's regexes go through
 # fancy-regex rather than oniguruma, so the build stays pure Rust.
@@ -34,7 +35,7 @@ i-slint-backend-testing = { version = "1.18", optional = true }
 [target.'cfg(all(unix, not(target_vendor = "apple")))'.dependencies]
 # The same protocol Slint's backend uses on Wayland; without it arboard
 # falls back to the X11 clipboard through XWayland, as Slint does.
-arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
+arboard = { version = "3.6", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -5,7 +5,7 @@
 //! a channel and only ever receives finished, reference-counted RGB buffers,
 //! which it hands to the viewer through the `page-rendered` callback.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::mem::ManuallyDrop;
 use std::path::Path;
@@ -13,7 +13,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
-use mupdf::{Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap};
+use mupdf::{Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap, Rect};
 use slint::{Image, Rgb8Pixel, SharedPixelBuffer, Weak};
 
 use crate::MainWindow;
@@ -101,6 +101,30 @@ pub struct RenderRequest {
     pub prefetch: bool,
 }
 
+/// A part of a page, in points from its top-left corner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Area {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// A request for a screenshot: a page, or the `area` of it, rendered at
+/// screenshot resolution rather than at the window's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenshotRequest {
+    pub page: i32,
+    pub area: Option<Area>,
+}
+
+/// A document's worker delivering the screenshot asked for, or why it could
+/// not take it.
+pub struct Screenshot {
+    pub request: ScreenshotRequest,
+    pub result: Result<PageBuffer, String>,
+}
+
 /// What a worker reads from a document before rendering any of it.
 pub struct DocumentInfo {
     /// Every page's size in points, which lays out the whole document before
@@ -147,6 +171,8 @@ fn read_info(document: &Document) -> Result<DocumentInfo, Error> {
 pub enum WorkerMessage {
     /// Render a page and deliver it to the viewer.
     Render(RenderRequest),
+    /// Render a page, or part of one, for the clipboard.
+    Screenshot(ScreenshotRequest),
     /// Drop every cached page. Sent when the document's tab goes to the
     /// background, so tabs nobody is looking at do not hold on to pixels.
     ClearCache,
@@ -217,6 +243,7 @@ pub fn spawn(
     doc: i32,
     window: Weak<MainWindow>,
     loaded: Sender<Loaded>,
+    screenshots: Sender<Screenshot>,
 ) -> (Sender<WorkerMessage>, RenderControl) {
     let (sender, receiver) = mpsc::channel::<WorkerMessage>();
     let abort = Arc::new(Mutex::new(AbortSlot::default()));
@@ -252,15 +279,26 @@ pub fn spawn(
         // backlog: only the newest generation (the current view) is ever
         // rendered, and pages that scrolled off screen are dropped or aborted.
         let mut pending: Vec<RenderRequest> = Vec::new();
+        // Screenshots waiting to be taken. They come before the pages, since
+        // the reader is waiting for each one, and they are never dropped
+        // for the view having moved on.
+        let mut shots: VecDeque<ScreenshotRequest> = VecDeque::new();
         loop {
-            if pending.is_empty() {
+            if pending.is_empty() && shots.is_empty() {
                 match receiver.recv() {
-                    Ok(message) => accept(message, &mut pending, &mut cache),
+                    Ok(message) => accept(message, &mut pending, &mut shots, &mut cache),
                     Err(_) => break, // channel closed: shut down
                 }
             }
             while let Ok(message) = receiver.try_recv() {
-                accept(message, &mut pending, &mut cache);
+                accept(message, &mut pending, &mut shots, &mut cache);
+            }
+
+            if let Some(request) = shots.pop_front() {
+                let result = render_screenshot(&document, &request).map_err(|err| err.to_string());
+                let _ = screenshots.send(Screenshot { request, result });
+                let _ = window.upgrade_in_event_loop(|window| window.invoke_screenshot_taken());
+                continue;
             }
 
             // Keep only the newest view; drop everything older (off screen).
@@ -316,15 +354,17 @@ pub fn spawn(
     (sender, control)
 }
 
-/// Takes one message off the worker's channel: queues a render, or empties
-/// the cache.
+/// Takes one message off the worker's channel: queues a render or a
+/// screenshot, or empties the cache.
 fn accept(
     message: WorkerMessage,
     pending: &mut Vec<RenderRequest>,
+    shots: &mut VecDeque<ScreenshotRequest>,
     cache: &mut LruCache<CacheKey, PageBuffer>,
 ) {
     match message {
         WorkerMessage::Render(request) => pending.push(request),
+        WorkerMessage::Screenshot(request) => shots.push_back(request),
         WorkerMessage::ClearCache => cache.clear(),
     }
 }
@@ -418,6 +458,59 @@ fn render_page(
         // Dropping the device flushes the drawing into the pixmap.
     }
 
+    Ok(pixmap_to_buffer(&pixmap))
+}
+
+/// The resolution a screenshot is rendered at, whatever the window's: 300
+/// dots per inch, the usual for print, so a whole page pastes sharp.
+pub const SCREENSHOT_DPI: f32 = 300.0;
+
+/// The fewest pixels a screenshot's longer side has. A small part of a page
+/// at [`SCREENSHOT_DPI`] would be a few hundred pixels, too few to read once
+/// pasted anywhere, so a small area is rendered larger.
+pub const SCREENSHOT_MIN_PX: f32 = 1600.0;
+
+/// Pixels per point a screenshot of `width_pt`×`height_pt` points is
+/// rendered at: [`SCREENSHOT_DPI`], raised until the longer side reaches
+/// [`SCREENSHOT_MIN_PX`] and capped as every render is.
+pub fn screenshot_scale(width_pt: f32, height_pt: f32) -> f32 {
+    let longer = width_pt.max(height_pt).max(1.0);
+    let scale = (SCREENSHOT_DPI / 72.0).max(SCREENSHOT_MIN_PX / longer);
+    capped_scale(width_pt, height_pt, scale)
+}
+
+/// Renders a page, or the area of it asked for, at screenshot resolution.
+/// The pixmap covers the area alone, so MuPDF draws only what falls in it,
+/// and an area reaching past the page is cut at its edge.
+fn render_screenshot(
+    document: &Document,
+    request: &ScreenshotRequest,
+) -> Result<PageBuffer, Error> {
+    let page = document.load_page(request.page)?;
+    let bounds = page.bounds()?;
+    let area = match request.area {
+        Some(area) => Rect::new(
+            bounds.x0 + area.x,
+            bounds.y0 + area.y,
+            bounds.x0 + area.x + area.width,
+            bounds.y0 + area.y + area.height,
+        )
+        .intersect(&bounds),
+        None => bounds,
+    };
+    if area.is_empty() {
+        return Err(Error::InvalidArgument("the area is off the page".into()));
+    }
+    let scale = screenshot_scale(area.width(), area.height());
+    let ctm = Matrix::new_scale(scale, scale);
+    let bbox = area.transform(&ctm).round();
+
+    let mut pixmap = Pixmap::new_with_rect(&Colorspace::device_rgb(), bbox, false)?;
+    pixmap.clear_with(0xff)?;
+    {
+        let device = Device::from_pixmap(&pixmap)?;
+        page.run(&device, &ctm)?;
+    }
     Ok(pixmap_to_buffer(&pixmap))
 }
 
@@ -569,8 +662,9 @@ mod tests {
     use mupdf::{Cookie, Size};
 
     use super::{
-        AbortSlot, LruCache, MAX_RENDER_PX, Registration, RenderControl, RenderRequest,
-        capped_scale, render_page,
+        AbortSlot, Area, LruCache, MAX_RENDER_PX, Registration, RenderControl, RenderRequest,
+        SCREENSHOT_DPI, SCREENSHOT_MIN_PX, ScreenshotRequest, capped_scale, render_page,
+        render_screenshot, screenshot_scale,
     };
 
     #[test]
@@ -654,6 +748,36 @@ mod tests {
         let buffer = render_page(&document, 0, 30.0, &Cookie::new().unwrap()).unwrap();
         assert_eq!(buffer.height(), MAX_RENDER_PX as u32);
         assert!(buffer.width() < buffer.height());
+    }
+
+    #[test]
+    fn a_screenshot_is_rendered_at_print_resolution_or_large_enough_to_read() {
+        assert_eq!(screenshot_scale(612.0, 792.0), SCREENSHOT_DPI / 72.0);
+        assert_eq!(screenshot_scale(200.0, 100.0), SCREENSHOT_MIN_PX / 200.0);
+        // A page too tall for the limit is capped as every render is.
+        assert_eq!(screenshot_scale(100.0, 4000.0), MAX_RENDER_PX / 4000.0);
+    }
+
+    #[test]
+    fn a_screenshot_of_part_of_a_page_covers_that_part_alone() {
+        let mut document = PdfDocument::new();
+        document.new_page(Size::A4).unwrap();
+        let area = Area { x: 100.0, y: 100.0, width: 200.0, height: 100.0 };
+        let request = ScreenshotRequest { page: 0, area: Some(area) };
+        let buffer = render_screenshot(&document, &request).unwrap();
+        assert_eq!((buffer.width(), buffer.height()), (1600, 800));
+
+        // An area reaching past the page is cut at its edge, and one off
+        // the page is refused.
+        let area = Area { x: 500.0, y: 0.0, width: 200.0, height: 100.0 };
+        let request = ScreenshotRequest { page: 0, area: Some(area) };
+        let buffer = render_screenshot(&document, &request).unwrap();
+        let page_width = document.load_page(0).unwrap().bounds().unwrap().width();
+        assert!((buffer.width() as f32 - (page_width - 500.0) * 16.0).abs() <= 1.0);
+        assert_eq!(buffer.height(), 1600);
+        let area = Area { x: 700.0, y: 0.0, width: 200.0, height: 100.0 };
+        let request = ScreenshotRequest { page: 0, area: Some(area) };
+        assert!(render_screenshot(&document, &request).is_err());
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod instance;
 #[cfg(target_os = "macos")]
 mod macos;
 mod render;
+mod screenshot;
 mod search;
 mod selection;
 mod semantic;
@@ -29,7 +30,7 @@ use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
 use clipboard::Clipboard;
-use render::{Loaded, RenderControl, WorkerMessage};
+use render::{Loaded, RenderControl, Screenshot as Shot, WorkerMessage};
 use search::{IndexHandle, Indexed};
 use semantic::{Vectorized, Vectorizer};
 use settings::{Bookmark, PALETTE, SHAPES, Session, Shape, Store};
@@ -127,7 +128,10 @@ pub(crate) struct App {
     vector_sender: Sender<Vectorized>,
     /// The model every document's vectorizer shares, loaded once at most.
     model: Arc<semantic::EmbeddingModel>,
-    /// Where copied text goes.
+    /// Where each document's worker delivers the screenshots taken of it.
+    shots: Receiver<Shot>,
+    shot_sender: Sender<Shot>,
+    /// Where copied text and screenshots go.
     clipboard: Clipboard,
 }
 
@@ -145,6 +149,7 @@ impl App {
         let (load_sender, loads) = mpsc::channel();
         let (index_sender, indexes) = mpsc::channel();
         let (vector_sender, vectors) = mpsc::channel();
+        let (shot_sender, shots) = mpsc::channel();
         let app = Rc::new(Self {
             window: window.as_weak(),
             tabs: RefCell::new(Vec::new()),
@@ -162,6 +167,8 @@ impl App {
             vectors,
             vector_sender,
             model: Arc::new(model),
+            shots,
+            shot_sender,
             clipboard,
         });
         app.show_empty();
@@ -214,8 +221,13 @@ impl App {
             .file_name()
             .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
         let id = self.allocate_id();
-        let (pages, control) =
-            render::spawn(path.clone(), id, window.as_weak(), self.load_sender.clone());
+        let (pages, control) = render::spawn(
+            path.clone(),
+            id,
+            window.as_weak(),
+            self.load_sender.clone(),
+            self.shot_sender.clone(),
+        );
         let bookmarks = self.stored_bookmarks(&canonical);
         Some(self.add_tab(Tab {
             id,
@@ -368,6 +380,25 @@ impl App {
     pub(crate) fn take_vectorized(&self, vectorized: Vectorized) {
         let Vectorized { doc, first_page, result } = vectorized;
         self.with_document(doc, |viewer| viewer.on_vectorized(first_page, result));
+    }
+
+    /// Takes in every screenshot a document's worker has delivered since
+    /// last time.
+    pub(crate) fn receive_screenshots(&self) {
+        while let Ok(shot) = self.shots.try_recv() {
+            self.take_screenshot(shot);
+        }
+    }
+
+    /// Puts a screenshot on the clipboard. This is where a notice that it
+    /// was taken would go, were one wanted: the outline flashing on the page
+    /// says so for now.
+    pub(crate) fn take_screenshot(&self, shot: Shot) {
+        let number = shot.request.page + 1;
+        match shot.result {
+            Ok(image) => self.clipboard.set_image(image.width(), image.height(), image.as_bytes()),
+            Err(err) => self.notify(&format!("Page {number} could not be screenshot: {err}.")),
+        }
     }
 
     /// A vectorizer for the document whose workers are tagged `id`.
@@ -1198,11 +1229,17 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         let app = app.clone();
         move |delta_x, delta_y, shift| app.with_viewer(|v| v.paged_scroll(delta_x, delta_y, shift))
     });
+    // A press on a page, and the drag from it, selects text, or takes a
+    // screenshot while that mode is on.
     window.on_select_from({
         let app = app.clone();
+        let window = window.as_weak();
         move |page, x, y| {
+            let capturing = window.upgrade().is_some_and(|w| w.global::<Screenshot>().get_active());
             if let Some(page) = index(page) {
-                app.with_viewer(|v| v.select_from(page, x, y));
+                app.with_viewer(|v| {
+                    if capturing { v.capture_from(page, x, y) } else { v.select_from(page, x, y) }
+                });
             }
         }
     });
@@ -1210,17 +1247,27 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         let app = app.clone();
         move |page, x, y| {
             if let Some(page) = index(page) {
-                app.with_viewer(|v| v.select_to(page, x, y));
+                app.with_viewer(|v| {
+                    if v.capturing() { v.capture_to(x, y) } else { v.select_to(page, x, y) }
+                });
             }
         }
     });
     window.on_select_done({
         let app = app.clone();
-        move || app.with_viewer(|v| v.select_done())
+        move || app.with_viewer(|v| if v.capturing() { v.capture_done() } else { v.select_done() })
     });
     window.on_select_scroll({
         let app = app.clone();
-        move |delta_x, delta_y, shift| app.with_viewer(|v| v.select_scroll(delta_x, delta_y, shift))
+        move |delta_x, delta_y, shift| {
+            app.with_viewer(|v| {
+                if v.capturing() {
+                    v.capture_scroll(delta_x, delta_y, shift)
+                } else {
+                    v.select_scroll(delta_x, delta_y, shift)
+                }
+            })
+        }
     });
     window.on_copy_selection({
         let app = app.clone();
@@ -1277,6 +1324,14 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     window.on_pages_vectorized({
         let app = app.clone();
         move || app.receive_vectors()
+    });
+    window.on_screenshot_taken({
+        let app = app.clone();
+        move || app.receive_screenshots()
+    });
+    window.on_capture_cancel({
+        let app = app.clone();
+        move || app.with_viewer(|v| v.capture_cancel())
     });
     window.on_search_mode_changed({
         let app = app.clone();

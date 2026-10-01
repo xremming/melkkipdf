@@ -21,12 +21,13 @@ use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 
 use crate::render::{
-    RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale, scale_key,
+    Area, RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale, scale_key,
 };
+use crate::screenshot::Capture;
 use crate::search::{self, Hit, PageText, Snippet};
 use crate::selection::{TextPos, Unit};
 use crate::semantic::{self, Vectorizer, Vectors};
-use crate::{Highlight, MainWindow, PageEntry, PageLayout, PageRow, SearchResult};
+use crate::{Highlight, MainWindow, PageEntry, PageLayout, PageRow, Screenshot, SearchResult};
 
 /// How pages are grouped into rows.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -534,6 +535,15 @@ fn page_at(inner: &Inner, x: f32, y: f32) -> Option<usize> {
     Some(if x < boundary { spec.left } else { right })
 }
 
+/// Puts `area` of `page` in the window's screenshot outline.
+fn show_area(shot: &Screenshot<'_>, page: usize, area: Area) {
+    shot.set_page(page as i32);
+    shot.set_x(area.x);
+    shot.set_y(area.y);
+    shot.set_width(area.width);
+    shot.set_height(area.height);
+}
+
 /// Which areas a page's slot is overlaid with.
 #[derive(Clone, Copy)]
 enum Overlay {
@@ -737,6 +747,8 @@ pub struct Viewer {
     /// Runs while a drag is held past the top or bottom of the view, scrolling
     /// it every [`DRAG_SCROLL_INTERVAL`].
     drag_scroll: Timer,
+    /// The drag taking a screenshot, while one goes on.
+    capture: RefCell<Option<Capture>>,
 }
 
 /// The channels to one document's background workers.
@@ -809,6 +821,7 @@ impl Viewer {
             wheel_scrolling: Timer::default(),
             selection: RefCell::new(SelectionState::default()),
             drag_scroll: Timer::default(),
+            capture: RefCell::new(None),
         });
 
         viewer.build_layout();
@@ -888,6 +901,7 @@ impl Viewer {
     /// that nobody is looking at.
     pub fn deactivate(&self) {
         self.active.set(false);
+        self.capture_cancel();
         // Coming back replays the viewport, which renders whatever is due.
         self.resize_timer.stop();
         let dropped: Vec<usize> = {
@@ -2216,6 +2230,13 @@ impl Viewer {
     /// the page scrolls: turning to another page would leave the drag's
     /// origin off screen.
     pub fn select_scroll(&self, delta_x: f32, delta_y: f32, shift: bool) {
+        let scrolled = self.scroll_under_drag(delta_x, delta_y, shift);
+        self.drag_moved_by(scrolled);
+    }
+
+    /// Scrolls the view for the wheel turning by `delta_x`, `delta_y` while
+    /// a drag holds the pointer, and says how far down the pages moved.
+    fn scroll_under_drag(&self, delta_x: f32, delta_y: f32, shift: bool) -> f32 {
         let vertical = if shift { 0.0 } else { -delta_y };
         let horizontal = if shift { -delta_y } else { -delta_x };
         let scrolled = self.scroll_view_by(vertical);
@@ -2226,7 +2247,105 @@ impl Viewer {
             }
             self.push_paged_offsets();
         }
-        self.drag_moved_by(scrolled);
+        scrolled
+    }
+
+    /// The reader pressed on `page` at `x`, `y` points from its corner to
+    /// take a screenshot: of the page if they let go there, of the part of
+    /// it they drag over otherwise.
+    pub fn capture_from(&self, page: usize, x: f32, y: f32) {
+        if self.inner.borrow().pages_pt.get(page).is_none() {
+            return;
+        }
+        *self.capture.borrow_mut() = Some(Capture::begin(page, x, y));
+        self.show_capture();
+    }
+
+    /// Whether a drag taking a screenshot is going on.
+    pub fn capturing(&self) -> bool {
+        self.capture.borrow().is_some()
+    }
+
+    /// The drag taking a screenshot is at `x`, `y` points from the corner of
+    /// the page it began on, which may be off that page.
+    pub fn capture_to(&self, x: f32, y: f32) {
+        {
+            let mut capture = self.capture.borrow_mut();
+            let Some(capture) = capture.as_mut() else {
+                return;
+            };
+            capture.reach = (x, y);
+        }
+        self.show_capture();
+    }
+
+    /// The wheel turned by `delta_x`, `delta_y` while a drag taking a
+    /// screenshot holds the pointer, so the view scrolls here and the drag
+    /// goes on from where the pointer now is over the moved page.
+    pub fn capture_scroll(&self, delta_x: f32, delta_y: f32, shift: bool) {
+        let scrolled = self.scroll_under_drag(delta_x, delta_y, shift);
+        if scrolled == 0.0 {
+            return;
+        }
+        {
+            let mut capture = self.capture.borrow_mut();
+            let Some(capture) = capture.as_mut() else {
+                return;
+            };
+            capture.reach.1 += scrolled / page_density(&self.inner.borrow(), capture.page);
+        }
+        self.show_capture();
+    }
+
+    /// The reader let go: the screenshot is taken, of the whole page for a
+    /// click, and its outline flashes where it was taken.
+    pub fn capture_done(&self) {
+        let Some(capture) = self.capture.borrow_mut().take() else {
+            return;
+        };
+        let (request, area) = {
+            let inner = self.inner.borrow();
+            let (width, height) = inner.pages_pt[capture.page];
+            capture.request(width, height, page_density(&inner, capture.page))
+        };
+        let _ = self.sender.send(WorkerMessage::Screenshot(request));
+        if let Some(window) = self.window() {
+            let shot = window.global::<Screenshot>();
+            show_area(&shot, capture.page, area);
+            shot.set_dragging(false);
+            shot.set_flashing(true);
+            shot.set_active(false);
+        }
+    }
+
+    /// Gives up the screenshot being dragged out, if one is.
+    pub fn capture_cancel(&self) {
+        if self.capture.borrow_mut().take().is_none() {
+            return;
+        }
+        if let Some(window) = self.window() {
+            window.global::<Screenshot>().set_dragging(false);
+        }
+    }
+
+    /// Puts the capture's outline on the window, as far as the drag has
+    /// reached.
+    fn show_capture(&self) {
+        let Some(capture) = *self.capture.borrow() else {
+            return;
+        };
+        let Some(window) = self.window() else {
+            return;
+        };
+        let area = {
+            let inner = self.inner.borrow();
+            let (width, height) = inner.pages_pt[capture.page];
+            capture.area(width, height, page_density(&inner, capture.page))
+        };
+        let shot = window.global::<Screenshot>();
+        show_area(&shot, capture.page, area);
+        shot.set_dragging(true);
+        shot.set_flashing(false);
     }
 
     /// Lets the selection go.

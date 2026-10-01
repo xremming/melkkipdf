@@ -17,6 +17,21 @@ export global PageLayout {
     out property <length> spread-spacing: 4px;
 }
 
+// Taking a screenshot. While `active`, a press on a page takes a screenshot
+// of it, or of the part of it dragged over, instead of selecting text. The
+// outline is in points from the corner of `page`, which Rust sets as the
+// drag goes and leaves where the shot was taken, to flash there.
+export global Screenshot {
+    in-out property <bool> active;
+    in-out property <bool> dragging;
+    in-out property <bool> flashing;
+    in-out property <int> page: -1;
+    in-out property <float> x;
+    in-out property <float> y;
+    in-out property <float> width;
+    in-out property <float> height;
+}
+
 // An area of a page to highlight, such as a search hit, in points from the
 // page's top-left corner. `current` marks the hit the reader is on.
 export struct Highlight {
@@ -145,6 +160,34 @@ component PageImageView inherits Rectangle {
         background: #3390ff66;
     }
 
+    // The page a click would take a screenshot of.
+    if Screenshot.active && !Screenshot.dragging && touch.has-hover: Rectangle {
+        background: #3390ff33;
+        border-width: 2px;
+        border-color: #3390ff;
+    }
+
+    // The part of the page being dragged over, which flashes once the shot
+    // is taken: it fills with a strong blue at once and fades out from
+    // there. Only the fade is animated, so a new drag's outline appears
+    // at once; a white flash would not show on paper.
+    if (Screenshot.dragging || Screenshot.flashing) && Screenshot.page == entry.page: Rectangle {
+        x: Screenshot.x * density * 1px;
+        y: Screenshot.y * density * 1px;
+        width: Screenshot.width * density * 1px;
+        height: Screenshot.height * density * 1px;
+        background: #3390ff33;
+        border-width: 2px;
+        border-color: #3390ff;
+        states [
+            flashed when Screenshot.flashing: {
+                background: #3390ffb3;
+                opacity: 0;
+                in { animate opacity { duration: 600ms; easing: ease-out; } }
+            }
+        ]
+    }
+
     page-menu := ContextMenuArea {
         Menu {
             MenuItem {
@@ -166,6 +209,7 @@ component PageImageView inherits Rectangle {
     // click. Wheel events it has no use for go on to the view underneath,
     // except while a drag holds the pointer, when they are passed on by hand.
     touch := TouchArea {
+        mouse-cursor: Screenshot.active ? MouseCursor.crosshair : MouseCursor.default;
         pointer-event(event) => {
             if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                 root.select-from(entry.page, self.mouse-x / (root.density * 1px), self.mouse-y / (root.density * 1px));
@@ -942,11 +986,30 @@ export component MainWindow inherits Window {
     callback copy-selection();
     callback clear-selection();
     callback select-all();
-    // A press on a page starts a selection, and hands the keys back to the
-    // document from the search field the way a click on the view does.
+    // A press on a page starts a selection, or a screenshot while that mode
+    // is on, and hands the keys back to the document from the search field
+    // the way a click on the view does.
     function page-pressed(page: int, x: float, y: float) {
         key-handler.focus();
         root.select-from(page, x, y);
+    }
+
+    // Screenshots: the mode is turned on from the toolbar or the keys and
+    // ends with the shot, or with Esc, which gives up a drag going on.
+    // Invoked from Rust when a document's worker has delivered a screenshot,
+    // so the app can put it on the clipboard.
+    callback capture-cancel();
+    callback screenshot-taken();
+    function toggle-screenshot-mode() {
+        if (Screenshot.active) {
+            root.leave-screenshot-mode();
+        } else {
+            Screenshot.active = true;
+        }
+    }
+    function leave-screenshot-mode() {
+        Screenshot.active = false;
+        root.capture-cancel();
     }
 
     // Paged view geometry, computed by Rust: where to place the current page's
@@ -979,6 +1042,17 @@ export component MainWindow inherits Window {
                 if (event.text == Key.Escape) {
                     root.help-open = false;
                 }
+                return accept;
+            }
+            // Ctrl+Shift+C and Y take a screenshot, which the next click or
+            // drag on a page takes, and Esc leaves the mode. Before Ctrl+C,
+            // which would take the shifted key as its own.
+            if (event.modifiers.control && event.modifiers.shift && (event.text == "c" || event.text == "C")) {
+                root.toggle-screenshot-mode();
+                return accept;
+            }
+            if (Screenshot.active && event.text == Key.Escape) {
+                root.leave-screenshot-mode();
                 return accept;
             }
             // Selected text: Ctrl+C copies it, Ctrl+A selects the whole
@@ -1100,10 +1174,12 @@ export component MainWindow inherits Window {
             if (event.text == "B") { root.bookmark-step(-1); return accept; }
             if (event.text == "m") { root.mark-return-page(); return accept; }
             if (event.text == Key.Tab) { root.flip-back(); return accept; }
-            // O opens a document and T shows or hides the sidebar, and a
-            // colon puts the cursor in the page field, as :42 goes to a line
-            // in Vim.
+            // O opens a document, Y yanks a page or part of one as an image
+            // with the next click or drag, T shows or hides the sidebar, and
+            // a colon puts the cursor in the page field, as :42 goes to a
+            // line in Vim.
             if (event.text == "o") { root.open-document(); return accept; }
+            if (event.text == "y") { root.toggle-screenshot-mode(); return accept; }
             if (event.text == "t") { root.toggle-sidebar(); return accept; }
             if (event.text == ":") { page-field.take-focus(); return accept; }
             // The arrows, and H, J, K and L as in Vim; Shift+J, Shift+K and
@@ -1393,6 +1469,36 @@ export component MainWindow inherits Window {
                                     text: "/ \{root.page-count}";
                                     color: #dddddd;
                                 }
+                            }
+                        }
+                    }
+
+                    // Screenshot mode, recessed while it is on.
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: Toolbar.icon-size + 2 * Toolbar.h-padding;
+                            height: 28px;
+                            border-width: 1px;
+                            border-color: #5a5a5a;
+                            border-radius: 5px;
+                            background: (Screenshot.active || screenshot-toggle.pressed)
+                                ? #252525
+                                : (screenshot-toggle.has-hover ? #505050 : #454545);
+                            Image {
+                                source: @image-url("icons/camera.svg");
+                                width: Toolbar.icon-size;
+                                height: self.width;
+                                colorize: (Screenshot.active || screenshot-toggle.pressed) ? #ffffff : #dddddd;
+                            }
+                            screenshot-toggle := TouchArea {
+                                clicked => {
+                                    key-handler.focus();
+                                    root.toggle-screenshot-mode();
+                                }
+                            }
+                            Tooltip {
+                                text: @markdown("Screenshot a page, or drag over part of one (Y)");
                             }
                         }
                     }
@@ -2141,6 +2247,13 @@ export component MainWindow inherits Window {
                                 HelpRow { keys: "\{root.command-key}C"; action: "Copy the selected text"; }
                                 HelpRow { keys: "\{root.command-key}A"; action: "Select the whole document"; }
                                 HelpRow { keys: "Esc"; action: "Let the selection go"; }
+                            }
+
+                            HelpSection {
+                                title: "Screenshots";
+                                HelpRow { keys: "Y, \{root.command-key}Shift+C"; action: "Take a screenshot with the next click or drag"; }
+                                HelpRow { keys: "Click, drag"; action: "Copy the page, or the part dragged over, as an image"; }
+                                HelpRow { keys: "Esc"; action: "Leave without taking one"; }
                             }
 
                             HelpSection {
