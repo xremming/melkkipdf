@@ -11,11 +11,11 @@ APP_ID=io.github.xremming.MelkkiPDF
 BRANCH=stable
 BASE_URL=${BASE_URL:-https://xremming.github.io/melkkipdf}
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 
-repo=${REPO_DIR:-packaging/repo}
-site=${SITE_DIR:-packaging/site}
+repo=${REPO_DIR:-packaging/flatpak/repo}
+site=${SITE_DIR:-packaging/flatpak/site}
 
 # Distributions increasingly ship flatpak-builder only as a flatpak.
 if command -v flatpak-builder >/dev/null; then
@@ -38,7 +38,7 @@ echo "Building $APP_ID."
 "${builder[@]}" --force-clean --disable-rofiles-fuse \
     --repo="$repo" --default-branch="$BRANCH" \
     "${gpg_args[@]}" \
-    packaging/build-dir "packaging/$APP_ID.yml"
+    packaging/flatpak/build-dir "packaging/flatpak/$APP_ID.yml"
 
 echo "Updating the repo summary."
 flatpak build-update-repo --generate-static-deltas --prune \
@@ -90,6 +90,6 @@ EOF
 # The landing page is a real HTML file so it can be edited and opened as one;
 # only the two values that follow the deployment are filled in here.
 sed -e "s|@BASE_URL@|$BASE_URL|g" -e "s|@APP_ID@|$APP_ID|g" \
-    packaging/index.html >"$site/index.html"
+    packaging/flatpak/index.html >"$site/index.html"
 
 echo "Site ready: $site"

@@ -46,27 +46,27 @@ modules:
       # the half gigabyte downloaded, where the viewer looks for it beside
       # its binary.
       - target/release/examples/quantize_model model /app/share/melkkipdf/model
-      - install -Dm644 packaging/$FLATPAK_ID.desktop
+      - install -Dm644 packaging/flatpak/$FLATPAK_ID.desktop
         /app/share/applications/$FLATPAK_ID.desktop
-      - install -Dm644 packaging/$FLATPAK_ID.metainfo.xml
+      - install -Dm644 packaging/flatpak/$FLATPAK_ID.metainfo.xml
         /app/share/metainfo/$FLATPAK_ID.metainfo.xml
       - install -Dm644 data/icons/hicolor/scalable/apps/$FLATPAK_ID.svg
         /app/share/icons/hicolor/scalable/apps/$FLATPAK_ID.svg
       - install -Dm644 LICENSE /app/share/licenses/$FLATPAK_ID/LICENSE
     sources:
       - type: dir
-        path: ..
+        path: ../..
         skip:
           - .git
           - target
-          - packaging/build-dir
-          - packaging/repo
-          - packaging/site
+          - packaging/flatpak/build-dir
+          - packaging/flatpak/repo
+          - packaging/flatpak/site
           # A developer's download of the model, half a gigabyte that the
           # build fetches for itself.
           - data/model
       - cargo-sources.json
-      # The embedding model, at the revision packaging/fetch-model.sh pins,
+      # The embedding model, at the revision packaging/common/fetch-model.sh pins,
       # fetched like the crates before the build starts without a network.
       - type: file
         url: https://huggingface.co/minishlab/potion-multilingual-128M/resolve/73908c3438cf03b6a01bcb9611d62b23d0726f08/config.json

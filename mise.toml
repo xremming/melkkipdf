@@ -36,7 +36,7 @@ run = "cargo test --features testing"
 
 [tasks."model:fetch"]
 description = "Download the embedding model for searching by meaning"
-run = "packaging/fetch-model.sh"
+run = "packaging/common/fetch-model.sh"
 
 [tasks."test:model"]
 description = "Run the tests that need the embedding model"
@@ -56,7 +56,7 @@ run = "cargo clippy --all-targets --features testing -- -D warnings"
 
 [tasks."lint:shell"]
 description = "Lint the packaging scripts"
-run = "shellcheck packaging/*.sh"
+run = "shellcheck packaging/*/*.sh"
 
 [tasks.check]
 description = "Everything CI checks"
@@ -73,15 +73,15 @@ run = 'cargo run --example render_png -- "${usage_pdf?}" "${usage_png?}" "${usag
 
 [tasks."macos:app"]
 description = "Build target/MelkkiPDF.app, signed for this machine only"
-run = "packaging/build-macos-app.sh"
+run = "packaging/macos/build-app.sh"
 
 [tasks."flatpak:sources"]
 description = "Regenerate the vendored crate list from Cargo.lock"
-run = "packaging/generate-cargo-sources.sh"
+run = "packaging/flatpak/generate-cargo-sources.sh"
 # Skipped while the list is newer than the lock file, and a dependency of the
 # build, so the flatpak can never be built from a stale list.
-sources = ["Cargo.lock", "packaging/generate-cargo-sources.sh"]
-outputs = ["packaging/cargo-sources.json"]
+sources = ["Cargo.lock", "packaging/flatpak/generate-cargo-sources.sh"]
+outputs = ["packaging/flatpak/cargo-sources.json"]
 
 [tasks."flatpak:runtime"]
 description = "Install the runtime and SDK the flatpak builds against"
@@ -96,25 +96,25 @@ flatpak install --user --assumeyes flathub \
 """
 
 [tasks."flatpak:build"]
-description = "Build the flatpak into packaging/repo and lay out the site"
+description = "Build the flatpak into packaging/flatpak/repo and lay out the site"
 depends = ["flatpak:sources"]
-run = "packaging/publish.sh"
+run = "packaging/flatpak/publish.sh"
 
 [tasks."flatpak:install"]
 description = "Install the flatpak just built, replacing any installed one"
 run = """
-flatpak build-bundle packaging/repo packaging/MelkkiPDF.flatpak \
+flatpak build-bundle packaging/flatpak/repo packaging/flatpak/MelkkiPDF.flatpak \
     io.github.xremming.MelkkiPDF stable
-flatpak install --user --assumeyes --reinstall --bundle packaging/MelkkiPDF.flatpak
+flatpak install --user --assumeyes --reinstall --bundle packaging/flatpak/MelkkiPDF.flatpak
 """
 
 [tasks."flatpak:check"]
 description = "Check the installed flatpak runs and its metadata validates"
-run = "packaging/check-flatpak.sh"
+run = "packaging/flatpak/check.sh"
 
 # The release itself is the /release skill in .claude/skills, which bumps the
 # version, writes the notes, commits, tags and pushes; this is its check.
 [tasks."release:check"]
 description = "Check that a release is ready to tag"
 depends = ["flatpak:sources"]
-run = "packaging/release.sh check"
+run = "packaging/common/release.sh check"

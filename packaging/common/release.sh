@@ -6,10 +6,10 @@
 # prepared, before tagging it.
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 
-metainfo=packaging/io.github.xremming.MelkkiPDF.metainfo.xml
+metainfo=packaging/flatpak/io.github.xremming.MelkkiPDF.metainfo.xml
 
 version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
 tag=v$version

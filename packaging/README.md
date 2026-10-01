@@ -2,24 +2,27 @@
 
 MelkkiPDF is distributed as a flatpak from a self-hosted OSTree repository
 served by GitHub Pages. An OSTree repo is just static files, so Pages is enough
-to host it, and users get automatic updates through `flatpak update`.
+to host it, and users get automatic updates through `flatpak update`. On macOS
+there is an app bundle for the machine that builds it. Each platform has a
+directory, and `common/` holds what both use.
 
 | File                                    | What it is                                  |
 | --------------------------------------- | ------------------------------------------- |
-| `io.github.xremming.MelkkiPDF.yml`       | Flatpak manifest                            |
-| `io.github.xremming.MelkkiPDF.desktop`   | Desktop entry, incl. the `application/pdf` association |
-| `io.github.xremming.MelkkiPDF.metainfo.xml` | AppStream metadata for software centres  |
-| `cargo-sources.json`                     | Every crate as a flatpak source (generated) |
-| `generate-cargo-sources.sh`              | Regenerates the above from `Cargo.lock`     |
-| `index.html`                             | Landing page; `@BASE_URL@` and `@APP_ID@` are filled in at publish time |
-| `publish.sh`                             | Builds the repo and lays out the Pages site |
-| `check-flatpak.sh`                       | Checks the installed flatpak runs and its metadata validates |
-| `release.sh`                             | Checks a release is ready to tag; the `/release` skill's last stop |
-| `build-macos-app.sh`                     | Builds an ad-hoc signed `target/MelkkiPDF.app` for local use on macOS |
-| `fetch-model.sh`                         | Downloads the embedding model for searching by meaning into `data/model` |
+| `common/fetch-model.sh`                  | Downloads the embedding model for searching by meaning into `data/model` |
+| `common/release.sh`                      | Checks a release is ready to tag; the `/release` skill's last stop |
+| `flatpak/io.github.xremming.MelkkiPDF.yml` | Flatpak manifest                          |
+| `flatpak/io.github.xremming.MelkkiPDF.desktop` | Desktop entry, incl. the `application/pdf` association |
+| `flatpak/io.github.xremming.MelkkiPDF.metainfo.xml` | AppStream metadata for software centres |
+| `flatpak/cargo-sources.json`             | Every crate as a flatpak source (generated) |
+| `flatpak/generate-cargo-sources.sh`      | Regenerates the above from `Cargo.lock`     |
+| `flatpak/index.html`                     | Landing page; `@BASE_URL@` and `@APP_ID@` are filled in at publish time |
+| `flatpak/publish.sh`                     | Builds the repo and lays out the Pages site |
+| `flatpak/check.sh`                       | Checks the installed flatpak runs, ships the model, and its metadata validates |
+| `macos/build-app.sh`                     | Builds an ad-hoc signed `target/MelkkiPDF.app` for local use on macOS |
 
 Each script has a task in [`mise.toml`](../mise.toml), which is how CI and
-the steps below run them.
+the steps below run them, and every script runs from the repository root
+wherever it is called from.
 
 ## Installing
 
@@ -37,8 +40,8 @@ mise run flatpak:runtime
 mise run flatpak:build
 ```
 
-That leaves an OSTree repo in `packaging/repo` and the site that gets deployed
-in `packaging/site`. To try the result:
+That leaves an OSTree repo in `packaging/flatpak/repo` and the site that gets
+deployed in `packaging/flatpak/site`. To try the result:
 
 ```sh
 mise run flatpak:install
@@ -53,10 +56,10 @@ flatpak run io.github.xremming.MelkkiPDF
 Searching by meaning needs
 [potion-multilingual-128M](https://huggingface.co/minishlab/potion-multilingual-128M),
 half a gigabyte of weights that are not in the repository. The manifest lists
-its three files as sources at the revision `fetch-model.sh` pins, so
+its three files as sources at the revision `common/fetch-model.sh` pins, so
 flatpak-builder fetches and checks them like the crates, and the build shrinks
 them to int8 with the `quantize_model` example before installing them under
-`/app/share/melkkipdf/model`. `build-macos-app.sh` does the same from
+`/app/share/melkkipdf/model`. `macos/build-app.sh` does the same from
 `data/model` into the bundle's `Resources/model`, running `fetch-model.sh`
 first. Both places are where the viewer looks for the model beside its
 binary. To move to another revision, change it and the hashes in
@@ -69,7 +72,7 @@ source. Whenever `Cargo.lock` changes:
 
 ```sh
 mise run flatpak:sources
-git add packaging/cargo-sources.json
+git add packaging/flatpak/cargo-sources.json
 ```
 
 The task only runs when the lock file is newer than the list, and

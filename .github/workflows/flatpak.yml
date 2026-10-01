@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .flatpak-builder
-          key: flatpak-builder-${{ hashFiles('packaging/cargo-sources.json', 'packaging/io.github.xremming.MelkkiPDF.yml') }}
+          key: flatpak-builder-${{ hashFiles('packaging/flatpak/cargo-sources.json', 'packaging/flatpak/io.github.xremming.MelkkiPDF.yml') }}
           restore-keys: flatpak-builder-
 
       - run: mise run flatpak:runtime
@@ -62,7 +62,7 @@ jobs:
       - name: Upload the site
         uses: actions/upload-pages-artifact@v5
         with:
-          path: packaging/site
+          path: packaging/flatpak/site
 
   deploy:
     needs: build

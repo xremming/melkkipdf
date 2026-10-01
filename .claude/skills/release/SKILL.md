@@ -4,7 +4,7 @@ description: Cut a MelkkiPDF release - bump the version, write the release notes
 argument-hint: major | minor | patch | x.y.z
 arguments: [bump]
 disable-model-invocation: true
-allowed-tools: Bash(git:*), Bash(cargo:*), Bash(mise:*), Bash(gh:*), Bash(packaging/release.sh:*), Read, Edit, AskUserQuestion
+allowed-tools: Bash(git:*), Bash(cargo:*), Bash(mise:*), Bash(gh:*), Bash(packaging/common/release.sh:*), Read, Edit, AskUserQuestion
 ---
 
 Release the version asked for as `$bump`: `major`, `minor` or `patch` bumps
@@ -33,7 +33,7 @@ for, however long it takes.
    uncommitted. Unpushed commits are pushed now with `git push origin main`,
    since the release pushes `main` anyway and CI cannot run on what it has
    not seen. If `Cargo.lock` changed since the last release, run
-   `mise run flatpak:sources` and make sure `packaging/cargo-sources.json`
+   `mise run flatpak:sources` and make sure `packaging/flatpak/cargo-sources.json`
    comes out unchanged; if it changes, that is a missing commit, so stop and
    say so. A version that is not `major`, `minor`, `patch` or `x.y.z` is a
    question back to the user, not a guess.
@@ -63,7 +63,7 @@ for, however long it takes.
    show the draft before writing anything. The notes are one paragraph of two
    to five full sentences for the reader of the app, not of the code: what
    they can now do or what stopped bothering them, in the voice of the
-   entries already in `packaging/io.github.xremming.MelkkiPDF.metainfo.xml`
+   entries already in `packaging/flatpak/io.github.xremming.MelkkiPDF.metainfo.xml`
    (read the top two). Name keys and buttons as the README does. Leave out
    refactors, CI and tooling unless they change what the reader gets. If
    `Cargo.lock` did not change, the commit body may say so, as earlier

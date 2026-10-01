@@ -14,7 +14,7 @@ HASHES='595e4cab2093732efd5dbe084fd5c1826b5eea693b73b4c1fd971672867d2e54  config
 19f1909063da3cfe3bd83a782381f040dccea475f4816de11116444a73e1b6a1  tokenizer.json
 14b5eb39cb4ce5666da8ad1f3dc6be4346e9b2d601c073302fa0a31bf7943397  model.safetensors'
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 mkdir -p data/model
 cd data/model
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates packaging/cargo-sources.json from Cargo.lock.
+# Regenerates packaging/flatpak/cargo-sources.json from Cargo.lock.
 #
 # The flatpak build has no network access, so every crate has to be declared as
 # a source in the manifest. Run this after any change to Cargo.lock and commit
@@ -7,7 +7,7 @@
 # newer than the list.
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 
 # The generator is pinned to a commit, so the same Cargo.lock always gives the
@@ -27,8 +27,8 @@ fi
 
 # uv brings the generator's two dependencies along, and a Python if there is
 # none, without a virtualenv to keep.
-echo "Generating packaging/cargo-sources.json."
+echo "Generating packaging/flatpak/cargo-sources.json."
 uv run --quiet --no-project --with aiohttp --with tomlkit \
-    "$generator" Cargo.lock -o packaging/cargo-sources.json
+    "$generator" Cargo.lock -o packaging/flatpak/cargo-sources.json
 
-echo "Done. Remember to commit packaging/cargo-sources.json."
+echo "Done. Remember to commit packaging/flatpak/cargo-sources.json."

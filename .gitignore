@@ -1,12 +1,12 @@
 # Build artifacts.
 /target
 
-# The embedding model, which packaging/fetch-model.sh downloads.
+# The embedding model, which packaging/common/fetch-model.sh downloads.
 /data/model
 
 # Flatpak build artifacts.
 /.flatpak-builder
-/packaging/build-dir
-/packaging/repo
-/packaging/site
-/packaging/*.flatpak
+/packaging/flatpak/build-dir
+/packaging/flatpak/repo
+/packaging/flatpak/site
+/packaging/flatpak/*.flatpak

@@ -10,7 +10,7 @@ set -euo pipefail
 
 APP_ID=io.github.xremming.MelkkiPDF
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 
 echo "Building the release binary."
@@ -18,7 +18,7 @@ cargo build --release --bins --example quantize_model
 
 # The model for searching by meaning, shrunk to int8 from the download,
 # which fetch-model.sh keeps in data/model.
-packaging/fetch-model.sh
+packaging/common/fetch-model.sh
 
 version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
 app=target/MelkkiPDF.app
