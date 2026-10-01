@@ -64,6 +64,20 @@ pub struct PageText {
     pub(crate) glyphs: Vec<Glyph>,
     /// Each line's top and bottom in points from the page's top.
     pub(crate) lines: Vec<(f32, f32)>,
+    /// The images drawn on the page, in drawing order.
+    pub images: Vec<ImageSpot>,
+}
+
+/// An image embedded in the document and drawn on a page: where it is drawn
+/// and how many pixels it has of its own, which is what copying it gives.
+/// `ordinal` is its place among the page's images, by which the render
+/// worker finds it again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageSpot {
+    pub ordinal: usize,
+    pub bounds: Area,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -386,7 +400,8 @@ pub fn search(pages: &[PageText], query: &str, limit: usize) -> Found {
     found
 }
 
-/// Reads one page's text and where each character sits.
+/// Reads one page's text and where each character sits, and the images
+/// drawn on it.
 fn read_page(document: &Document, index: i32) -> Result<PageText, mupdf::Error> {
     let page = document.load_page(index)?;
     let bounds = page.bounds()?;
@@ -411,7 +426,9 @@ fn read_page(document: &Document, index: i32) -> Result<PageText, mupdf::Error> 
             }
         }
     }
-    Ok(builder.finish())
+    let mut text = builder.finish();
+    text.images = crate::images::spots_on(&page)?;
+    Ok(text)
 }
 
 /// Pages a document's indexer has read: `pages` are the pages from

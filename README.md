@@ -92,6 +92,9 @@ and about 500 MB. `mise run test:model` runs the tests that need it.
   or triple click for a word or a line, and Ctrl+C to copy
 - Screenshots to the clipboard, of a page or of a part of one dragged over,
   rendered at 300 dots per inch whatever the window's size and zoom
+- The document's images listed in the sidebar under the page each is on,
+  and copied to the clipboard as they are embedded, at their own
+  resolution and with their masks applied, with a click
 - Keyboard-driven navigation
 
 ## Keyboard shortcuts
@@ -127,7 +130,7 @@ alone. Ctrl is ⌘ on macOS.
 | M                                      | Dog-ear the page, to flip back to it          |
 | Tab                                    | Flip between the dog-ear and where you came from |
 | O, Ctrl+O                              | Open a PDF                                    |
-| T                                      | Show or hide the outline and thumbnails       |
+| T                                      | Show or hide the outline, thumbnails and images       |
 | Ctrl+Tab, Ctrl+Shift+Tab               | Next or previous tab                          |
 | Ctrl+1 to Ctrl+8, Ctrl+9               | That tab, the last tab                        |
 | Ctrl+W                                 | Close the tab                                 |

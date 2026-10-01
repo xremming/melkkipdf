@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Scratch, write_text_pdf};
-use melkkipdf::testing::{Area, Harness, Tabs};
+use melkkipdf::testing::{Area, Harness, Shot, Tabs};
 use slint::ComponentHandle;
 use slint::platform::{Key, WindowEvent};
 
@@ -43,7 +43,7 @@ fn a_click_takes_the_whole_page_and_leaves_the_mode() {
     let requests = h.take_screenshot_requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].page, 1);
-    assert_eq!(requests[0].area, None);
+    assert_eq!(requests[0].shot, Shot::Page);
     // The whole page flashes, and the next press selects text again.
     assert_eq!(h.screenshot_outline(), Some((1, area(0.0, 0.0, PAGE.0, PAGE.1), true)));
     assert!(!h.screenshot_mode());
@@ -62,7 +62,7 @@ fn a_drag_takes_the_part_of_the_page_it_outlines() {
 
     let requests = h.take_screenshot_requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].area, Some(area(50.0, 100.0, 50.0, 100.0)));
+    assert_eq!(requests[0].shot, Shot::Area(area(50.0, 100.0, 50.0, 100.0)));
     assert_eq!(h.screenshot_outline(), Some((0, area(50.0, 100.0, 50.0, 100.0), true)));
 }
 
@@ -73,14 +73,14 @@ fn a_drag_past_the_page_is_cut_at_its_edge_and_snaps_near_it() {
     drag(&h, 0, (100.0, 100.0), (900.0, 1000.0));
     let requests = h.take_screenshot_requests();
     assert_eq!(requests[0].page, 0);
-    assert_eq!(requests[0].area, Some(area(100.0, 100.0, 500.0, 700.0)));
+    assert_eq!(requests[0].shot, Shot::Area(area(100.0, 100.0, 500.0, 700.0)));
 
     // Within a few pixels of the left and right edges at 100% zoom, where
     // a point is 96/72 pixels.
     h.set_screenshot_mode(true);
     drag(&h, 1, (3.0, 100.0), (597.0, 200.0));
     let requests = h.take_screenshot_requests();
-    assert_eq!(requests[0].area, Some(area(0.0, 100.0, PAGE.0, 100.0)));
+    assert_eq!(requests[0].shot, Shot::Area(area(0.0, 100.0, PAGE.0, 100.0)));
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn a_press_selects_text_until_the_mode_is_on() {
     t.window.invoke_select_done();
     let requests = t.take_screenshot_requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].area, Some(area(74.0, 79.0, 100.0, 100.0)));
+    assert_eq!(requests[0].shot, Shot::Area(area(74.0, 79.0, 100.0, 100.0)));
     assert!(!mode.get_active());
 }
 

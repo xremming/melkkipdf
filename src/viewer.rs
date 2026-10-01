@@ -21,13 +21,16 @@ use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 
 use crate::render::{
-    Area, RenderControl, RenderRequest, WorkerMessage, buffer_bytes, capped_scale, scale_key,
+    RenderControl, RenderRequest, ScreenshotRequest, Shot, ThumbRequest, WorkerMessage,
+    buffer_bytes, capped_scale, scale_key,
 };
 use crate::screenshot::Capture;
-use crate::search::{self, Hit, PageText, Snippet};
+use crate::search::{self, Area, Hit, PageText, Snippet};
 use crate::selection::{TextPos, Unit};
 use crate::semantic::{self, Vectorizer, Vectors};
-use crate::{Highlight, MainWindow, PageEntry, PageLayout, PageRow, Screenshot, SearchResult};
+use crate::{
+    Highlight, ImageRow, MainWindow, PageEntry, PageLayout, PageRow, Screenshot, SearchResult,
+};
 
 /// How pages are grouped into rows.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -715,6 +718,9 @@ pub struct Viewer {
     model: Rc<VecModel<PageRow>>,
     /// The sidebar's thumbnails, grouped into rows like the pages.
     thumb_model: Rc<VecModel<PageRow>>,
+    /// The sidebar's list of the document's images, one row each, in page
+    /// order, as far as the pages have been indexed.
+    images: Rc<VecModel<ImageRow>>,
     window: Weak<MainWindow>,
     /// Whether this viewer's tab is the one shown. Only then may it write to the
     /// window, which every other tab's viewer shares.
@@ -722,7 +728,7 @@ pub struct Viewer {
     /// Requests to the document's page worker.
     sender: Sender<WorkerMessage>,
     /// Pages to the document's thumbnail worker.
-    thumb_sender: Sender<i32>,
+    thumb_sender: Sender<ThumbRequest>,
     /// Aborts a page render the view no longer wants.
     control: RenderControl,
     /// Renders the view once the viewport has stopped changing size.
@@ -754,7 +760,7 @@ pub struct Viewer {
 /// The channels to one document's background workers.
 pub struct Workers {
     pub(crate) pages: Sender<WorkerMessage>,
-    pub(crate) thumbnails: Sender<i32>,
+    pub(crate) thumbnails: Sender<ThumbRequest>,
     pub(crate) control: RenderControl,
     pub(crate) vectorizer: Vectorizer,
 }
@@ -807,6 +813,7 @@ impl Viewer {
             }),
             model,
             thumb_model,
+            images: Rc::new(VecModel::default()),
             window: window.as_weak(),
             active: Cell::new(false),
             sender,
@@ -876,6 +883,7 @@ impl Viewer {
             let inner = self.inner.borrow();
             window.set_rows(ModelRc::from(self.model.clone()));
             window.set_thumb_rows(ModelRc::from(self.thumb_model.clone()));
+            window.set_image_rows(ModelRc::from(self.images.clone()));
             window.set_page_count(inner.pages_pt.len() as i32);
             window.set_spread_mode(inner.spread.index());
             window.set_continuous(inner.continuous);
@@ -1307,7 +1315,7 @@ impl Viewer {
         let inner = self.inner.borrow();
         if let Some(&spec) = inner.specs.get(row) {
             for page in spec.pages() {
-                let _ = self.thumb_sender.send(page as i32);
+                let _ = self.thumb_sender.send(ThumbRequest::Page(page as i32));
             }
         }
     }
@@ -1780,6 +1788,7 @@ impl Viewer {
             if first_page != search.index.len() {
                 return;
             }
+            self.list_images(first_page, &pages);
             search.index.extend(pages);
             !search.query.trim().is_empty()
         };
@@ -1788,6 +1797,105 @@ impl Viewer {
             self.request_search();
         } else {
             self.publish_search();
+        }
+    }
+
+    /// Adds the images of `pages`, which the indexer read from `first_page`
+    /// on, to the sidebar's list.
+    fn list_images(&self, first_page: usize, pages: &[PageText]) {
+        let last = self.images.row_count().checked_sub(1).and_then(|row| self.images.row_data(row));
+        let mut headings = last.map_or(0, |row| row.headings);
+        for (offset, text) in pages.iter().enumerate() {
+            let page = (first_page + offset) as i32;
+            for spot in &text.images {
+                if spot.ordinal == 0 {
+                    headings += 1;
+                }
+                self.images.push(ImageRow {
+                    page,
+                    ordinal: spot.ordinal as i32,
+                    first_on_page: spot.ordinal == 0,
+                    headings,
+                    width: spot.width as i32,
+                    height: spot.height as i32,
+                    preview: Image::default(),
+                });
+            }
+        }
+        self.follow_images();
+    }
+
+    /// Tells the window which image row the list follows: the first image
+    /// on the page being read, or on the next page with any.
+    fn follow_images(&self) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let page = self.reading_page() as i32;
+        // The rows are in page order, so the first at or after the page is
+        // where they stop being before it.
+        let count = self.images.row_count();
+        let (mut low, mut high) = (0, count);
+        while low < high {
+            let middle = (low + high) / 2;
+            if self.images.row_data(middle).is_some_and(|row| row.page < page) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        window.set_image_current(if low < count { low as i32 } else { -1 });
+    }
+
+    /// The sidebar shows the image at `row` of its list, which wants its
+    /// preview.
+    pub fn request_preview(&self, row: usize) {
+        if let Some(item) = self.images.row_data(row)
+            && item.preview.size().width == 0
+        {
+            let request = ThumbRequest::Preview { page: item.page, ordinal: item.ordinal as usize };
+            let _ = self.thumb_sender.send(request);
+        }
+    }
+
+    /// The preview of the image drawn `ordinal`-th on `page` has rendered.
+    pub fn on_preview_rendered(&self, page: usize, ordinal: usize, preview: Image) {
+        let row = (0..self.images.row_count()).find(|&row| {
+            self.images
+                .row_data(row)
+                .is_some_and(|item| item.page == page as i32 && item.ordinal == ordinal as i32)
+        });
+        if let Some(row) = row
+            && let Some(mut item) = self.images.row_data(row)
+        {
+            item.preview = preview;
+            self.images.set_row_data(row, item);
+        }
+    }
+
+    /// The reader clicked the image at `row` of the sidebar's list: it is
+    /// copied as it is embedded, and its outline flashes on its page.
+    pub fn copy_image(&self, row: usize) {
+        let Some(item) = self.images.row_data(row) else {
+            return;
+        };
+        let (page, ordinal) = (item.page as usize, item.ordinal as usize);
+        let request = ScreenshotRequest { page: page as i32, shot: Shot::Image { ordinal } };
+        let _ = self.sender.send(WorkerMessage::Screenshot(request));
+        let bounds = self
+            .search
+            .borrow()
+            .index
+            .get(page)
+            .and_then(|text| text.images.get(ordinal))
+            .map(|spot| spot.bounds);
+        if let Some(bounds) = bounds
+            && let Some(window) = self.window()
+        {
+            let shot = window.global::<Screenshot>();
+            show_area(&shot, page, bounds);
+            shot.set_dragging(false);
+            shot.set_flashing(true);
         }
     }
 
@@ -2774,6 +2882,7 @@ impl Viewer {
         if let Some(window) = self.window() {
             window.set_current_page(page);
         }
+        self.follow_images();
     }
 }
 

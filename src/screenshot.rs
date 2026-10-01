@@ -6,7 +6,8 @@
 //! (see [`crate::render::screenshot_scale`]) rather than copy the window's
 //! pixels.
 
-use crate::render::{Area, ScreenshotRequest};
+use crate::render::{ScreenshotRequest, Shot};
+use crate::search::Area;
 
 /// How close to a page's edge, in logical pixels, a drag snaps onto it, so
 /// a strip across the whole page is easy to get.
@@ -67,17 +68,17 @@ impl Capture {
         let page = self.page as i32;
         if self.is_click(density) {
             let whole = Area { x: 0.0, y: 0.0, width, height };
-            (ScreenshotRequest { page, area: None }, whole)
+            (ScreenshotRequest { page, shot: Shot::Page }, whole)
         } else {
             let area = self.area(width, height, density);
-            (ScreenshotRequest { page, area: Some(area) }, area)
+            (ScreenshotRequest { page, shot: Shot::Area(area) }, area)
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Area, Capture};
+    use super::{Area, Capture, Shot};
 
     const PAGE: (f32, f32) = (600.0, 800.0);
 
@@ -119,7 +120,7 @@ mod tests {
         capture.reach = (102.0, 203.0);
         let (request, flash) = capture.request(PAGE.0, PAGE.1, 1.0);
         assert_eq!(request.page, 2);
-        assert_eq!(request.area, None);
+        assert_eq!(request.shot, Shot::Page);
         assert_eq!(flash, Area { x: 0.0, y: 0.0, width: PAGE.0, height: PAGE.1 });
         // The same movement at a lower density is further in pixels.
         assert!(!capture.is_click(2.0));
@@ -131,7 +132,7 @@ mod tests {
         capture.reach = (150.0, 260.0);
         let (request, flash) = capture.request(PAGE.0, PAGE.1, 1.0);
         let expected = Area { x: 100.0, y: 200.0, width: 50.0, height: 60.0 };
-        assert_eq!(request.area, Some(expected));
+        assert_eq!(request.shot, Shot::Area(expected));
         assert_eq!(flash, expected);
     }
 }

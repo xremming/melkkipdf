@@ -13,10 +13,12 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
-use mupdf::{Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap, Rect};
-use slint::{Image, Rgb8Pixel, SharedPixelBuffer, Weak};
+use mupdf::{ColorParams, Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap, Rect};
+use slint::{Image, Rgb8Pixel, Rgba8Pixel, SharedPixelBuffer, Weak};
 
 use crate::MainWindow;
+use crate::images;
+use crate::search::Area;
 
 /// Points to the cookie of the render currently in progress, so the UI thread
 /// can abort it. The address is valid only while `active`, which the worker sets
@@ -101,28 +103,38 @@ pub struct RenderRequest {
     pub prefetch: bool,
 }
 
-/// A part of a page, in points from its top-left corner.
+/// What of a page a screenshot is of.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Area {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
+pub enum Shot {
+    /// The whole page, rendered at screenshot resolution.
+    Page,
+    /// The area, rendered at screenshot resolution.
+    Area(Area),
+    /// The embedded image drawn `ordinal`-th on the page (see
+    /// [`crate::search::ImageSpot`]), at its own resolution.
+    Image { ordinal: usize },
 }
 
-/// A request for a screenshot: a page, or the `area` of it, rendered at
-/// screenshot resolution rather than at the window's.
+/// A request for a screenshot of a page, for the clipboard.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenshotRequest {
     pub page: i32,
-    pub area: Option<Area>,
+    pub shot: Shot,
 }
 
 /// A document's worker delivering the screenshot asked for, or why it could
 /// not take it.
 pub struct Screenshot {
     pub request: ScreenshotRequest,
-    pub result: Result<PageBuffer, String>,
+    pub result: Result<Picture, String>,
+}
+
+/// An image for the clipboard: `width`×`height` pixels of RGBA, with the
+/// alpha straight rather than premultiplied, as the clipboard wants it.
+pub struct Picture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 /// What a worker reads from a document before rendering any of it.
@@ -479,24 +491,28 @@ pub fn screenshot_scale(width_pt: f32, height_pt: f32) -> f32 {
     capped_scale(width_pt, height_pt, scale)
 }
 
-/// Renders a page, or the area of it asked for, at screenshot resolution.
-/// The pixmap covers the area alone, so MuPDF draws only what falls in it,
-/// and an area reaching past the page is cut at its edge.
-fn render_screenshot(
-    document: &Document,
-    request: &ScreenshotRequest,
-) -> Result<PageBuffer, Error> {
+/// Takes the screenshot asked for: a page or an area of it rendered at
+/// screenshot resolution, or an image embedded in the page at its own. The
+/// pixmap covers the area alone, so MuPDF draws only what falls in it, and
+/// an area reaching past the page is cut at its edge.
+fn render_screenshot(document: &Document, request: &ScreenshotRequest) -> Result<Picture, Error> {
     let page = document.load_page(request.page)?;
     let bounds = page.bounds()?;
-    let area = match request.area {
-        Some(area) => Rect::new(
+    let area = match request.shot {
+        Shot::Page => bounds,
+        Shot::Area(area) => Rect::new(
             bounds.x0 + area.x,
             bounds.y0 + area.y,
             bounds.x0 + area.x + area.width,
             bounds.y0 + area.y + area.height,
         )
         .intersect(&bounds),
-        None => bounds,
+        Shot::Image { ordinal } => {
+            let image = images::drawn_nth(&page, ordinal)?;
+            let (width, height) = (image.width() as f32, image.height() as f32);
+            let scale = (MAX_RENDER_PX / width.max(height)).min(1.0);
+            return Ok(picture(&draw_image(&image, width * scale, height * scale)?));
+        }
     };
     if area.is_empty() {
         return Err(Error::InvalidArgument("the area is off the page".into()));
@@ -511,19 +527,100 @@ fn render_screenshot(
         let device = Device::from_pixmap(&pixmap)?;
         page.run(&device, &ctm)?;
     }
-    Ok(pixmap_to_buffer(&pixmap))
+    Ok(picture(&pixmap))
+}
+
+/// Draws an embedded image into a pixmap of `width`×`height` pixels, as
+/// MuPDF draws it on a page: through its colour space, with its soft mask
+/// applied, which leaves the pixmap transparent where the mask hides it,
+/// and a stencil mask painted black. The mask is applied the way the page
+/// interpreter applies it, as a clip, since decoding alone leaves it out.
+/// Drawing the image smaller than it is has MuPDF decode it smaller, which
+/// keeps a huge scan affordable.
+fn draw_image(image: &mupdf::Image, width: f32, height: f32) -> Result<Pixmap, Error> {
+    let bbox = Rect::new(0.0, 0.0, width, height).round();
+    let mut pixmap = Pixmap::new_with_rect(&Colorspace::device_rgb(), bbox, true)?;
+    pixmap.clear()?;
+    {
+        let device = Device::from_pixmap(&pixmap)?;
+        let ctm = Matrix::new(width, 0.0, 0.0, height, 0.0, 0.0);
+        if image.color_space().is_some() {
+            let mask = image.mask();
+            if let Some(mask) = &mask {
+                device.clip_image_mask(mask, &ctm)?;
+            }
+            device.fill_image(image, &ctm, 1.0, ColorParams::default())?;
+            if mask.is_some() {
+                device.pop_clip()?;
+            }
+        } else {
+            let black = [0.0, 0.0, 0.0];
+            device.fill_image_mask(
+                image,
+                &ctm,
+                &Colorspace::device_rgb(),
+                &black,
+                1.0,
+                ColorParams::default(),
+            )?;
+        }
+    }
+    Ok(pixmap)
+}
+
+/// A pixmap's pixels as a picture for the clipboard: an opaque RGB pixmap
+/// gets a solid alpha, and one with alpha, which MuPDF keeps premultiplied,
+/// has its colours divided out again.
+fn picture(pixmap: &Pixmap) -> Picture {
+    let (width, height) = (pixmap.width(), pixmap.height());
+    let stride = pixmap.stride() as usize;
+    let samples = pixmap.samples();
+    let n = pixmap.n() as usize;
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height as usize {
+        let row = &samples[y * stride..y * stride + width as usize * n];
+        for pixel in row.chunks_exact(n) {
+            if pixmap.alpha() {
+                let alpha = pixel[3];
+                let straight = |value: u8| {
+                    if alpha == 0 { 0 } else { (value as u32 * 255 / alpha as u32).min(255) as u8 }
+                };
+                rgba.extend_from_slice(&[
+                    straight(pixel[0]),
+                    straight(pixel[1]),
+                    straight(pixel[2]),
+                    alpha,
+                ]);
+            } else {
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 0xff]);
+            }
+        }
+    }
+    Picture { width, height, rgba }
 }
 
 /// Target width, in pixels, for sidebar page thumbnails.
 const THUMB_WIDTH: f32 = 150.0;
 
-/// Spawns a separate worker that renders small page thumbnails on demand. It is
-/// deliberately independent of the main render pipeline: thumbnails are cheap,
-/// persistent (never aborted or epoch-dropped), and each page is rendered at
-/// most once. Send it 0-based page indices; results arrive via the window's
-/// `thumbnail-rendered` callback, tagged with `doc` like the pages of [`spawn`].
-pub fn spawn_thumbnails(path: String, doc: i32, window: Weak<MainWindow>) -> Sender<i32> {
-    let (sender, receiver) = mpsc::channel::<i32>();
+/// The longer side, in pixels, of an embedded image's preview in the sidebar.
+const PREVIEW_PX: f32 = 160.0;
+
+/// What the thumbnail worker is asked to render: a page's thumbnail, or the
+/// preview of the image drawn `ordinal`-th on a page, both by 0-based page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ThumbRequest {
+    Page(i32),
+    Preview { page: i32, ordinal: usize },
+}
+
+/// Spawns a separate worker that renders small page thumbnails and image
+/// previews on demand. It is deliberately independent of the main render
+/// pipeline: thumbnails are cheap, persistent (never aborted or
+/// epoch-dropped), and each is rendered at most once. Results arrive via the
+/// window's `thumbnail-rendered` and `preview-rendered` callbacks, tagged
+/// with `doc` like the pages of [`spawn`].
+pub fn spawn_thumbnails(path: String, doc: i32, window: Weak<MainWindow>) -> Sender<ThumbRequest> {
+    let (sender, receiver) = mpsc::channel::<ThumbRequest>();
     thread::spawn(move || {
         let name = display_name(&path);
         // The page renderer opens the same file and tells the reader when it
@@ -535,28 +632,78 @@ pub fn spawn_thumbnails(path: String, doc: i32, window: Weak<MainWindow>) -> Sen
                 return;
             }
         };
-        let mut done: HashSet<i32> = HashSet::new();
-        while let Ok(page) = receiver.recv() {
-            if !done.insert(page) {
+        let mut done: HashSet<ThumbRequest> = HashSet::new();
+        while let Ok(request) = receiver.recv() {
+            if !done.insert(request) {
                 continue;
             }
-            match render_thumbnail(&document, page) {
-                Ok(buffer) => {
-                    let _ = window.upgrade_in_event_loop(move |window| {
-                        window.invoke_thumbnail_rendered(doc, page, Image::from_rgb8(buffer));
-                    });
-                }
-                Err(err) => {
-                    let number = page + 1;
-                    eprintln!("Failed to render the thumbnail of page {number} of {name}: {err}.");
-                    let _ = window.upgrade_in_event_loop(move |window| {
-                        window.invoke_thumbnail_failed(doc, page);
-                    });
+            match request {
+                ThumbRequest::Page(page) => match render_thumbnail(&document, page) {
+                    Ok(buffer) => {
+                        let _ = window.upgrade_in_event_loop(move |window| {
+                            window.invoke_thumbnail_rendered(doc, page, Image::from_rgb8(buffer));
+                        });
+                    }
+                    Err(err) => {
+                        let number = page + 1;
+                        eprintln!(
+                            "Failed to render the thumbnail of page {number} of {name}: {err}."
+                        );
+                        let _ = window.upgrade_in_event_loop(move |window| {
+                            window.invoke_thumbnail_failed(doc, page);
+                        });
+                    }
+                },
+                ThumbRequest::Preview { page, ordinal } => {
+                    match render_preview(&document, page, ordinal) {
+                        Ok(buffer) => {
+                            let _ = window.upgrade_in_event_loop(move |window| {
+                                window.invoke_preview_rendered(
+                                    doc,
+                                    page,
+                                    ordinal as i32,
+                                    Image::from_rgba8(buffer),
+                                );
+                            });
+                        }
+                        Err(err) => {
+                            let number = page + 1;
+                            eprintln!(
+                                "Failed to render a preview of image {} of page {number} of {name}: {err}.",
+                                ordinal + 1
+                            );
+                        }
+                    }
                 }
             }
         }
     });
     sender
+}
+
+/// Renders the image drawn `ordinal`-th on `page` at preview size. The
+/// alpha is left premultiplied, which is how Slint wants it.
+fn render_preview(
+    document: &Document,
+    page: i32,
+    ordinal: usize,
+) -> Result<SharedPixelBuffer<Rgba8Pixel>, Error> {
+    let page = document.load_page(page)?;
+    let image = images::drawn_nth(&page, ordinal)?;
+    let (width, height) = (image.width().max(1) as f32, image.height().max(1) as f32);
+    let scale = (PREVIEW_PX / width.max(height)).min(1.0);
+    let pixmap = draw_image(&image, (width * scale).max(1.0), (height * scale).max(1.0))?;
+    let (width, height) = (pixmap.width(), pixmap.height());
+    let stride = pixmap.stride() as usize;
+    let samples = pixmap.samples();
+    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
+    let destination = buffer.make_mut_bytes();
+    let row_bytes = width as usize * 4;
+    for y in 0..height as usize {
+        destination[y * row_bytes..(y + 1) * row_bytes]
+            .copy_from_slice(&samples[y * stride..y * stride + row_bytes]);
+    }
+    Ok(buffer)
 }
 
 /// Renders one page at thumbnail size.
@@ -662,10 +809,11 @@ mod tests {
     use mupdf::{Cookie, Size};
 
     use super::{
-        AbortSlot, Area, LruCache, MAX_RENDER_PX, Registration, RenderControl, RenderRequest,
-        SCREENSHOT_DPI, SCREENSHOT_MIN_PX, ScreenshotRequest, capped_scale, render_page,
+        AbortSlot, LruCache, MAX_RENDER_PX, Registration, RenderControl, RenderRequest,
+        SCREENSHOT_DPI, SCREENSHOT_MIN_PX, ScreenshotRequest, Shot, capped_scale, render_page,
         render_screenshot, screenshot_scale,
     };
+    use crate::search::Area;
 
     #[test]
     fn a_registration_withdraws_its_cookie_even_on_a_panic() {
@@ -763,20 +911,25 @@ mod tests {
         let mut document = PdfDocument::new();
         document.new_page(Size::A4).unwrap();
         let area = Area { x: 100.0, y: 100.0, width: 200.0, height: 100.0 };
-        let request = ScreenshotRequest { page: 0, area: Some(area) };
-        let buffer = render_screenshot(&document, &request).unwrap();
-        assert_eq!((buffer.width(), buffer.height()), (1600, 800));
+        let request = ScreenshotRequest { page: 0, shot: Shot::Area(area) };
+        let picture = render_screenshot(&document, &request).unwrap();
+        assert_eq!((picture.width, picture.height), (1600, 800));
+        assert_eq!(picture.rgba.len(), 1600 * 800 * 4);
+        assert!(picture.rgba.iter().all(|&byte| byte == 0xff), "blank paper is opaque white");
 
         // An area reaching past the page is cut at its edge, and one off
         // the page is refused.
         let area = Area { x: 500.0, y: 0.0, width: 200.0, height: 100.0 };
-        let request = ScreenshotRequest { page: 0, area: Some(area) };
-        let buffer = render_screenshot(&document, &request).unwrap();
+        let request = ScreenshotRequest { page: 0, shot: Shot::Area(area) };
+        let picture = render_screenshot(&document, &request).unwrap();
         let page_width = document.load_page(0).unwrap().bounds().unwrap().width();
-        assert!((buffer.width() as f32 - (page_width - 500.0) * 16.0).abs() <= 1.0);
-        assert_eq!(buffer.height(), 1600);
+        assert!((picture.width as f32 - (page_width - 500.0) * 16.0).abs() <= 1.0);
+        assert_eq!(picture.height, 1600);
         let area = Area { x: 700.0, y: 0.0, width: 200.0, height: 100.0 };
-        let request = ScreenshotRequest { page: 0, area: Some(area) };
+        let request = ScreenshotRequest { page: 0, shot: Shot::Area(area) };
+        assert!(render_screenshot(&document, &request).is_err());
+        // An image a blank page does not have is refused too.
+        let request = ScreenshotRequest { page: 0, shot: Shot::Image { ordinal: 0 } };
         assert!(render_screenshot(&document, &request).is_err());
     }
 

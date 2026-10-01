@@ -81,6 +81,22 @@ export struct PageRow {
     scale: float,
 }
 
+// An image embedded in the document, for the sidebar's list: the 0-based
+// page it is drawn on, its place among that page's images, whether it is
+// the first there, so the page's heading goes above it, how many headings
+// there are up to and including its own, which places the row in the list,
+// how many pixels it has of its own, and its preview once rendered (an
+// empty image until).
+export struct ImageRow {
+    page: int,
+    ordinal: int,
+    first-on-page: bool,
+    headings: int,
+    width: int,
+    height: int,
+    preview: image,
+}
+
 // One entry in the document outline (table of contents).
 export struct OutlineItem {
     title: string,
@@ -704,11 +720,40 @@ export component MainWindow inherits Window {
     in-out property <string> notice;
 
     // Sidebar: the document outline, thumbnail rows (grouped like the current
-    // spread mode), and which tab is showing (0 = outline, 1 = pages).
+    // spread mode), the document's images, and which tab is showing
+    // (0 = outline, 1 = pages, 2 = images).
     in property <[OutlineItem]> outline;
     in property <[PageRow]> thumb-rows;
+    in property <[ImageRow]> image-rows;
     in-out property <bool> sidebar-open: true;
     in-out property <int> sidebar-tab;
+    // A visible image row wants its preview (row index); a preview has
+    // rendered (document id, page, ordinal, image), invoked from Rust; and
+    // the reader clicked a row to copy its image.
+    callback request-preview(int);
+    callback preview-rendered(int, int, int, image);
+    callback copy-image(int);
+    // The row of the first image on the page being read, or on the next
+    // page with any, which the list follows (see the list). -1 while there
+    // is none.
+    in property <int> image-current: -1;
+    property <length> image-row-height: 150px;
+    property <length> image-heading-height: 28px;
+    // The row last clicked pulses: it is lit for one tick of the timer and
+    // fades out from there, as the page outline does for a screenshot.
+    in-out property <int> copied-row: -1;
+    property <bool> copied-row-lit;
+    function flash-row(row: int) {
+        root.copied-row = row;
+        root.copied-row-lit = true;
+    }
+    Timer {
+        interval: 40ms;
+        running: root.copied-row-lit;
+        triggered => {
+            root.copied-row-lit = false;
+        }
+    }
 
     // The reader's bookmarks, drawn as flags on the page edge, and the
     // 0-based page Tab flips back to (-1 while there is none).
@@ -1351,7 +1396,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             Tooltip {
-                                text: @markdown("Outline and thumbnails (T)");
+                                text: @markdown("Outline, thumbnails and images (T)");
                             }
                         }
                     }
@@ -1571,6 +1616,20 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
+                            Rectangle {
+                                background: root.sidebar-tab == 2 ? #3a3a3a : #2a2a2a;
+                                Text {
+                                    text: "Images";
+                                    color: #dddddd;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => {
+                                        root.sidebar-tab = 2;
+                                    }
+                                }
+                            }
                         }
                         Rectangle {
                             height: 1px;
@@ -1636,6 +1695,129 @@ export component MainWindow inherits Window {
                                 }
                                 init => {
                                     root.request-thumbnail-row(idx);
+                                }
+                            }
+                        }
+
+                        // The document's images, under the page each is on,
+                        // as far as the pages have been indexed. A click
+                        // copies the image as it is embedded.
+                        if root.sidebar-tab == 2 && root.image-rows.length == 0: Text {
+                            text: root.page-count > 0 ? "No images so far." : "";
+                            color: #999999;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        if root.sidebar-tab == 2: Rectangle {
+                            // On opening, the list knows neither its height
+                            // nor its rows' until it has been laid out, and
+                            // clamps a scroll set before that to the top, so
+                            // the first scroll waits a tick.
+                            property <bool> opening: true;
+                            Timer {
+                                interval: 16ms;
+                                running: parent.opening;
+                                triggered => {
+                                    parent.opening = false;
+                                    image-list.follow(true);
+                                }
+                            }
+                            image-list := ListView {
+                                // When the page being read changes, its row goes
+                                // to the top of the list unless it is in view
+                                // already, and it starts there when the tab
+                                // opens. The list only builds the rows it shows,
+                                // so where the row sits is worked out from the
+                                // headings above it.
+                                property <int> current: root.image-current;
+                                changed current => { self.follow(false); }
+                                function follow(always: bool) {
+                                    if (self.current < 0 || self.current >= root.image-rows.length) {
+                                        return;
+                                    }
+                                    let item = root.image-rows[self.current];
+                                    let top = self.current * root.image-row-height
+                                        + (item.headings - (item.first-on-page ? 1 : 0)) * root.image-heading-height;
+                                    let bottom = top + root.image-row-height
+                                        + (item.first-on-page ? root.image-heading-height : 0px);
+                                    let view-top = -self.content-y;
+                                    if (always || top < view-top || bottom > view-top + self.visible-height) {
+                                        self.content-y = -top;
+                                    }
+                                }
+                                for item[idx] in root.image-rows: Rectangle {
+                                    height: (item.first-on-page ? root.image-heading-height : 0) + root.image-row-height;
+                                    VerticalLayout {
+                                        if item.first-on-page: HorizontalLayout {
+                                            height: root.image-heading-height;
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            Text {
+                                                text: "Page \{item.page + 1}";
+                                                color: item.page == root.current-page - 1 ? #dddddd : #999999;
+                                                vertical-alignment: center;
+                                            }
+                                            heading-touch := TouchArea {
+                                                clicked => {
+                                                    root.go-to-page-index(item.page);
+                                                }
+                                            }
+                                        }
+                                        Rectangle {
+                                            height: root.image-row-height;
+                                            background: image-touch.has-hover ? #333333 : transparent;
+                                            VerticalLayout {
+                                                padding-top: 6px;
+                                                spacing: 4px;
+                                                Rectangle {
+                                                    height: 120px;
+                                                    Image {
+                                                        source: item.preview;
+                                                        width: min(parent.width - 20px, 160px);
+                                                        height: 120px;
+                                                        image-fit: contain;
+                                                    }
+                                                    if item.preview.width == 0: Spinner {
+                                                        width: 24px;
+                                                        height: 24px;
+                                                        x: (parent.width - self.width) / 2;
+                                                        y: (parent.height - self.height) / 2;
+                                                        indeterminate: true;
+                                                    }
+                                                }
+                                                Text {
+                                                    text: "\{item.width} × \{item.height}";
+                                                    color: #999999;
+                                                    horizontal-alignment: center;
+                                                }
+                                            }
+                                            image-touch := TouchArea {
+                                                clicked => {
+                                                    key-handler.focus();
+                                                    root.copy-image(idx);
+                                                    root.flash-row(idx);
+                                                }
+                                            }
+                                            // The row pulses as the image is copied,
+                                            // the way the page outline does.
+                                            Rectangle {
+                                                background: #3390ff;
+                                                opacity: 0;
+                                                states [
+                                                    lit when root.copied-row == idx && root.copied-row-lit: {
+                                                        opacity: 0.5;
+                                                    }
+                                                    faded when root.copied-row == idx && !root.copied-row-lit: {
+                                                        opacity: 0;
+                                                        in { animate opacity { duration: 600ms; easing: ease-out; } }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }
+                                    init => {
+                                        root.request-preview(idx);
+                                    }
                                 }
                             }
                         }
@@ -2267,7 +2449,7 @@ export component MainWindow inherits Window {
                             HelpSection {
                                 title: "Tabs, files and help";
                                 HelpRow { keys: "O, \{root.command-key}O"; action: "Open a PDF"; }
-                                HelpRow { keys: "T"; action: "Show or hide the outline and thumbnails"; }
+                                HelpRow { keys: "T"; action: "Show or hide the outline, thumbnails and images"; }
                                 HelpRow { keys: "Ctrl+Tab, Ctrl+Shift+Tab"; action: "Next or previous tab"; }
                                 HelpRow { keys: "\{root.command-key}1 to \{root.command-key}9"; action: "That tab, or the last one"; }
                                 HelpRow { keys: "\{root.command-key}W"; action: "Close the tab"; }

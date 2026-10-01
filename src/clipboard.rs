@@ -63,17 +63,11 @@ impl Clipboard {
     }
 
     /// Puts an image of `width`×`height` pixels on the clipboard, from its
-    /// tightly packed RGB bytes.
-    pub fn set_image(&self, width: u32, height: u32, rgb: &[u8]) {
+    /// tightly packed RGBA bytes.
+    pub fn set_image(&self, width: u32, height: u32, rgba: Vec<u8>) {
         #[cfg(feature = "testing")]
         {
             *self.copied_image.borrow_mut() = Some((width, height));
-        }
-        // The clipboard takes RGBA, so the paper gets an opaque alpha.
-        let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
-        for pixel in rgb.chunks_exact(3) {
-            rgba.extend_from_slice(pixel);
-            rgba.push(0xff);
         }
         let image =
             ImageData { width: width as usize, height: height as usize, bytes: Cow::Owned(rgba) };

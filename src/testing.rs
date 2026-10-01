@@ -24,7 +24,8 @@ use crate::settings::Store;
 use crate::{App, FileDrag, MainWindow, OutlineItem, PageLayout, ViewSettings, Viewer, Workers};
 
 pub use crate::Screenshot;
-pub use crate::render::Area;
+pub use crate::render::{Shot, ThumbRequest};
+pub use crate::search::{Area, ImageSpot};
 pub use crate::semantic::EmbeddingModel;
 
 /// A window + viewer pair for tests, plus convenience accessors.
@@ -37,8 +38,9 @@ pub struct Harness {
     // Screenshot requests taken off the channel while looking for renders,
     // kept for [`Harness::take_screenshot_requests`].
     shots: RefCell<Vec<ScreenshotRequest>>,
-    // Kept alive so thumbnail requests have a receiver.
-    _thumb_requests: Receiver<i32>,
+    // Kept so thumbnail and preview requests have a live receiver; tests can
+    // drain it.
+    thumb_requests: Receiver<ThumbRequest>,
     // Where the viewer's vectorizer sends page vectors, which
     // [`Harness::finish_vectorizing`] hands on, there being no event loop
     // to do it.
@@ -80,7 +82,7 @@ impl Harness {
     pub fn with_model(pages: Vec<(f32, f32)>, model: EmbeddingModel) -> Self {
         let window = new_window();
         let (sender, requests) = mpsc::channel();
-        let (thumb_sender, _thumb_requests) = mpsc::channel();
+        let (thumb_sender, thumb_requests) = mpsc::channel();
         let (vector_sender, vectors) = mpsc::channel();
         let vectorizer = Vectorizer::new(0, Arc::new(model), vector_sender, window.as_weak());
         let workers = Workers {
@@ -91,7 +93,7 @@ impl Harness {
         };
         let viewer = Viewer::new(&window, pages, 1.0, workers, &ViewSettings::default());
         viewer.activate();
-        Self { window, viewer, requests, shots: RefCell::new(Vec::new()), _thumb_requests, vectors }
+        Self { window, viewer, requests, shots: RefCell::new(Vec::new()), thumb_requests, vectors }
     }
 
     /// Waits for the viewer's vectorizer to finish each batch it has going
@@ -145,6 +147,16 @@ impl Harness {
         self.shots.take()
     }
 
+    /// Drains and returns the thumbnails and previews the viewer has asked
+    /// its worker for, in order.
+    pub fn take_thumb_requests(&self) -> Vec<ThumbRequest> {
+        let mut requests = Vec::new();
+        while let Ok(request) = self.thumb_requests.try_recv() {
+            requests.push(request);
+        }
+        requests
+    }
+
     /// Whether the window is in screenshot mode.
     pub fn screenshot_mode(&self) -> bool {
         self.window.global::<Screenshot>().get_active()
@@ -192,6 +204,19 @@ impl Harness {
     /// one of the batches the indexer sends.
     pub fn index_text_from(&self, first_page: usize, pages: &[&[&str]]) {
         self.viewer.on_text_indexed(first_page, text_pages(pages));
+    }
+
+    /// Indexes pages from `first_page` on that have no text but the given
+    /// images, each as `(bounds, pixel width, pixel height)`, as one of the
+    /// batches the indexer sends.
+    pub fn index_images_from(&self, first_page: usize, pages: &[&[(Area, u32, u32)]]) {
+        self.viewer.on_text_indexed(first_page, image_pages(pages));
+    }
+
+    /// The sidebar's list of images, as (page, ordinal, first on its page,
+    /// width, height, whether its preview has arrived).
+    pub fn image_rows(&self) -> Vec<(i32, i32, bool, i32, i32, bool)> {
+        image_rows(&self.window)
     }
 
     /// The hits the search outlines on the 0-based `page`, as `(y, current)`
@@ -293,6 +318,46 @@ impl Harness {
 /// Page text as the indexer would read it, each page a list of lines. Lines
 /// start 72pt from the top and are 14pt tall and 20pt apart, and each
 /// character is 7pt wide from 72pt in.
+/// Pages with no text but images, for [`Harness::index_images_from`].
+fn image_pages(pages: &[&[(Area, u32, u32)]]) -> Vec<PageText> {
+    pages
+        .iter()
+        .map(|images| {
+            let mut page = PageTextBuilder::default().finish();
+            page.images = images
+                .iter()
+                .enumerate()
+                .map(|(ordinal, &(bounds, width, height))| ImageSpot {
+                    ordinal,
+                    bounds,
+                    width,
+                    height,
+                })
+                .collect();
+            page
+        })
+        .collect()
+}
+
+/// The window's list of images, as (page, ordinal, first on its page,
+/// width, height, whether its preview has arrived).
+fn image_rows(window: &MainWindow) -> Vec<(i32, i32, bool, i32, i32, bool)> {
+    let model = window.get_image_rows();
+    (0..model.row_count())
+        .filter_map(|index| model.row_data(index))
+        .map(|row| {
+            (
+                row.page,
+                row.ordinal,
+                row.first_on_page,
+                row.width,
+                row.height,
+                row.preview.size().width > 0,
+            )
+        })
+        .collect()
+}
+
 fn text_pages(pages: &[&[&str]]) -> Vec<PageText> {
     pages
         .iter()
@@ -357,7 +422,7 @@ pub struct Tabs {
     pub window: MainWindow,
     app: Rc<App>,
     // Kept so each document's render requests have a live receiver.
-    receivers: RefCell<Vec<(Receiver<WorkerMessage>, Receiver<i32>)>>,
+    receivers: RefCell<Vec<(Receiver<WorkerMessage>, Receiver<ThumbRequest>)>>,
 }
 
 impl Default for Tabs {
@@ -544,6 +609,18 @@ impl Tabs {
         requests
     }
 
+    /// Drains and returns the thumbnails and previews every document opened
+    /// with [`Tabs::open`] or [`Tabs::open_file`] has asked its worker for.
+    pub fn take_thumb_requests(&self) -> Vec<ThumbRequest> {
+        let mut requests = Vec::new();
+        for (_, thumbs) in self.receivers.borrow().iter() {
+            while let Ok(request) = thumbs.try_recv() {
+                requests.push(request);
+            }
+        }
+        requests
+    }
+
     /// The width and height of the image last copied, if any.
     pub fn copied_image(&self) -> Option<(u32, u32)> {
         self.app.clipboard.copied_image()
@@ -597,6 +674,12 @@ impl Tabs {
     /// one entry per page holding the page's lines.
     pub fn index_text(&self, index: usize, pages: &[&[&str]]) {
         self.viewer(index).on_text_indexed(0, text_pages(pages));
+    }
+
+    /// The sidebar's list of images, as (page, ordinal, first on its page,
+    /// width, height, whether its preview has arrived).
+    pub fn image_rows(&self) -> Vec<(i32, i32, bool, i32, i32, bool)> {
+        image_rows(&self.window)
     }
 
     /// The 0-based pages of the flags on the page edge, in the order drawn,

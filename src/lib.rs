@@ -7,6 +7,7 @@
 #[cfg(unix)]
 mod clipboard;
 mod color;
+mod images;
 mod instance;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -35,6 +36,7 @@ use search::{IndexHandle, Indexed};
 use semantic::{Vectorized, Vectorizer};
 use settings::{Bookmark, PALETTE, SHAPES, Session, Shape, Store};
 
+pub use render::ThumbRequest;
 pub use viewer::{FitMode, SearchMode, Spread, ViewSettings, Viewer, Workers};
 
 slint::include_modules!();
@@ -396,7 +398,7 @@ impl App {
     pub(crate) fn take_screenshot(&self, shot: Shot) {
         let number = shot.request.page + 1;
         match shot.result {
-            Ok(image) => self.clipboard.set_image(image.width(), image.height(), image.as_bytes()),
+            Ok(picture) => self.clipboard.set_image(picture.width, picture.height, picture.rgba),
             Err(err) => self.notify(&format!("Page {number} could not be screenshot: {err}.")),
         }
     }
@@ -790,6 +792,7 @@ impl App {
     fn clear_document(window: &MainWindow, status: &str) {
         window.set_rows(ModelRc::default());
         window.set_thumb_rows(ModelRc::default());
+        window.set_image_rows(ModelRc::default());
         window.set_page_count(0);
         window.set_current_page(0);
         window.set_status(status.into());
@@ -1290,6 +1293,30 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         move |page| {
             if let Some(page) = index(page) {
                 app.with_viewer(|v| v.nav_to_page(page));
+            }
+        }
+    });
+    window.on_request_preview({
+        let app = app.clone();
+        move |row| {
+            if let Some(row) = index(row) {
+                app.with_viewer(|v| v.request_preview(row));
+            }
+        }
+    });
+    window.on_preview_rendered({
+        let app = app.clone();
+        move |doc, page, ordinal, image| {
+            if let (Some(page), Some(ordinal)) = (index(page), index(ordinal)) {
+                app.with_document(doc, |v| v.on_preview_rendered(page, ordinal, image));
+            }
+        }
+    });
+    window.on_copy_image({
+        let app = app.clone();
+        move |row| {
+            if let Some(row) = index(row) {
+                app.with_viewer(|v| v.copy_image(row));
             }
         }
     });
