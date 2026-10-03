@@ -46,6 +46,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.11.2" date="2026-10-03">
+      <description>
+        <p>
+          Screenshots of a part of a page are now rendered at the same 300
+          dots per inch as a whole page, instead of being blown up when the
+          part is small. Clips cut from the same document keep their sizes
+          relative to each other, and to the page, when pasted side by side.
+        </p>
+      </description>
+    </release>
     <release version="0.11.1" date="2026-10-03">
       <description>
         <p>
