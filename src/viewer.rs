@@ -630,6 +630,29 @@ struct ImageState {
 
 /// The page being read when `spec` is the row at the top: the page last asked
 /// for if the row holds it, otherwise the row's first page.
+/// The outline entries the 0-based pages `shown` belong to, from the page
+/// each entry goes to in the order they are listed. Every entry that goes
+/// to one of the pages is theirs, in list order. Where none does, the pages
+/// are still in the section begun last before them, which is the last
+/// listed of the entries going to the nearest earlier page with any. An
+/// entry that goes nowhere belongs to no page, and pages before the first
+/// heading belong to none.
+pub(crate) fn headings_for(pages: &[i32], shown: &[i32]) -> Vec<usize> {
+    let on_shown: Vec<usize> =
+        (0..pages.len()).filter(|&index| shown.contains(&pages[index])).collect();
+    if !on_shown.is_empty() {
+        return on_shown;
+    }
+    let Some(&last) = shown.iter().max() else {
+        return Vec::new();
+    };
+    let nearest = pages.iter().copied().filter(|heading| (0..=last).contains(heading)).max();
+    nearest
+        .and_then(|nearest| pages.iter().rposition(|&heading| heading == nearest))
+        .into_iter()
+        .collect()
+}
+
 fn reading_page_in(inner: &Inner, spec: &RowSpec) -> usize {
     if spec.right == Some(inner.reading_page) { inner.reading_page } else { spec.left }
 }
@@ -701,6 +724,11 @@ struct Inner {
     pages_pt: Vec<(f32, f32)>,
     /// Every page's links, once the worker has read them.
     links: Vec<Vec<PageLink>>,
+    /// The page each outline entry goes to, in the order the sidebar lists
+    /// them, -1 for one that goes nowhere.
+    outline_pages: Vec<i32>,
+    /// The outline entries marked as the ones the pages shown belong to.
+    outline_marked: Vec<usize>,
     /// The gap between rows and between the pages of a spread, in logical
     /// pixels, as the window's `PageLayout` lays them out.
     row_gap: f32,
@@ -777,6 +805,9 @@ pub struct Viewer {
     model: Rc<VecModel<PageRow>>,
     /// The sidebar's thumbnails, grouped into rows like the pages.
     thumb_model: Rc<VecModel<PageRow>>,
+    /// For each outline entry, whether it is marked as one the pages
+    /// shown belong to.
+    outline_marks: Rc<VecModel<bool>>,
     /// The document's images as the cataloguer has read them, and what the
     /// sidebar's list is built from them with.
     images: RefCell<ImageState>,
@@ -846,6 +877,8 @@ impl Viewer {
             inner: RefCell::new(Inner {
                 pages_pt,
                 links: Vec::new(),
+                outline_pages: Vec::new(),
+                outline_marked: Vec::new(),
                 row_gap: window.global::<PageLayout>().get_row_gap(),
                 spread_spacing: window.global::<PageLayout>().get_spread_spacing(),
                 zoom: settings.zoom.clamp(MIN_ZOOM, MAX_ZOOM),
@@ -879,6 +912,7 @@ impl Viewer {
             thumb_model,
             images: RefCell::new(ImageState { filters, ..ImageState::default() }),
             image_rows: Rc::new(VecModel::default()),
+            outline_marks: Rc::new(VecModel::default()),
             window: window.as_weak(),
             active: Cell::new(false),
             sender,
@@ -949,6 +983,7 @@ impl Viewer {
             window.set_rows(ModelRc::from(self.model.clone()));
             window.set_thumb_rows(ModelRc::from(self.thumb_model.clone()));
             window.set_image_rows(ModelRc::from(self.image_rows.clone()));
+            window.set_outline_marks(ModelRc::from(self.outline_marks.clone()));
             window.set_page_count(inner.pages_pt.len() as i32);
             window.set_spread_mode(inner.spread.index());
             window.set_continuous(inner.continuous);
@@ -2471,6 +2506,45 @@ impl Viewer {
         }
     }
 
+    /// The page each outline entry goes to, in the order they are listed,
+    /// for the sidebar to mark the one the page being read is under.
+    pub fn set_outline_pages(&self, pages: Vec<i32>) {
+        self.outline_marks.set_vec(vec![false; pages.len()]);
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.outline_pages = pages;
+            inner.outline_marked.clear();
+        }
+        self.update_current_page();
+    }
+
+    /// Marks the outline entries the pages shown belong to: those of the
+    /// row the counter's `page` is in, both pages of a spread. Only the
+    /// entries whose mark changes are touched, and the list is never
+    /// scrolled, so it stays where the reader left it.
+    fn mark_outline(&self, page: i32) {
+        let marked = {
+            let inner = self.inner.borrow();
+            let shown: Vec<i32> = usize::try_from(page - 1)
+                .ok()
+                .and_then(|page| inner.page_loc.get(page))
+                .and_then(|&(row, _)| inner.specs.get(row))
+                .map(|spec| spec.pages().map(|page| page as i32).collect())
+                .unwrap_or_default();
+            headings_for(&inner.outline_pages, &shown)
+        };
+        let unmarked =
+            std::mem::replace(&mut self.inner.borrow_mut().outline_marked, marked.clone());
+        for index in unmarked.into_iter().filter(|index| !marked.contains(index)) {
+            self.outline_marks.set_row_data(index, false);
+        }
+        for &index in &marked {
+            if self.outline_marks.row_data(index) == Some(false) {
+                self.outline_marks.set_row_data(index, true);
+            }
+        }
+    }
+
     /// The document's links, page by page, once the worker has read them.
     pub fn set_links(&self, links: Vec<Vec<PageLink>>) {
         self.inner.borrow_mut().links = links;
@@ -3126,12 +3200,39 @@ impl Viewer {
         if let Some(window) = self.window() {
             window.set_current_page(page);
         }
+        // The marks follow the page the counter shows, so the two agree.
+        self.mark_outline(page);
         self.follow_images();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pages_belong_to_their_headings_or_to_the_section_begun_before_them() {
+        use super::headings_for;
+        let pages = [0, 4, 6, -1, 6, 10];
+        assert_eq!(headings_for(&pages, &[0]), [0]);
+        assert_eq!(headings_for(&pages, &[3]), [0]);
+        assert_eq!(headings_for(&pages, &[5]), [1]);
+        // A page that begins two sections belongs to both.
+        assert_eq!(headings_for(&pages, &[6]), [2, 4]);
+        // After it, the pages are in the second.
+        assert_eq!(headings_for(&pages, &[9]), [4]);
+        assert_eq!(headings_for(&pages, &[30]), [5]);
+        // A spread belongs to the headings on both of its pages.
+        assert_eq!(headings_for(&pages, &[4, 5]), [1]);
+        assert_eq!(headings_for(&pages, &[5, 6]), [2, 4]);
+        assert_eq!(headings_for(&pages, &[3, 4]), [1]);
+        assert_eq!(headings_for(&pages, &[7, 8]), [4]);
+        // An outline out of page order still finds the nearest page.
+        assert_eq!(headings_for(&[8, 2, 5], &[6]), [2]);
+        assert!(headings_for(&[3, 5], &[1]).is_empty());
+        assert!(headings_for(&[], &[1]).is_empty());
+        assert!(headings_for(&[-1], &[1]).is_empty());
+        assert!(headings_for(&pages, &[]).is_empty());
+    }
+
     use std::sync::mpsc::Sender;
 
     use slint::ComponentHandle;

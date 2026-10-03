@@ -9,6 +9,7 @@ mod common;
 use std::path::Path;
 
 use common::{Scratch, write_pdf};
+use melkkipdf::Spread;
 use melkkipdf::testing::Tabs;
 use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, Model, SharedString};
@@ -64,6 +65,61 @@ fn flags_are_drawn_in_page_order() {
 
     t.window.invoke_remove_bookmark(7);
     assert_eq!(flagged(&t), [2, 11]);
+}
+
+/// The outline entries marked as the ones the pages shown belong to.
+fn marked(t: &Tabs) -> Vec<usize> {
+    let marks = t.window.get_outline_marks();
+    (0..marks.row_count()).filter(|&index| marks.row_data(index) == Some(true)).collect()
+}
+
+#[test]
+fn the_outline_marks_the_headings_of_the_pages_shown() {
+    let t = tabs();
+    t.open_outlined(
+        "a.pdf",
+        vec![(600.0, 800.0); 20],
+        &[
+            ("Cover", -1, 0),
+            ("Methods", 4, 0),
+            ("Sampling", 6, 1),
+            ("Weighting", 6, 1),
+            ("Design", 7, 1),
+            ("Results", 10, 0),
+        ],
+    );
+    // Before the first heading, and on the cover, which goes nowhere.
+    assert!(marked(&t).is_empty());
+    let at = |page: &str| {
+        t.viewer(0).go_to_page(page);
+        marked(&t)
+    };
+    assert_eq!(at("5"), [1]);
+    assert_eq!(at("6"), [1]);
+    // A page that begins two sections marks both.
+    assert_eq!(at("7"), [2, 3]);
+    assert_eq!(at("8"), [4]);
+    // The pages after a heading are in its section.
+    assert_eq!(at("10"), [4]);
+    assert_eq!(at("11"), [5]);
+    assert_eq!(at("20"), [5]);
+    assert!(at("2").is_empty());
+
+    // A spread marks the headings on both of its pages, here pages 7 and 8.
+    t.viewer(0).set_spread(Spread::Odd);
+    assert_eq!(at("7"), [2, 3, 4]);
+    assert_eq!(at("8"), [2, 3, 4]);
+    assert_eq!(at("5"), [1]);
+    assert_eq!(at("9"), [4]);
+    t.viewer(0).set_spread(Spread::None);
+
+    // Another tab has its own outline, here none, and coming back finds
+    // the marks where they were.
+    t.viewer(0).go_to_page("8");
+    t.open("b.pdf", 5);
+    assert!(marked(&t).is_empty());
+    t.window.invoke_select_tab(0);
+    assert_eq!(marked(&t), [4]);
 }
 
 #[test]

@@ -786,6 +786,10 @@ export component MainWindow inherits Window {
     in property <int> spread-mode;
     // 1-based page currently at the top of the view, and total page count.
     in property <int> current-page;
+    // For each outline entry, whether the pages shown belong to it: every
+    // entry going to one of them, or where none does, the section they are
+    // in. Empty while there is no outline.
+    in property <[bool]> outline-marks;
     in property <int> page-count;
     // Two-way bound to the ListView's scroll offset so Rust can jump to a page.
     in-out property <length> scroll-y;
@@ -1740,15 +1744,28 @@ export component MainWindow inherits Window {
                         // destination (page -1) is only a heading, so it is
                         // dimmed and does not respond to clicks.
                         if root.sidebar-tab == 0: ListView {
-                            for item in root.outline: Rectangle {
+                            for item[idx] in root.outline: Rectangle {
                                 height: 26px;
-                                background: outline-touch.has-hover ? #383838 : transparent;
+                                background: outline-touch.has-hover ? #383838
+                                    : (root.outline-marks[idx] ? #303030 : transparent);
+                                // A heading the pages shown belong to, marked
+                                // by a bar at its indent so it reads at its own
+                                // level of the outline.
+                                if root.outline-marks[idx]: Rectangle {
+                                    x: 2px + item.depth * 14px;
+                                    y: 5px;
+                                    width: 3px;
+                                    height: parent.height - 10px;
+                                    border-radius: 1.5px;
+                                    background: #3390ff;
+                                }
                                 HorizontalLayout {
                                     padding-left: 8px + item.depth * 14px;
                                     padding-right: 8px;
                                     Text {
                                         text: item.title;
-                                        color: item.page >= 0 ? #cccccc : #808080;
+                                        color: root.outline-marks[idx] ? #ffffff
+                                            : (item.page >= 0 ? #cccccc : #808080);
                                         vertical-alignment: center;
                                         overflow: elide;
                                     }

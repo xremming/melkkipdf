@@ -351,6 +351,7 @@ impl App {
         let path = self.tabs.borrow()[index].path.clone();
         let viewer = self.make_viewer(&window, &path, info.pages_pt, workers);
         viewer.set_links(info.links);
+        viewer.set_outline_pages(outline.iter().map(|item| item.page).collect());
         {
             let mut tabs = self.tabs.borrow_mut();
             let tab = &mut tabs[index];
@@ -387,6 +388,7 @@ impl App {
         let window = self.window.upgrade()?;
         let id = self.allocate_id();
         let viewer = self.make_viewer(&window, &path, pages_pt, spawn(id));
+        viewer.set_outline_pages(outline.iter().map(|item| item.page).collect());
         let bookmarks = self.store.borrow().bookmarks(&path);
         Some(self.add_tab(Tab {
             id,
@@ -912,6 +914,7 @@ impl App {
         window.set_image_rows(ModelRc::default());
         window.set_page_count(0);
         window.set_current_page(0);
+        window.set_outline_marks(ModelRc::default());
         window.set_status(status.into());
         window.set_search_results(ModelRc::default());
         window.set_search_text(SharedString::new());
@@ -1104,14 +1107,16 @@ const FLAG_MIN_LIGHTNESS: f64 = 0.6;
 /// `outline` that starts on or before its page, since a flag has no name of
 /// its own and the heading is what the reader knows the page by.
 fn flags(bookmarks: &[Bookmark], outline: &ModelRc<OutlineItem>) -> Vec<BookmarkFlag> {
+    let pages: Vec<i32> = outline.iter().map(|item| item.page).collect();
     bookmarks
         .iter()
         .map(|bookmark| {
             let page = bookmark.page as i32;
-            let heading = outline
-                .iter()
-                .filter(|item| item.page >= 0 && item.page <= page)
-                .last()
+            // The first heading the page belongs to names it, as reading it
+            // begins there.
+            let heading = viewer::headings_for(&pages, &[page])
+                .first()
+                .and_then(|&index| outline.row_data(index))
                 .map(|item| item.title.trim().to_owned())
                 .filter(|title| !title.is_empty());
             let label = match heading {
