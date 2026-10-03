@@ -131,7 +131,7 @@ alone. Ctrl is ⌘ on macOS.
 | D                                      | Flag the page, or take its flag away          |
 | B, Shift+B                             | Next or previous flag                         |
 | M                                      | Dog-ear the page, to flip back to it          |
-| Tab                                    | Flip between the dog-ear and where you came from |
+| Tab, mouse back button                 | Flip between the dog-ear and where you came from |
 | O, Ctrl+O                              | Open a PDF                                    |
 | T                                      | Show or hide the outline, thumbnails and images       |
 | Ctrl+Tab, Ctrl+Shift+Tab               | Next or previous tab                          |
@@ -139,8 +139,9 @@ alone. Ctrl is ⌘ on macOS.
 | Ctrl+W                                 | Close the tab                                 |
 | ?, F1                                  | Show or hide the keyboard shortcuts           |
 
-Going to a flag, or to a page typed after a colon, leaves the dog-ear on the
-page you came from, so Tab takes you back.
+Going to a flag, to a link, to a section or page clicked in the sidebar, or
+to a page typed after a colon, leaves the dog-ear on the page you came from,
+so Tab or the mouse's back button takes you back.
 
 ## Where it keeps its state
 

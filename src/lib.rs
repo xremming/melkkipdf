@@ -60,6 +60,21 @@ pub(crate) enum FileDrag {
     Dropped(PathBuf),
 }
 
+/// Whether a winit event is the mouse's back button, and if so whether it
+/// was pressed rather than let go of. The button flips back as Tab does,
+/// wherever the pointer is: over the outline just clicked as much as over
+/// the pages.
+fn back_button(event: &winit::event::WindowEvent) -> Option<bool> {
+    match event {
+        winit::event::WindowEvent::MouseInput {
+            button: winit::event::MouseButton::Back,
+            state,
+            ..
+        } => Some(state.is_pressed()),
+        _ => None,
+    }
+}
+
 impl FileDrag {
     fn from_winit(event: &winit::event::WindowEvent) -> Option<Self> {
         match event {
@@ -1008,15 +1023,31 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
     });
 
     // Slint's own DropArea does not receive drops from other applications on
-    // winit yet, so files dropped onto the window are taken from winit.
+    // winit yet, so files dropped onto the window are taken from winit. The
+    // mouse's back button is taken here too: Slint hands a button to the
+    // touch area under the pointer, which would leave it to whichever of the
+    // window's many is there, while here one place sees it wherever it is.
+    // Neither the press nor the release goes on to Slint, so nothing under
+    // the pointer takes it as the start of a drag.
     window.window().on_winit_window_event({
         let app = Rc::downgrade(&app);
-        move |_, event| match (FileDrag::from_winit(event), app.upgrade()) {
-            (Some(drag), Some(app)) => {
-                app.file_drag(drag);
-                EventResult::PreventDefault
+        move |_, event| {
+            let Some(app) = app.upgrade() else {
+                return EventResult::Propagate;
+            };
+            if let Some(pressed) = back_button(event) {
+                if pressed {
+                    app.flip_back();
+                }
+                return EventResult::PreventDefault;
             }
-            _ => EventResult::Propagate,
+            match FileDrag::from_winit(event) {
+                Some(drag) => {
+                    app.file_drag(drag);
+                    EventResult::PreventDefault
+                }
+                None => EventResult::Propagate,
+            }
         }
     });
 
@@ -1592,3 +1623,22 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
 
 #[cfg(feature = "testing")]
 pub mod testing;
+
+#[cfg(test)]
+mod tests {
+    use super::{back_button, winit};
+    use winit::event::{DeviceId, ElementState, MouseButton, WindowEvent};
+
+    fn click(button: MouseButton, state: ElementState) -> WindowEvent {
+        WindowEvent::MouseInput { device_id: DeviceId::dummy(), state, button }
+    }
+
+    #[test]
+    fn the_back_button_is_told_from_the_other_buttons() {
+        assert_eq!(back_button(&click(MouseButton::Back, ElementState::Pressed)), Some(true));
+        assert_eq!(back_button(&click(MouseButton::Back, ElementState::Released)), Some(false));
+        assert_eq!(back_button(&click(MouseButton::Forward, ElementState::Pressed)), None);
+        assert_eq!(back_button(&click(MouseButton::Left, ElementState::Pressed)), None);
+        assert_eq!(back_button(&WindowEvent::HoveredFileCancelled), None);
+    }
+}
