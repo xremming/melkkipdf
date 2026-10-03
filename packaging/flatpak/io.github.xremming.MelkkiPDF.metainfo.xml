@@ -46,6 +46,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.11.3" date="2026-10-03">
+      <description>
+        <p>
+          Clicking a section in the outline or a page thumbnail in the
+          sidebar now dog-ears the page you were reading before it jumps,
+          just as going to a flag does. Tab flips you back to where you
+          were, and forward again.
+        </p>
+      </description>
+    </release>
     <release version="0.11.2" date="2026-10-03">
       <description>
         <p>
