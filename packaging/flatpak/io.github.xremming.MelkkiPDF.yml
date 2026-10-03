@@ -18,7 +18,12 @@ build-options:
 
 finish-args:
   - --socket=wayland
-  - --socket=fallback-x11
+  # The window still opens on Wayland when there is one, but the clipboard
+  # goes through X11 there too: arboard, which both Slint and the viewer copy
+  # through, reaches the Wayland clipboard only by the data-control protocol,
+  # which GNOME lacks, and falls back to XWayland, so the X11 socket must be
+  # there even with Wayland, not only in its place.
+  - --socket=x11
   - --share=ipc
   # Slint renders through OpenGL, which needs the GPU device nodes.
   - --device=dri
