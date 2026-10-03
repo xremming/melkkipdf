@@ -9,8 +9,10 @@ mod clipboard;
 mod color;
 mod images;
 mod instance;
+mod links;
 #[cfg(target_os = "macos")]
 mod macos;
+mod opener;
 mod render;
 mod screenshot;
 mod search;
@@ -32,6 +34,8 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 
 use clipboard::Clipboard;
 use images::{CatalogueHandle, Catalogued};
+use links::{LinkTarget, PageLink};
+use opener::Opener;
 use render::{Loaded, RenderControl, Screenshot as Shot, WorkerMessage};
 use search::{IndexHandle, Indexed};
 use semantic::{Vectorized, Vectorizer};
@@ -142,6 +146,8 @@ pub(crate) struct App {
     shot_sender: Sender<Shot>,
     /// Where copied text and screenshots go.
     clipboard: Clipboard,
+    /// Opens the addresses links point to outside the document.
+    opener: Opener,
 }
 
 impl App {
@@ -149,6 +155,7 @@ impl App {
         window: &MainWindow,
         store: Store,
         clipboard: Clipboard,
+        opener: Opener,
         model: semantic::EmbeddingModel,
     ) -> Rc<Self> {
         let titles = Rc::new(VecModel::default());
@@ -182,6 +189,7 @@ impl App {
             shots,
             shot_sender,
             clipboard,
+            opener,
         });
         let filters = app.store.borrow().image_filters();
         window.set_hide_small_images(filters.hide_small);
@@ -327,6 +335,7 @@ impl App {
         };
         let path = self.tabs.borrow()[index].path.clone();
         let viewer = self.make_viewer(&window, &path, info.pages_pt, workers);
+        viewer.set_links(info.links);
         {
             let mut tabs = self.tabs.borrow_mut();
             let tab = &mut tabs[index];
@@ -703,6 +712,35 @@ impl App {
         self.set_return_page(index, from);
     }
 
+    /// Follows a link clicked on a page. One to a page of the document goes
+    /// there, leaving the dog-ear on the page being read as every jump does.
+    /// One to an address outside is handed to the system to open, if it is
+    /// a web or mail address; anything else is only told of, so a link
+    /// cannot run anything.
+    pub(crate) fn follow_link(&self, link: PageLink) {
+        match link.target {
+            LinkTarget::Page { page, top } => {
+                let Some((index, viewer)) = self.active.get().zip(self.active_viewer()) else {
+                    return;
+                };
+                let from = viewer.reading_page();
+                viewer.nav_to_point(page, top);
+                if viewer.reading_page() != from {
+                    self.set_return_page(index, from);
+                }
+            }
+            LinkTarget::Uri(uri) => {
+                if !links::opens_externally(&uri) {
+                    self.notify(&format!("The link points to {uri}, which is left alone."));
+                } else if let Err(err) = self.opener.open(&uri) {
+                    self.notify(&format!("Could not open {uri}: {err}."));
+                } else {
+                    self.notify(&format!("Opening {}.", links::describe(&uri)));
+                }
+            }
+        }
+    }
+
     /// Goes to the next (`dir > 0`) or previous flag from the page being
     /// read, wrapping around at the ends. A page's own flag does not count as
     /// next or previous, so pressing on always moves.
@@ -957,6 +995,7 @@ pub fn run(paths: Vec<String>) -> Result<(), Box<dyn Error>> {
         &window,
         Store::open_default(),
         Clipboard::system(),
+        Opener::system(),
         semantic::EmbeddingModel::locate(),
     );
 
@@ -1322,7 +1361,40 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
     });
     window.on_select_done({
         let app = app.clone();
-        move || app.with_viewer(|v| if v.capturing() { v.capture_done() } else { v.select_done() })
+        move || {
+            let Some(viewer) = app.active_viewer() else {
+                return;
+            };
+            if viewer.capturing() {
+                viewer.capture_done();
+            } else if let Some(link) = viewer.select_done() {
+                app.follow_link(link);
+            }
+        }
+    });
+    // The pointer over a page, or gone from it, for the cursor to show a
+    // link under it.
+    window.on_hover_page({
+        let app = app.clone();
+        let window = window.as_weak();
+        move |page, x, y| {
+            let over = index(page)
+                .zip(app.active_viewer())
+                .is_some_and(|(page, viewer)| viewer.link_under(page, x, y));
+            if let Some(window) = window.upgrade()
+                && window.get_link_under_pointer() != over
+            {
+                window.set_link_under_pointer(over);
+            }
+        }
+    });
+    window.on_leave_page({
+        let window = window.as_weak();
+        move || {
+            if let Some(window) = window.upgrade() {
+                window.set_link_under_pointer(false);
+            }
+        }
     });
     window.on_select_scroll({
         let app = app.clone();

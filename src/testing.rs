@@ -17,6 +17,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::clipboard::Clipboard;
+use crate::opener::Opener;
 use crate::render::{RenderControl, ScreenshotRequest, WorkerMessage};
 use crate::search::{PageText, PageTextBuilder};
 use crate::semantic::{Vectorized, Vectorizer};
@@ -27,6 +28,7 @@ use crate::{
 
 pub use crate::Screenshot;
 pub use crate::images::{ImageKey, ImageSpot};
+pub use crate::links::{LinkTarget, PageLink};
 pub use crate::render::{Shot, ThumbRequest};
 pub use crate::search::Area;
 pub use crate::semantic::EmbeddingModel;
@@ -475,7 +477,7 @@ impl Tabs {
 
     fn with_store_and_model(store: Store, model: EmbeddingModel) -> Self {
         let window = new_window();
-        let app = App::new(&window, store, Clipboard::detached(), model);
+        let app = App::new(&window, store, Clipboard::detached(), Opener::detached(), model);
         Self { window, app, receivers: RefCell::new(Vec::new()) }
     }
 
@@ -644,6 +646,11 @@ impl Tabs {
     /// The width and height of the image last copied, if any.
     pub fn copied_image(&self) -> Option<(u32, u32)> {
         self.app.clipboard.copied_image()
+    }
+
+    /// Every address the viewer has asked the system to open, in order.
+    pub fn opened(&self) -> Vec<String> {
+        self.app.opener.opened()
     }
 
     /// Waits for the screenshot a document's worker is taking and puts it

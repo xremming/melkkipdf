@@ -25,6 +25,10 @@ icu_properties = "2.3"
 # through arboard directly, which Slint's winit backend links anyway. The
 # image data feature is what puts a screenshot on the clipboard.
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+# Addresses links point to outside the document go to whatever the system
+# opens them with. Inside the flatpak that is xdg-open, which the runtime
+# forwards to the portal, so the sandbox needs no permission for it.
+open = "5"
 # Static embeddings for searching by meaning. The model is read from disk
 # only, as the flatpak has no network, and the tokenizer's regexes go through
 # fancy-regex rather than oniguruma, so the build stays pure Rust.

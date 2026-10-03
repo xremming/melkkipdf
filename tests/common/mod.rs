@@ -53,6 +53,50 @@ pub fn write_pdf(path: &Path, pages: usize) {
 /// and each next one 20pt below. The text must not contain parentheses or
 /// backslashes.
 pub fn write_text_pdf(path: &Path, pages: &[&[&str]]) {
+    write_linked_pdf(path, pages, &[]);
+}
+
+/// The object number of the 0-based `page` in a PDF [`write_linked_pdf`]
+/// writes, for a destination to name.
+pub fn page_object(page: usize) -> usize {
+    4 + page * 2
+}
+
+/// A link annotation over `rect`, in PDF user space with its origin at the
+/// bottom-left corner of the page, to `page` shown from `top` points up
+/// from the bottom, the way a PDF `/XYZ` destination says it.
+pub fn link_to_page(rect: [f32; 4], page: usize, top: f32) -> String {
+    let [x0, y0, x1, y1] = rect;
+    format!(
+        "<< /Type /Annot /Subtype /Link /Rect [{x0} {y0} {x1} {y1}] \
+         /Dest [{} 0 R /XYZ null {top} null] >>",
+        page_object(page)
+    )
+}
+
+/// A link annotation over `rect` to `uri`.
+pub fn link_to_uri(rect: [f32; 4], uri: &str) -> String {
+    let [x0, y0, x1, y1] = rect;
+    format!(
+        "<< /Type /Annot /Subtype /Link /Rect [{x0} {y0} {x1} {y1}] \
+         /A << /S /URI /URI ({uri}) >> >>"
+    )
+}
+
+/// A link annotation over `rect` whose destination names an object the
+/// file does not have.
+pub fn broken_link(rect: [f32; 4]) -> String {
+    let [x0, y0, x1, y1] = rect;
+    format!(
+        "<< /Type /Annot /Subtype /Link /Rect [{x0} {y0} {x1} {y1}] \
+         /Dest [999 0 R /Fit] >>"
+    )
+}
+
+/// Like [`write_text_pdf`], with link annotations: `links[page]` holds that
+/// page's annotation dictionaries as PDF syntax, from [`link_to_page`] and
+/// its kin.
+pub fn write_linked_pdf(path: &Path, pages: &[&[&str]], links: &[Vec<String>]) {
     let mut objects: Vec<String> = Vec::new();
     let font = 3;
     let first_page = 4;
@@ -63,9 +107,15 @@ pub fn write_text_pdf(path: &Path, pages: &[&[&str]]) {
     objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
     for (index, lines) in pages.iter().enumerate() {
         let contents = first_page + index * 2 + 1;
+        let annots = match links.get(index) {
+            Some(page_links) if !page_links.is_empty() => {
+                format!(" /Annots [{}]", page_links.join(" "))
+            }
+            _ => String::new(),
+        };
         objects.push(format!(
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
-             /Resources << /Font << /F1 {font} 0 R >> >> /Contents {contents} 0 R >>"
+             /Resources << /Font << /F1 {font} 0 R >> >> /Contents {contents} 0 R{annots} >>"
         ));
         let mut stream = String::from("BT /F1 12 Tf 14 TL 72 708 Td");
         for (line, text) in lines.iter().enumerate() {

@@ -194,6 +194,12 @@ component PageImageView inherits Rectangle {
     callback select-from(/* page */ int, /* x-pt */ float, /* y-pt */ float);
     callback select-to(int, float, float);
     callback select-done();
+    // The pointer moved over the page without a button held, to a point in
+    // points from its corner, or left the page.
+    callback hover(int, float, float);
+    callback unhover();
+    // Whether a link is under the pointer, which shows as a hand.
+    in property <bool> link-hovered;
     // The wheel turned while a drag was going on, which the drag would
     // otherwise swallow (delta-x, delta-y, shift).
     callback select-scroll(float, float, bool);
@@ -275,7 +281,8 @@ component PageImageView inherits Rectangle {
     // click. Wheel events it has no use for go on to the view underneath,
     // except while a drag holds the pointer, when they are passed on by hand.
     touch := TouchArea {
-        mouse-cursor: Screenshot.active ? MouseCursor.crosshair : MouseCursor.default;
+        mouse-cursor: Screenshot.active ? MouseCursor.crosshair
+            : (root.link-hovered ? MouseCursor.pointer : MouseCursor.default);
         pointer-event(event) => {
             if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                 root.select-from(entry.page, self.mouse-x / (root.density * 1px), self.mouse-y / (root.density * 1px));
@@ -286,6 +293,9 @@ component PageImageView inherits Rectangle {
             if (event.kind == PointerEventKind.cancel) {
                 root.select-done();
             }
+            if (event.kind == PointerEventKind.move && !self.pressed) {
+                root.hover(entry.page, self.mouse-x / (root.density * 1px), self.mouse-y / (root.density * 1px));
+            }
             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
                 page-menu.show({ x: self.mouse-x, y: self.mouse-y });
             }
@@ -293,6 +303,11 @@ component PageImageView inherits Rectangle {
         moved => {
             if (self.pressed) {
                 root.select-to(entry.page, self.mouse-x / (root.density * 1px), self.mouse-y / (root.density * 1px));
+            }
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                root.unhover();
             }
         }
         scroll-event(event) => {
@@ -368,6 +383,12 @@ component PageRowView inherits Rectangle {
     callback select-from(int, float, float);
     callback select-to(int, float, float);
     callback select-done();
+    // The pointer moved over the page without a button held, to a point in
+    // points from its corner, or left the page.
+    callback hover(int, float, float);
+    callback unhover();
+    // Whether a link is under the pointer, which shows as a hand.
+    in property <bool> link-hovered;
     callback select-scroll(float, float, bool);
     callback copy-selection();
     callback select-all();
@@ -386,6 +407,9 @@ component PageRowView inherits Rectangle {
                 select-from(page, x, y) => { root.select-from(page, x, y); }
                 select-to(page, x, y) => { root.select-to(page, x, y); }
                 select-done => { root.select-done(); }
+                hover(page, x, y) => { root.hover(page, x, y); }
+                unhover => { root.unhover(); }
+                link-hovered: root.link-hovered;
                 select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
                 copy-selection => { root.copy-selection(); }
                 select-all => { root.select-all(); }
@@ -399,6 +423,9 @@ component PageRowView inherits Rectangle {
                 select-from(page, x, y) => { root.select-from(page, x, y); }
                 select-to(page, x, y) => { root.select-to(page, x, y); }
                 select-done => { root.select-done(); }
+                hover(page, x, y) => { root.hover(page, x, y); }
+                unhover => { root.unhover(); }
+                link-hovered: root.link-hovered;
                 select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
                 copy-selection => { root.copy-selection(); }
                 select-all => { root.select-all(); }
@@ -1094,6 +1121,12 @@ export component MainWindow inherits Window {
     callback select-from(int, float, float);
     callback select-to(int, float, float);
     callback select-done();
+    // The pointer over a page at a point in points from its corner, or
+    // gone from the page, for Rust to say whether a link is under it.
+    callback hover-page(int, float, float);
+    callback leave-page();
+    // Whether a link is under the pointer, which the pages show as a hand.
+    in property <bool> link-under-pointer;
     callback select-scroll(float, float, bool);
     callback copy-selection();
     callback clear-selection();
@@ -1968,6 +2001,9 @@ export component MainWindow inherits Window {
                                 select-from(page, x, y) => { root.page-pressed(page, x, y); }
                                 select-to(page, x, y) => { root.select-to(page, x, y); }
                                 select-done => { root.select-done(); }
+                                hover(page, x, y) => { root.hover-page(page, x, y); }
+                                unhover => { root.leave-page(); }
+                                link-hovered: root.link-under-pointer;
                                 select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
                                 copy-selection => { root.copy-selection(); }
                                 select-all => { root.select-all(); }
@@ -2002,6 +2038,9 @@ export component MainWindow inherits Window {
                                             select-from(page, x, y) => { root.page-pressed(page, x, y); }
                                             select-to(page, x, y) => { root.select-to(page, x, y); }
                                             select-done => { root.select-done(); }
+                                            hover(page, x, y) => { root.hover-page(page, x, y); }
+                                            unhover => { root.leave-page(); }
+                                            link-hovered: root.link-under-pointer;
                                             select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
                                             copy-selection => { root.copy-selection(); }
                                             select-all => { root.select-all(); }
@@ -2012,6 +2051,9 @@ export component MainWindow inherits Window {
                                             select-from(page, x, y) => { root.page-pressed(page, x, y); }
                                             select-to(page, x, y) => { root.select-to(page, x, y); }
                                             select-done => { root.select-done(); }
+                                            hover(page, x, y) => { root.hover-page(page, x, y); }
+                                            unhover => { root.leave-page(); }
+                                            link-hovered: root.link-under-pointer;
                                             select-scroll(dx, dy, shift) => { root.select-scroll(dx, dy, shift); }
                                             copy-selection => { root.copy-selection(); }
                                             select-all => { root.select-all(); }
@@ -2556,7 +2598,7 @@ export component MainWindow inherits Window {
                             wrap: word-wrap;
                         }
                         Text {
-                            text: "The dog-ear is your reading place, one per document. Going to a flag, to a page or section clicked in the sidebar, or to a page typed after a colon, dog-ears the page you left, and Tab flips back to it and forward again, so a flag and your place swap like a ribbon and a bookmark. M dog-ears the page you are on by hand.";
+                            text: "The dog-ear is your reading place, one per document. Going to a flag, to a link clicked on a page, to a page or section clicked in the sidebar, or to a page typed after a colon, dog-ears the page you left, and Tab flips back to it and forward again, so a flag and your place swap like a ribbon and a bookmark. M dog-ears the page you are on by hand.";
                             color: #bbbbbb;
                             font-size: 13px;
                             wrap: word-wrap;

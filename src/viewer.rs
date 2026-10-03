@@ -21,11 +21,12 @@ use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, ModelRc, Timer, TimerMode, VecModel, Weak};
 
 use crate::images::{ImageKey, ImageSpot};
+use crate::links::{self, PageLink};
 use crate::render::{
     RenderControl, RenderRequest, ScreenshotRequest, Shot, ThumbRequest, WorkerMessage,
     buffer_bytes, capped_scale, scale_key,
 };
-use crate::screenshot::Capture;
+use crate::screenshot::{CLICK_PX, Capture};
 use crate::search::{self, Area, Hit, PageText, Snippet};
 use crate::selection::{TextPos, Unit};
 use crate::semantic::{self, Vectorizer, Vectors};
@@ -570,6 +571,10 @@ struct SelectionState {
     /// When and where the last press was, for telling a double click.
     last_press: Option<(Instant, TextPos)>,
     clicks: u32,
+    /// A press on a link, waiting for the release that follows it, or for
+    /// the pointer to move, which makes it the start of a drag selecting
+    /// text instead: the page and point pressed, and the link.
+    pending_link: Option<(usize, f32, f32, PageLink)>,
 }
 
 /// Which images the sidebar's list leaves out, and whether it gathers the
@@ -694,6 +699,8 @@ struct SearchState {
 struct Inner {
     /// Every page's width and height in PDF points.
     pages_pt: Vec<(f32, f32)>,
+    /// Every page's links, once the worker has read them.
+    links: Vec<Vec<PageLink>>,
     /// The gap between rows and between the pages of a spread, in logical
     /// pixels, as the window's `PageLayout` lays them out.
     row_gap: f32,
@@ -838,6 +845,7 @@ impl Viewer {
             me: me.clone(),
             inner: RefCell::new(Inner {
                 pages_pt,
+                links: Vec::new(),
                 row_gap: window.global::<PageLayout>().get_row_gap(),
                 spread_spacing: window.global::<PageLayout>().get_spread_spacing(),
                 zoom: settings.zoom.clamp(MIN_ZOOM, MAX_ZOOM),
@@ -2463,10 +2471,43 @@ impl Viewer {
         }
     }
 
-    /// The reader pressed on `page` at `x`, `y` points from its corner,
-    /// starting a selection there. A second or third press on the same place
-    /// within [`MULTI_CLICK`] selects the word or the line.
+    /// The document's links, page by page, once the worker has read them.
+    pub fn set_links(&self, links: Vec<Vec<PageLink>>) {
+        self.inner.borrow_mut().links = links;
+    }
+
+    /// The links on `page`.
+    pub fn page_links(&self, page: usize) -> Vec<PageLink> {
+        self.inner.borrow().links.get(page).cloned().unwrap_or_default()
+    }
+
+    /// The link under `x`, `y` points from the corner of `page`, if any.
+    pub fn link_at(&self, page: usize, x: f32, y: f32) -> Option<PageLink> {
+        let inner = self.inner.borrow();
+        links::link_at(inner.links.get(page)?, x, y).cloned()
+    }
+
+    /// Whether a link is under `x`, `y` points from the corner of `page`,
+    /// for the cursor to show.
+    pub fn link_under(&self, page: usize, x: f32, y: f32) -> bool {
+        self.link_at(page, x, y).is_some()
+    }
+
+    /// The reader pressed on `page` at `x`, `y` points from its corner: on
+    /// a link, which letting go there follows, or else starting a selection
+    /// there. A second or third press on the same place within
+    /// [`MULTI_CLICK`] selects the word or the line.
     pub fn select_from(&self, page: usize, x: f32, y: f32) {
+        if let Some(link) = self.link_at(page, x, y) {
+            self.clear_selection();
+            self.selection.borrow_mut().pending_link = Some((page, x, y, link));
+            return;
+        }
+        self.start_selection(page, x, y);
+    }
+
+    /// Starts a selection at `x`, `y` points from the corner of `page`.
+    fn start_selection(&self, page: usize, x: f32, y: f32) {
         let Some(position) = self.resolve(page, x, y) else {
             self.clear_selection();
             return;
@@ -2491,6 +2532,18 @@ impl Viewer {
     /// The drag that began on `page` is at `x`, `y` points from that page's
     /// corner, which may be off it, and the selection reaches there.
     pub fn select_to(&self, page: usize, x: f32, y: f32) {
+        // A press on a link is a click until the pointer has moved as far
+        // as a screenshot's may and still be one; then it was the start of
+        // a drag, which selects text from where it pressed.
+        let pending = self.selection.borrow_mut().pending_link.take();
+        if let Some((origin, origin_x, origin_y, link)) = pending {
+            let limit = CLICK_PX / page_density(&self.inner.borrow(), origin);
+            if (x - origin_x).abs() < limit && (y - origin_y).abs() < limit {
+                self.selection.borrow_mut().pending_link = Some((origin, origin_x, origin_y, link));
+                return;
+            }
+            self.start_selection(origin, origin_x, origin_y);
+        }
         if self.selection.borrow().drag.is_none() {
             return;
         }
@@ -2499,10 +2552,16 @@ impl Viewer {
         self.scroll_for_drag();
     }
 
-    /// The drag ended.
-    pub fn select_done(&self) {
+    /// The drag ended, or a press on a link was let go of without moving,
+    /// which is the click that follows the link, handed back to be followed.
+    pub fn select_done(&self) -> Option<PageLink> {
+        let pending = self.selection.borrow_mut().pending_link.take();
+        if let Some((_, _, _, link)) = pending {
+            return Some(link);
+        }
         self.selection.borrow_mut().drag = None;
         self.drag_scroll.stop();
+        None
     }
 
     /// The wheel turned by `delta_x`, `delta_y` during a drag, which holds the
@@ -2875,6 +2934,18 @@ impl Viewer {
             };
             let areas = search.index[hit.page].areas(hit.start, hit.end);
             (hit.page, areas.first().map_or(0.0, |area| area.y))
+        };
+        self.nav_to_point(page, Some(top_pt));
+    }
+
+    /// Scrolls so `page` is in view, with its top at the top of the view,
+    /// or with `top_pt` points down it a third of the way down the view
+    /// where there is room, as a link or a search hit asks, and with the
+    /// page as the one being read.
+    pub fn nav_to_point(&self, page: usize, top_pt: Option<f32>) {
+        let Some(top_pt) = top_pt else {
+            self.nav_to_page(page);
+            return;
         };
         let (row, continuous) = {
             let mut inner = self.inner.borrow_mut();

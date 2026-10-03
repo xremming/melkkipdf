@@ -13,11 +13,12 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
-use mupdf::{Colorspace, Cookie, Device, Document, Error, Matrix, Pixmap, Rect};
+use mupdf::{Colorspace, Cookie, Device, Document, Error, Matrix, Page, Pixmap, Rect};
 use slint::{Image, Rgb8Pixel, Rgba8Pixel, SharedPixelBuffer, Weak};
 
 use crate::MainWindow;
 use crate::images;
+use crate::links::{self, PageLink};
 use crate::search::Area;
 
 /// Points to the cookie of the render currently in progress, so the UI thread
@@ -145,6 +146,8 @@ pub struct DocumentInfo {
     /// The outline (bookmarks) as `(title, 0-based page, depth)`, depth-first.
     /// Empty when the document has none, or it cannot be read.
     pub outline: Vec<(String, i32, i32)>,
+    /// Every page's links (see [`crate::links`]), in page order.
+    pub links: Vec<Vec<PageLink>>,
 }
 
 /// A document's worker reporting that it has read the document `doc`, or
@@ -168,15 +171,29 @@ fn read_info(document: &Document) -> Result<DocumentInfo, Error> {
 
     let count = document.page_count()?;
     let mut pages_pt = Vec::with_capacity(count.max(0) as usize);
+    let mut links = Vec::with_capacity(count.max(0) as usize);
     for index in 0..count {
-        let bounds = document.load_page(index)?.bounds()?;
+        let page = document.load_page(index)?;
+        let bounds = page.bounds()?;
         pages_pt.push((bounds.width(), bounds.height()));
+        links.push(read_links(&page, &bounds));
     }
     let mut outline = Vec::new();
     if let Ok(outlines) = document.outlines() {
         flatten(&outlines, 0, &mut outline);
     }
-    Ok(DocumentInfo { pages_pt, outline })
+    Ok(DocumentInfo { pages_pt, outline, links })
+}
+
+/// The links on `page`, or none if they cannot be read. A link within the
+/// document that MuPDF cannot resolve makes its iterator panic, and one bad
+/// link must not keep the document from opening.
+fn read_links(page: &Page, bounds: &Rect) -> Vec<PageLink> {
+    let read = || match page.links() {
+        Ok(found) => found.filter_map(|link| links::reduce(&link, bounds)).collect(),
+        Err(_) => Vec::new(),
+    };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_default()
 }
 
 /// A message to a document's render worker.

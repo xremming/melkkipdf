@@ -90,6 +90,9 @@ and about 500 MB. `mise run test:model` runs the tests that need it.
   matched by outlined on it (see below)
 - Text selection with the pointer, across pages and spreads, with a double
   or triple click for a word or a line, and Ctrl+C to copy
+- Links followed with a click: one within the document goes to its page,
+  dog-earing the page left, and a web or mail address opens outside the
+  viewer, while a drag over a link still selects its text
 - Screenshots to the clipboard, of a page or of a part of one dragged over,
   rendered at 300 dots per inch whatever the window's size and zoom
 - The document's images listed in the sidebar under the page each is on,
