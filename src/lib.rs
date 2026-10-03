@@ -686,6 +686,23 @@ impl App {
         self.set_return_page(index, from);
     }
 
+    /// Goes to a page picked in the sidebar, an outline entry or a
+    /// thumbnail, leaving the dog-ear on the page being read: a click there
+    /// is as much a jump as going to a flag, and the reader wants Tab to
+    /// bring them back from it just the same. Picking the page already being
+    /// read leaves the dog-ear alone.
+    pub(crate) fn go_to_page_index(&self, page: usize) {
+        let Some((index, viewer)) = self.active.get().zip(self.active_viewer()) else {
+            return;
+        };
+        let from = viewer.reading_page();
+        if from == page {
+            return;
+        }
+        viewer.nav_to_page(page);
+        self.set_return_page(index, from);
+    }
+
     /// Goes to the next (`dir > 0`) or previous flag from the page being
     /// read, wrapping around at the ends. A page's own flag does not count as
     /// next or previous, so pressing on always moves.
@@ -1339,7 +1356,7 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         let app = app.clone();
         move |page| {
             if let Some(page) = index(page) {
-                app.with_viewer(|v| v.nav_to_page(page));
+                app.go_to_page_index(page);
             }
         }
     });

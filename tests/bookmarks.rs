@@ -146,6 +146,27 @@ fn the_dog_ear_can_be_put_on_the_page_being_read() {
 }
 
 #[test]
+fn a_click_in_the_sidebar_leaves_the_dog_ear_behind() {
+    let t = tabs();
+    t.open("a.pdf", 20);
+    t.viewer(0).go_to_page("3");
+    // An outline entry, a thumbnail and an image heading all go to a page
+    // this way.
+    t.window.invoke_go_to_page_index(11);
+    assert_eq!(t.window.get_current_page(), 12);
+    assert_eq!(t.return_page(), Some(2));
+
+    press(&t, &[], Key::Tab);
+    assert_eq!(t.window.get_current_page(), 3);
+    assert_eq!(t.return_page(), Some(11));
+
+    // Clicking the page already being read is no jump.
+    t.window.invoke_go_to_page_index(2);
+    assert_eq!(t.window.get_current_page(), 3);
+    assert_eq!(t.return_page(), Some(11));
+}
+
+#[test]
 fn a_jump_through_the_page_field_leaves_the_dog_ear_behind() {
     let t = tabs();
     t.open("a.pdf", 20);
