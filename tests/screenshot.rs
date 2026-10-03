@@ -193,14 +193,15 @@ fn a_real_page_and_a_part_of_it_land_on_the_clipboard_at_screenshot_resolution()
     assert!((2549..=2551).contains(&width), "the page is {width} pixels wide");
     assert!((3299..=3301).contains(&height), "the page is {height} pixels tall");
 
-    // A 200×100 point area would be 833 pixels wide at 300 dots per inch,
-    // so it is rendered at 8 pixels a point to reach 1600.
+    // A 200×100 point area is rendered at the same 300 dots per inch as the
+    // page, so it stays in proportion to it: about 833×417 pixels, rounded
+    // outward to whole pixels.
     t.window.global::<melkkipdf::testing::Screenshot>().set_active(true);
     viewer.capture_from(0, 100.0, 100.0);
     viewer.capture_to(300.0, 200.0);
     viewer.capture_done();
     t.finish_screenshot();
     let (width, height) = t.copied_image().expect("the area was not copied");
-    assert!((1599..=1601).contains(&width), "the area is {width} pixels wide");
-    assert!((799..=801).contains(&height), "the area is {height} pixels tall");
+    assert!((833..=835).contains(&width), "the area is {width} pixels wide");
+    assert!((416..=418).contains(&height), "the area is {height} pixels tall");
 }
