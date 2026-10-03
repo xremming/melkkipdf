@@ -474,21 +474,16 @@ fn render_page(
 }
 
 /// The resolution a screenshot is rendered at, whatever the window's: 300
-/// dots per inch, the usual for print, so a whole page pastes sharp.
+/// dots per inch, the usual for print, so a whole page pastes sharp. Every
+/// screenshot uses the same resolution, however small or large its area, so
+/// that clips of the same document keep their sizes relative to each other
+/// when pasted side by side.
 pub const SCREENSHOT_DPI: f32 = 300.0;
 
-/// The fewest pixels a screenshot's longer side has. A small part of a page
-/// at [`SCREENSHOT_DPI`] would be a few hundred pixels, too few to read once
-/// pasted anywhere, so a small area is rendered larger.
-pub const SCREENSHOT_MIN_PX: f32 = 1600.0;
-
 /// Pixels per point a screenshot of `width_pt`×`height_pt` points is
-/// rendered at: [`SCREENSHOT_DPI`], raised until the longer side reaches
-/// [`SCREENSHOT_MIN_PX`] and capped as every render is.
+/// rendered at: [`SCREENSHOT_DPI`], capped as every render is.
 pub fn screenshot_scale(width_pt: f32, height_pt: f32) -> f32 {
-    let longer = width_pt.max(height_pt).max(1.0);
-    let scale = (SCREENSHOT_DPI / 72.0).max(SCREENSHOT_MIN_PX / longer);
-    capped_scale(width_pt, height_pt, scale)
+    capped_scale(width_pt, height_pt, SCREENSHOT_DPI / 72.0)
 }
 
 /// Takes the screenshot asked for: a page or an area of it rendered at
@@ -772,8 +767,8 @@ mod tests {
 
     use super::{
         AbortSlot, LruCache, MAX_RENDER_PX, Registration, RenderControl, RenderRequest,
-        SCREENSHOT_DPI, SCREENSHOT_MIN_PX, ScreenshotRequest, Shot, capped_scale, render_page,
-        render_screenshot, screenshot_scale,
+        SCREENSHOT_DPI, ScreenshotRequest, Shot, capped_scale, render_page, render_screenshot,
+        screenshot_scale,
     };
     use crate::search::Area;
 
@@ -861,9 +856,10 @@ mod tests {
     }
 
     #[test]
-    fn a_screenshot_is_rendered_at_print_resolution_or_large_enough_to_read() {
+    fn every_screenshot_is_rendered_at_print_resolution() {
         assert_eq!(screenshot_scale(612.0, 792.0), SCREENSHOT_DPI / 72.0);
-        assert_eq!(screenshot_scale(200.0, 100.0), SCREENSHOT_MIN_PX / 200.0);
+        // A small area is not scaled up: it stays in proportion to a whole page.
+        assert_eq!(screenshot_scale(200.0, 100.0), SCREENSHOT_DPI / 72.0);
         // A page too tall for the limit is capped as every render is.
         assert_eq!(screenshot_scale(100.0, 4000.0), MAX_RENDER_PX / 4000.0);
     }
@@ -875,8 +871,9 @@ mod tests {
         let area = Area { x: 100.0, y: 100.0, width: 200.0, height: 100.0 };
         let request = ScreenshotRequest { page: 0, shot: Shot::Area(area) };
         let picture = render_screenshot(&document, &request).unwrap();
-        assert_eq!((picture.width, picture.height), (1600, 800));
-        assert_eq!(picture.rgba.len(), 1600 * 800 * 4);
+        // 200×100 points at 300 dots per inch, rounded outward to whole pixels.
+        assert_eq!((picture.width, picture.height), (834, 418));
+        assert_eq!(picture.rgba.len(), 834 * 418 * 4);
         assert!(picture.rgba.iter().all(|&byte| byte == 0xff), "blank paper is opaque white");
 
         // An area reaching past the page is cut at its edge, and one off
@@ -885,8 +882,11 @@ mod tests {
         let request = ScreenshotRequest { page: 0, shot: Shot::Area(area) };
         let picture = render_screenshot(&document, &request).unwrap();
         let page_width = document.load_page(0).unwrap().bounds().unwrap().width();
-        assert!((picture.width as f32 - (page_width - 500.0) * 16.0).abs() <= 1.0);
-        assert_eq!(picture.height, 1600);
+        // The pixmap rounds outward at both edges, so it may be up to two
+        // pixels larger than the area.
+        let scale = SCREENSHOT_DPI / 72.0;
+        assert!((picture.width as f32 - (page_width - 500.0) * scale).abs() <= 2.0);
+        assert!((picture.height as f32 - 100.0 * scale).abs() <= 2.0);
         let area = Area { x: 700.0, y: 0.0, width: 200.0, height: 100.0 };
         let request = ScreenshotRequest { page: 0, shot: Shot::Area(area) };
         assert!(render_screenshot(&document, &request).is_err());
