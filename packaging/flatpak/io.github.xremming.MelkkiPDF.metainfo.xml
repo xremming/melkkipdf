@@ -46,6 +46,17 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.11.0" date="2026-10-03">
+      <description>
+        <p>
+          Screenshots to the clipboard: Y or the camera button, then a click
+          copies a page and a drag copies a part of one, sharp whatever the
+          window's size. The sidebar's new Images tab lists the document's
+          images under their pages, following the page you read, and a click
+          copies one as it is embedded.
+        </p>
+      </description>
+    </release>
     <release version="0.10.0" date="2026-10-01">
       <description>
         <p>
