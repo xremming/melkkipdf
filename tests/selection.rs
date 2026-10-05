@@ -104,6 +104,21 @@ fn dragging_by_the_word_takes_in_whole_words() {
 }
 
 #[test]
+fn dragging_by_the_word_onto_a_letter_of_two_bytes_takes_in_its_word() {
+    let h = indexed(&[&["hyvää päivää"]]);
+    let (x, y) = at(0, 1);
+    h.viewer.select_from(0, x, y);
+    h.viewer.select_done();
+    h.viewer.select_from(0, x, y);
+    // Onto the first 'ä' of "päivää", the drag's end falling just past it.
+    let (to_x, to_y) = after(0, 7);
+    h.viewer.select_to(0, to_x, to_y);
+    h.viewer.select_done();
+    assert_eq!(h.selection(0), [area(0, 0, 12)]);
+    assert_eq!(h.viewer.selected_text().as_deref(), Some("hyvää päivää"));
+}
+
+#[test]
 fn a_drag_past_the_page_reaches_the_next_one() {
     let h = indexed(&[&["first page"], &["second page"]]);
     // Rows are a page's height plus the gap, which in points depends on the

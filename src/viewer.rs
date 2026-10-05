@@ -2826,8 +2826,13 @@ impl Viewer {
         };
         start.byte = grow(&index[start.page], start.byte).0;
         // The focus of a drag sits just past what it reached, so the unit
-        // it ends in is the one before it, unless the selection is empty.
-        let last = if end > start { end.byte.saturating_sub(1) } else { end.byte };
+        // it ends in is the one the character before it is in, unless the
+        // selection is empty. That character may take more than one byte.
+        let last = if end > start {
+            index[end.page].text.floor_char_boundary(end.byte.saturating_sub(1))
+        } else {
+            end.byte
+        };
         end.byte = grow(&index[end.page], last).1.max(end.byte);
         (start < end).then_some((start, end))
     }
