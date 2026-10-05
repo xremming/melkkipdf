@@ -46,6 +46,14 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.14.1" date="2026-10-05">
+      <description>
+        <p>
+          A pinch on a Mac's trackpad or a touchscreen now zooms the pages
+          about the point between the fingers.
+        </p>
+      </description>
+    </release>
     <release version="0.14.0" date="2026-10-05">
       <description>
         <p>
