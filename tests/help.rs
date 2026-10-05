@@ -59,6 +59,10 @@ fn the_document_keeps_still_under_the_help() {
 #[test]
 fn the_help_ends_with_the_licence_notice() {
     let t = shown();
+    // The search leaves out what is scrolled out of view, and with the
+    // fonts on some systems the page scrolls at the usual height, putting
+    // its end out of view.
+    t.window.window().set_size(slint::LogicalSize::new(1200.0, 2000.0));
     let texts = || {
         ElementHandle::find_by_element_type_name(&t.window, "Text")
             .filter_map(|text| text.accessible_label())
