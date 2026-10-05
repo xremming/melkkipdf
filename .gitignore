@@ -10,3 +10,6 @@
 /packaging/flatpak/repo
 /packaging/flatpak/site
 /packaging/flatpak/*.flatpak
+
+# OS specific files.
+.DS_Store
