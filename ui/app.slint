@@ -375,6 +375,11 @@ component ThumbView inherits Rectangle {
 // assumes uniform item heights when estimating the scroll extent; giving it
 // exactly that keeps the viewport anchor stable while scrolling instead of
 // oscillating, which otherwise triggers a long instantiation-chain warning.
+// The height is also a whole number of pixels: the ListView works out where
+// its first row sits by multiplying the row height back up, and a fractional
+// one rounds a little differently each pass, so it never settles either. It
+// is rounded up, since a row shorter than its page would grow to fit it and
+// no longer be where the viewer puts it (see `row_height_px`).
 component PageRowView inherits Rectangle {
     in property <PageRow> page-row;
     in property <float> density;
@@ -392,7 +397,7 @@ component PageRowView inherits Rectangle {
     callback select-scroll(float, float, bool);
     callback copy-selection();
     callback select-all();
-    height: row-height-pt * density * 1px + PageLayout.row-gap;
+    height: ceil(row-height-pt * density) * 1px + PageLayout.row-gap;
     background: #2b2b2b;
 
     HorizontalLayout {

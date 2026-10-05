@@ -388,8 +388,11 @@ fn pages_over_budget(inner: &Inner) -> Vec<usize> {
 }
 
 /// The on-screen height of one row (all rows are uniform) in logical pixels.
+/// The page part is rounded up to whole pixels and multiplied in the order
+/// the window does, so the two agree on every row's place exactly; the
+/// window rounds for its ListView's sake (see `PageRowView`).
 fn row_height_px(inner: &Inner) -> f32 {
-    inner.ref_h_pt * BASE_DENSITY * inner.zoom + inner.row_gap
+    (inner.ref_h_pt * (BASE_DENSITY * inner.zoom)).ceil() + inner.row_gap
 }
 
 /// The largest valid continuous scroll offset in logical pixels.
