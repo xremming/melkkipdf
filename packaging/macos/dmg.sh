@@ -69,10 +69,23 @@ echo "Packing $dmg."
 mkdir "$staging/image"
 ditto "$app" "$staging/image/MelkkiPDF.app"
 ln -s /Applications "$staging/image/Applications"
-rm -f "$dmg"
-# LZFSE, which every macOS the app runs on can read.
-hdiutil create -quiet -volname MelkkiPDF -srcfolder "$staging/image" \
-    -fs HFS+ -format ULFO "$dmg"
+# LZFSE, which every macOS the app runs on can read. On a CI runner hdiutil
+# now and then fails at once, the image it makes held busy by something else,
+# and does the same work fine when asked again a little later.
+attempts=5
+for (( attempt = 1; ; attempt++ )); do
+    rm -f "$dmg"
+    if hdiutil create -volname MelkkiPDF -srcfolder "$staging/image" \
+        -fs HFS+ -format ULFO "$dmg"; then
+        break
+    fi
+    if (( attempt == attempts )); then
+        echo "hdiutil could not make $dmg in $attempts attempts." >&2
+        exit 1
+    fi
+    echo "hdiutil could not make $dmg; trying again in $(( attempt * 5 )) seconds."
+    sleep $(( attempt * 5 ))
+done
 
 if [[ -n ${MACOS_SIGNING_IDENTITY:-} ]]; then
     echo "Signing $dmg with $MACOS_SIGNING_IDENTITY."
