@@ -1,0 +1,120 @@
+name: macOS
+
+# A tag builds the universal app, signs and notarizes it and its disk image,
+# and publishes the image on the tag's GitHub release, making the release if
+# the tag has none yet. A manual run does all but the publishing and keeps the
+# image as the run's artifact, to try a signed build before tagging one.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dmg:
+    runs-on: macos-15
+    permissions:
+      # Making the release and uploading the image to it.
+      contents: write
+    env:
+      MACOS_ARCHS: aarch64 x86_64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+
+      # rsvg-convert renders the icon. Each architecture needs its Rust
+      # target, which the toolchain mise installs carries only the host's of.
+      - name: Install build dependencies
+        run: |
+          brew install librsvg
+          mise exec -- rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      # Keeps the compiled dependencies between runs, MuPDF for both
+      # architectures above all.
+      - name: Restore the cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      # The embedding model is half a gigabyte, pinned by the script that
+      # fetches it, so it only changes with that script.
+      - name: Restore the embedding model
+        uses: actions/cache@v6
+        with:
+          path: data/model
+          key: model-${{ hashFiles('packaging/common/fetch-model.sh') }}
+
+      # A keychain of the run's own, so codesign finds the Developer ID
+      # without a password prompt, and the certificate never touches disk
+      # outside the runner's temporary directory.
+      - name: Import the signing certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -base64 32)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printenv CERTIFICATE_P12 | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | awk '/Developer ID Application/ { print $2; exit }')
+          if [[ -z $identity ]]; then
+            echo "The certificate holds no Developer ID Application identity." >&2
+            exit 1
+          fi
+          echo "MACOS_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Write the notary key
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          printenv NOTARY_KEY_P8 > "$RUNNER_TEMP/notary.p8"
+          echo "NOTARY_KEY_PATH=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+
+      - name: Build, sign and notarize the app and the disk image
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: mise run macos:dmg
+
+      - run: mise run macos:check
+
+      - name: Keep the disk image
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v7
+        with:
+          name: MelkkiPDF-dmg
+          path: target/MelkkiPDF-*.dmg
+          # Already compressed, and half the size of the app.
+          compression-level: 0
+
+      # The flatpak workflow publishes to Pages, not to the release, so the
+      # release is this workflow's to make. A rerun replaces the image.
+      - name: Publish the disk image on the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          dmg=$(ls target/MelkkiPDF-*.dmg)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$dmg" --clobber
+          else
+            packaging/common/release.sh notes > "$RUNNER_TEMP/notes.md"
+            gh release create "$TAG" "$dmg" --verify-tag \
+              --title "MelkkiPDF ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+
+      - name: Remove the signing keychain and the notary key
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/notary.p8"

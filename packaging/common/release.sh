@@ -3,7 +3,7 @@
 # has its release entry in the metainfo, the tag is new, the branch is main,
 # and nothing is uncommitted, which covers a stale cargo-sources.json once it
 # has been regenerated. The /release skill runs this on the release it has
-# prepared, before tagging it.
+# prepared, before tagging it. With notes, it prints the release notes instead.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -53,10 +53,29 @@ check() {
     echo "Release $version is ready to tag."
 }
 
+# Prints the release notes of the version in Cargo.toml, the paragraphs of its
+# entry in the metainfo, for the GitHub release the macOS workflow makes.
+notes() {
+    local entry="//releases/release[@version='$version']/description/p"
+    local count i
+    count=$(xmllint --xpath "count($entry)" "$metainfo")
+    if (( count == 0 )); then
+        echo "The metainfo has no release notes for $version." >&2
+        exit 1
+    fi
+    for (( i = 1; i <= count; i++ )); do
+        (( i > 1 )) && echo
+        # The XML wraps the text; Markdown on GitHub is better off without.
+        xmllint --xpath "string(${entry}[$i])" "$metainfo" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'
+        echo
+    done
+}
+
 case ${1:-check} in
     check) check ;;
+    notes) notes ;;
     *)
-        echo "usage: $0 [check]" >&2
+        echo "usage: $0 [check | notes]" >&2
         exit 2
         ;;
 esac

@@ -96,15 +96,21 @@ for, however long it takes.
    git push origin main vx.y.z
    ```
 
-8. **Watch the build.** Find the Flatpak workflow run the tag started with
-   `gh run list --workflow Flatpak --limit 1` and follow it with
-   `gh run watch <id> --exit-status`, waiting as in step 2. When it has
-   deployed, confirm the signed ref published:
+8. **Watch the builds.** The tag starts two workflows: Flatpak, which
+   publishes to the flatpak repository, and macOS, which makes the GitHub
+   release and puts the signed and notarized disk image on it. Find each
+   run with `gh run list --workflow Flatpak --limit 1` and
+   `gh run list --workflow macOS --limit 1` and follow it with
+   `gh run watch <id> --exit-status`, waiting as in step 2; notarizing
+   adds several minutes to the macOS one. When both have finished, confirm
+   the signed ref published and the image is on the release:
 
    ```sh
    curl -s https://xremming.github.io/melkkipdf/melkkipdf.flatpakref | grep -c GPGKey
+   gh release view vx.y.z --json assets --jq '.assets[].name'
    ```
 
-   A `1` means it did. Report the outcome plainly, and if the build failed,
-   what failed, without retrying anything: the tag is out, and what to do
-   about a failed release is the user's call.
+   A `1` and `MelkkiPDF-x.y.z.dmg` mean they did. Report the outcome
+   plainly, and if a build failed, what failed, without retrying anything:
+   the tag is out, and what to do about a failed release is the user's
+   call.

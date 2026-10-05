@@ -85,6 +85,30 @@ jobs:
       # i-slint-backend-testing, so they need no display.
       - run: mise run test
 
+  # The macOS bundle and its disk image, for this runner's architecture and
+  # unsigned, so a change that breaks either shows before a release signs and
+  # notarizes them.
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+
+      - name: Install build dependencies
+        run: brew install librsvg
+
+      - name: Restore the cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Restore the embedding model
+        uses: actions/cache@v6
+        with:
+          path: data/model
+          key: model-${{ hashFiles('packaging/common/fetch-model.sh') }}
+
+      - run: mise run macos:dmg
+      - run: mise run macos:check
+
   # Independent of the Rust checks: proves the manifest still builds and that
   # what it produces is a usable app, without publishing anything.
   flatpak:

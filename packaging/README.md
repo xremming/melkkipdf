@@ -3,8 +3,9 @@
 MelkkiPDF is distributed as a flatpak from a self-hosted OSTree repository
 served by GitHub Pages. An OSTree repo is just static files, so Pages is enough
 to host it, and users get automatic updates through `flatpak update`. On macOS
-there is an app bundle for the machine that builds it. Each platform has a
-directory, and `common/` holds what both use.
+it is a disk image on each GitHub release, signed with a Developer ID and
+notarized by Apple. Each platform has a directory, and `common/` holds what
+both use.
 
 | File                                    | What it is                                  |
 | --------------------------------------- | ------------------------------------------- |
@@ -20,7 +21,9 @@ directory, and `common/` holds what both use.
 | `flatpak/index.html`                     | Landing page; `@BASE_URL@` and `@APP_ID@` are filled in at publish time |
 | `flatpak/publish.sh`                     | Builds the repo and lays out the Pages site |
 | `flatpak/check.sh`                       | Checks the installed flatpak runs, ships the model, and its metadata validates |
-| `macos/build-app.sh`                     | Builds an ad-hoc signed `target/MelkkiPDF.app` for local use on macOS |
+| `macos/build-app.sh`                     | Builds `target/MelkkiPDF.app`, ad hoc signed unless given a Developer ID |
+| `macos/dmg.sh`                           | Packs the app into `target/MelkkiPDF-<version>.dmg`, notarizing both when given a key |
+| `macos/check.sh`                         | Checks the app and the image, and Gatekeeper's verdict once they are signed |
 
 Each script has a task in [`mise.toml`](../mise.toml), which is how CI and
 the steps below run them, and every script runs from the repository root
@@ -31,6 +34,10 @@ wherever it is called from.
 ```sh
 flatpak install https://xremming.github.io/melkkipdf/melkkipdf.flatpakref
 ```
+
+On macOS, download `MelkkiPDF-<version>.dmg` from the
+[latest release](https://github.com/xremming/melkkipdf/releases/latest),
+open it, and drag MelkkiPDF onto Applications.
 
 ## Building locally
 
@@ -66,6 +73,34 @@ them to int8 with the `quantize_model` example before installing them under
 first. Both places are where the viewer looks for the model beside its
 binary. To move to another revision, change it and the hashes in
 `fetch-model.sh` and the manifest together.
+
+## macOS
+
+`mise run macos:dmg` builds the app for this Mac's architecture, signs it ad
+hoc, and packs it into a disk image; `mise run macos:check` checks both. That
+is what CI does on every push, and it runs only on the machine that built it.
+Needs `rsvg-convert` (`brew install librsvg`) and Xcode's command line tools.
+
+A release is built by `.github/workflows/macos.yml` instead, which sets what
+the scripts read to make one anyone can open:
+
+- `MACOS_ARCHS="aarch64 x86_64"` builds the binary for both and joins them
+  into a universal one, for Apple silicon and Intel Macs alike. Each needs
+  its Rust target, which `rustup target add` installs.
+- `MACOS_SIGNING_IDENTITY` signs the app, with the hardened runtime, and the
+  image with that Developer ID Application certificate from the keychain.
+- `NOTARY_KEY_PATH`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` give
+  `notarytool` an App Store Connect API key. The app is notarized and its
+  ticket stapled before it goes into the image, and then the image is, so
+  Gatekeeper opens both without asking Apple, offline too.
+
+The bundle is built for macOS 11 and later, which is what
+`LSMinimumSystemVersion` says and what `MACOSX_DEPLOYMENT_TARGET` builds the
+C and the Rust for.
+
+To try a signed build before tagging, run the macOS workflow by hand
+(`gh workflow run macOS`): it does everything but publish, and keeps the
+image as the run's artifact.
 
 ## After changing dependencies
 
@@ -120,9 +155,12 @@ be added to the script by hand.
 
 ## Releasing
 
-A `v*` tag is the only thing that publishes. CI builds the flatpak on every
-push and throws the result away, so the manifest is known to work before a
-release; nothing reaches the repository until a version is tagged.
+A `v*` tag is the only thing that publishes. CI builds the flatpak and the
+macOS disk image on every push and throws them away, so both are known to
+work before a release; nothing reaches the repository or a release until a
+version is tagged. The tag's Flatpak workflow publishes the flatpak, and its
+macOS workflow makes the GitHub release, with the release notes from the
+metainfo, and puts the signed and notarized image on it.
 
 In Claude Code, `/release patch` (or `minor`, `major`, or an explicit
 `x.y.z`) does the whole checklist below, showing the release notes for
@@ -178,6 +216,13 @@ approval and asking before it pushes. By hand:
    the signing key would force users to act, by removing and re-adding the
    remote.
 
+   The macOS workflow takes longer, notarizing twice. Once it is done the
+   release has the image:
+
+   ```sh
+   gh release view v0.2.0 --json assets --jq '.assets[].name'
+   ```
+
 ## One-time repository setup
 
 1. **Settings → Pages → Source: GitHub Actions.**
@@ -203,3 +248,25 @@ approval and asking before it pushes. By hand:
    invisible to the `org.flatpak.Builder` sandbox and the export fails with
    `mkdirat: No such file or directory`. CI is unaffected: it uses the
    distribution's flatpak-builder, which is not sandboxed.
+
+3. Give the macOS workflow what it signs and notarizes with, from an Apple
+   Developer Program membership:
+
+   - A Developer ID Application certificate, which only the team's Account
+     Holder can create, exported from Keychain Access as a `.p12` with its
+     private key.
+   - A Team API key from App Store Connect, under Users and Access →
+     Integrations, with the Developer role; notarytool cannot use an
+     Individual key. Its `.p8` file can be downloaded only once.
+
+   ```sh
+   base64 < DeveloperID.p12 | gh secret set MACOS_CERTIFICATE_P12
+   gh secret set MACOS_CERTIFICATE_PASSWORD
+   gh secret set NOTARY_KEY_P8 < AuthKey_XXXXXXXXXX.p8
+   gh secret set NOTARY_KEY_ID
+   gh secret set NOTARY_ISSUER_ID
+   ```
+
+   Notarizing stops working whenever Apple publishes a new Program License
+   Agreement until it is accepted on developer.apple.com, and the
+   certificate expires after five years.

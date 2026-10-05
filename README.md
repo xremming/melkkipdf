@@ -1,6 +1,11 @@
 # MelkkiPDF
 
-A fast, minimal PDF viewer for Linux, inspired by [SumatraPDF][sumatra].
+A fast, minimal PDF viewer for Linux and macOS, inspired by
+[SumatraPDF][sumatra]. Built with [Slint][slint] and [MuPDF][mupdf].
+
+## Install
+
+On Linux:
 
 ```sh
 flatpak install https://xremming.github.io/melkkipdf/melkkipdf.flatpakref
@@ -17,7 +22,12 @@ Launch it from your application menu, or:
 flatpak run io.github.xremming.MelkkiPDF document.pdf
 ```
 
-Built with [Slint][slint] and [MuPDF][mupdf].
+On macOS 11 or later, on Apple silicon or Intel, download
+`MelkkiPDF-<version>.dmg` from the
+[latest release](https://github.com/xremming/melkkipdf/releases/latest), open
+it, and drag MelkkiPDF onto Applications. It is signed and notarized, so it
+opens like any other app. There are no automatic updates on macOS yet;
+download the next release the same way.
 
 ## Build from source
 
@@ -41,9 +51,10 @@ cargo build --release
 
 To build the flatpak instead, see [packaging/README.md](packaging/README.md).
 
-It also builds and runs on macOS, where `mise run macos:app` wraps the release
-binary in an app bundle that Finder can open PDFs with, signed only for the
-machine that built it.
+On macOS, `mise run macos:app` wraps the release binary in an app bundle that
+Finder can open PDFs with, signed only for the machine that built it; see
+[packaging/README.md](packaging/README.md) for the signed disk image a release
+publishes.
 
 The tests drive the window headlessly, so they need no display:
 

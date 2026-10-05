@@ -2,7 +2,7 @@
 # CI alike. Every task is a thin wrapper, so plain cargo keeps working without
 # mise. What mise cannot provide stays a system prerequisite: clang, libclang
 # and fontconfig for the build, flatpak-builder for the flatpak, rsvg-convert
-# and iconutil for the macOS bundle.
+# and Xcode's command line tools for the macOS bundle.
 
 [env]
 # Where the viewer and the tests find the embedding model that searching by
@@ -86,9 +86,18 @@ sources = [
 outputs = ["packaging/common/third-party-licenses.txt"]
 
 [tasks."macos:app"]
-description = "Build target/MelkkiPDF.app, signed for this machine only"
+description = "Build target/MelkkiPDF.app, signed for this machine only unless told otherwise"
 depends = ["licenses"]
 run = "packaging/macos/build-app.sh"
+
+[tasks."macos:dmg"]
+description = "Pack the app into target/MelkkiPDF-<version>.dmg, notarizing both when given a key"
+depends = ["macos:app"]
+run = "packaging/macos/dmg.sh"
+
+[tasks."macos:check"]
+description = "Check the app and the disk image, and Gatekeeper's verdict once they are signed"
+run = "packaging/macos/check.sh"
 
 [tasks."flatpak:sources"]
 description = "Regenerate the vendored crate list from Cargo.lock"
