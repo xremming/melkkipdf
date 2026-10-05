@@ -52,6 +52,20 @@ const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(5);
 /// How long a problem stays on screen, long enough to read a sentence or two.
 const NOTICE_DURATION: Duration = Duration::from_secs(8);
 
+/// The kinds of document the open dialog offers, by name and file extension.
+/// MuPDF opens images and comic archives too, but those are pictures rather
+/// than documents, so the dialog leaves them out. So does `.pdb`, which MuPDF
+/// reads as an e-book but which far more often holds debug symbols.
+const DOCUMENT_KINDS: [(&str, &[&str]); 6] = [
+    // Illustrator files are PDFs inside, and MuPDF opens them as such.
+    ("PDF", &["pdf", "ai"]),
+    ("XPS", &["xps", "oxps"]),
+    ("E-books", &["epub", "mobi", "prc", "fb2"]),
+    ("Office documents", &["docx", "xlsx", "pptx", "hwpx"]),
+    ("Web pages", &["html", "htm", "xhtml"]),
+    ("Plain text", &["txt", "text"]),
+];
+
 /// A file dragged from another application over the window. Kept apart from
 /// winit's event type so the tests can drive it.
 pub(crate) enum FileDrag {
@@ -972,16 +986,22 @@ impl App {
         }
     }
 
-    /// Prompts for a PDF with a native file dialog and opens the chosen one. The
-    /// picker runs as a future on Slint's event loop so the UI stays responsive.
+    /// Prompts for a document with a native file dialog and opens the chosen
+    /// one. The picker runs as a future on Slint's event loop so the UI stays
+    /// responsive. The first filter, which the dialog starts on, takes every
+    /// kind at once, and the rest narrow it to one kind each.
     fn pick_and_open(self: &Rc<Self>) {
         let app = self.clone();
         let _ = slint::spawn_local(async move {
-            let file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF", &["pdf"])
-                .set_title("Open PDF")
-                .pick_file()
-                .await;
+            let every: Vec<&str> = DOCUMENT_KINDS
+                .iter()
+                .flat_map(|(_, extensions)| extensions.iter().copied())
+                .collect();
+            let dialog = DOCUMENT_KINDS.iter().fold(
+                rfd::AsyncFileDialog::new().add_filter("All documents", &every),
+                |dialog, (name, extensions)| dialog.add_filter(*name, extensions),
+            );
+            let file = dialog.set_title("Open Document").pick_file().await;
             if let Some(file) = file {
                 app.open(file.path().to_string_lossy().into_owned());
             }
