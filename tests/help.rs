@@ -57,6 +57,28 @@ fn the_document_keeps_still_under_the_help() {
 }
 
 #[test]
+fn the_help_ends_with_the_licence_notice() {
+    let t = shown();
+    let texts = || {
+        ElementHandle::find_by_element_type_name(&t.window, "Text")
+            .filter_map(|text| text.accessible_label())
+            .collect::<Vec<_>>()
+    };
+    let says =
+        |texts: &[slint::SharedString], words: &str| texts.iter().any(|text| text.contains(words));
+    assert!(!says(&texts(), "GNU Affero General Public License"));
+
+    // The GNU AGPL asks for the copyright, the lack of warranty and where
+    // the licence is to be shown together.
+    press(&t, "?");
+    let texts = texts();
+    assert!(says(&texts, "copyright © 2026 Maximilian Remming"), "{texts:?}");
+    assert!(says(&texts, "GNU Affero General Public License, version 3 or later"));
+    assert!(says(&texts, "no warranty"));
+    assert!(says(&texts, "github.com/xremming/melkkipdf"));
+}
+
+#[test]
 fn the_toolbar_button_shows_the_help_and_leaves_the_keys_with_the_document() {
     let t = shown();
     press(&t, "/");

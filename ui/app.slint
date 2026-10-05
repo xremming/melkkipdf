@@ -2626,6 +2626,28 @@ export component MainWindow inherits Window {
                             wrap: word-wrap;
                         }
                     }
+
+                    // The notices the GNU AGPL asks an interactive program
+                    // to show: the copyright, that there is no warranty, and
+                    // where to read the licence. Set smaller and centred, as
+                    // the page's footnote rather than one of its sections.
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "MelkkiPDF is copyright © 2026 Maximilian Remming. It is free software: you can share and change it under the GNU Affero General Public License, version 3 or later. It comes with no warranty, to the extent the law allows.";
+                            color: #bbbbbb;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: "The licence and the source code are at github.com/xremming/melkkipdf, as are the licences of the works the viewer is built from, MuPDF and Slint among them. A copy of each ships with the viewer, as LICENSE and third-party-licenses.txt.";
+                            color: #bbbbbb;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+                    }
                 }
             }
         }
