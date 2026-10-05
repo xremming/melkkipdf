@@ -159,6 +159,9 @@ AGPL-3.0-or-later. See [LICENSE](LICENSE).
 The toolbar icons come from [pdf.js][pdfjs] and are used under the Apache
 License 2.0; see [ui/icons/README.md](ui/icons/README.md).
 
+The packages ship the licences of everything else built into the viewer in
+[packaging/common/third-party-licenses.txt](packaging/common/third-party-licenses.txt).
+
 [sumatra]: https://www.sumatrapdfreader.org/
 [slint]: https://slint.dev/
 [mupdf]: https://mupdf.com/

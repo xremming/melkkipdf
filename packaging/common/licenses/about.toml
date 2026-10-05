@@ -1,0 +1,59 @@
+# Which licences the crates linked into the viewer may come under, for
+# packaging/common/generate-licenses.sh. Where a crate offers a choice, the
+# first one listed here that it allows is the one it is used under.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "OFL-1.1",
+    # Slint, which is also offered under licences of its own, one of them
+    # asking for its logo in the window; the GPL is the one an AGPL program
+    # can take it under without that.
+    "GPL-3.0-only",
+    # MuPDF and its Rust bindings, by its deprecated name for AGPL-3.0-only.
+    "AGPL-3.0",
+]
+# Every platform there is a package for, so one list covers them all.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+# Neither ends up in what is shipped.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Leaves out the viewer itself, which LICENSE covers.
+[private]
+ignore = true
+
+# The crate carries FreeType's sources, whose licence headers would
+# otherwise be listed as the crate's own. FreeType itself is in the notices
+# for MuPDF, which builds the copy the viewer uses.
+[freetype-sys.clarify]
+license = "MIT"
+
+[[freetype-sys.clarify.files]]
+path = "LICENSE"
+license = "MIT"
+checksum = "8911cb953a89daca54f0ab96616f5e447e2b1399fba7ec098872cfdacde5354b"
+
+# The crate names its licence file but not the licence, which is MIT.
+[model2vec-rs.clarify]
+license = "MIT"
+
+[[model2vec-rs.clarify.files]]
+path = "LICENSE"
+license = "MIT"
+checksum = "6869ad291a9df9866448579b7157bf337373a21ced5b4b315e68b2924aff2ab9"

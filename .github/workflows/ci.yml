@@ -33,6 +33,16 @@ jobs:
       - uses: jdx/mise-action@v5
       - run: mise run lint:shell
 
+  # The third-party licences are generated from Cargo.lock and committed, and
+  # nothing else would notice a change of dependencies that left them stale.
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise run --force licenses
+      - run: git diff --exit-code packaging/common/third-party-licenses.txt
+
   clippy:
     runs-on: ubuntu-latest
     steps:

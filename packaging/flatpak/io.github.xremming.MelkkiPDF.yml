@@ -58,6 +58,10 @@ modules:
       - install -Dm644 data/icons/hicolor/scalable/apps/$FLATPAK_ID.svg
         /app/share/icons/hicolor/scalable/apps/$FLATPAK_ID.svg
       - install -Dm644 LICENSE /app/share/licenses/$FLATPAK_ID/LICENSE
+      # Everything built into the viewer that is not its own, whose licences
+      # ask for their notices to travel with the binary.
+      - install -Dm644 packaging/common/third-party-licenses.txt
+        /app/share/licenses/$FLATPAK_ID/third-party-licenses.txt
     sources:
       - type: dir
         path: ../..

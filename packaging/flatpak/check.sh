@@ -33,6 +33,14 @@ for file in config.json tokenizer.json model.safetensors; do
     fi
 done
 
+echo "Checking the licences ship with the viewer."
+for file in LICENSE third-party-licenses.txt; do
+    if ! flatpak run --command=test "$APP_ID" -s "/app/share/licenses/$APP_ID/$file"; then
+        echo "The viewer ships without $file." >&2
+        exit 1
+    fi
+done
+
 echo "Validating the desktop entry."
 desktop-file-validate "$app/export/share/applications/$APP_ID.desktop"
 

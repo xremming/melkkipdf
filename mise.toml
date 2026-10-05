@@ -20,6 +20,8 @@ jq = "1.8"
 # hand-rolled virtualenv.
 uv = "0.12"
 shellcheck = "0.11"
+# Lists the crates' licences for the third-party licences the packages ship.
+"github:EmbarkStudios/cargo-about" = "0.9.2"
 
 [tasks.build]
 description = "Build the release binary"
@@ -71,8 +73,21 @@ arg "[page]" help="The 0-based page" default="0"
 '''
 run = 'cargo run --example render_png -- "${usage_pdf?}" "${usage_png?}" "${usage_page?}"'
 
+[tasks.licenses]
+description = "Regenerate the third-party licences the packages ship"
+run = "packaging/common/generate-licenses.sh"
+# Skipped while the file is newer than what it is made from, and a dependency
+# of every package, so none ships a stale list.
+sources = [
+    "Cargo.lock",
+    "packaging/common/generate-licenses.sh",
+    "packaging/common/licenses/**/*",
+]
+outputs = ["packaging/common/third-party-licenses.txt"]
+
 [tasks."macos:app"]
 description = "Build target/MelkkiPDF.app, signed for this machine only"
+depends = ["licenses"]
 run = "packaging/macos/build-app.sh"
 
 [tasks."flatpak:sources"]
@@ -97,7 +112,7 @@ flatpak install --user --assumeyes flathub \
 
 [tasks."flatpak:build"]
 description = "Build the flatpak into packaging/flatpak/repo and lay out the site"
-depends = ["flatpak:sources"]
+depends = ["flatpak:sources", "licenses"]
 run = "packaging/flatpak/publish.sh"
 
 [tasks."flatpak:install"]
@@ -116,5 +131,5 @@ run = "packaging/flatpak/check.sh"
 # version, writes the notes, commits, tags and pushes; this is its check.
 [tasks."release:check"]
 description = "Check that a release is ready to tag"
-depends = ["flatpak:sources"]
+depends = ["flatpak:sources", "licenses"]
 run = "packaging/common/release.sh check"

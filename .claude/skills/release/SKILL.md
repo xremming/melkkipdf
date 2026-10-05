@@ -33,10 +33,12 @@ for, however long it takes.
    uncommitted. Unpushed commits are pushed now with `git push origin main`,
    since the release pushes `main` anyway and CI cannot run on what it has
    not seen. If `Cargo.lock` changed since the last release, run
-   `mise run flatpak:sources` and make sure `packaging/flatpak/cargo-sources.json`
-   comes out unchanged; if it changes, that is a missing commit, so stop and
-   say so. A version that is not `major`, `minor`, `patch` or `x.y.z` is a
-   question back to the user, not a guess.
+   `mise run flatpak:sources` and `mise run licenses` and make sure
+   `packaging/flatpak/cargo-sources.json` and
+   `packaging/common/third-party-licenses.txt` come out unchanged; if either
+   changes, that is a missing commit, so stop and say so. A version that
+   is not `major`, `minor`, `patch` or `x.y.z` is a question back to the
+   user, not a guess.
 
 2. **Wait for CI to pass on HEAD.** This step ends only with a CI run for
    HEAD that succeeded, or with a stop because one failed; a run that is

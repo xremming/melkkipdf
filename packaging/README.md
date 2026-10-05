@@ -10,6 +10,8 @@ directory, and `common/` holds what both use.
 | --------------------------------------- | ------------------------------------------- |
 | `common/fetch-model.sh`                  | Downloads the embedding model for searching by meaning into `data/model` |
 | `common/release.sh`                      | Checks a release is ready to tag; the `/release` skill's last stop |
+| `common/third-party-licenses.txt`        | The licences of everything built into the viewer but its own (generated) |
+| `common/generate-licenses.sh`            | Regenerates the above from `Cargo.lock` and `common/licenses/` |
 | `flatpak/io.github.xremming.MelkkiPDF.yml` | Flatpak manifest                          |
 | `flatpak/io.github.xremming.MelkkiPDF.desktop` | Desktop entry, incl. the `application/pdf` association |
 | `flatpak/io.github.xremming.MelkkiPDF.metainfo.xml` | AppStream metadata for software centres |
@@ -78,6 +80,43 @@ git add packaging/flatpak/cargo-sources.json
 The task only runs when the lock file is newer than the list, and
 `flatpak:build` runs it first, so the flatpak is never built from a stale
 list.
+
+The licences shipped with the packages are generated from the lock file too,
+and need the same:
+
+```sh
+mise run licenses
+git add packaging/common/third-party-licenses.txt
+```
+
+Both package builds and the release check run it first, and CI fails when
+the committed file is not what it would write.
+
+## Licences
+
+The flatpak and the macOS bundle ship `LICENSE` and
+`common/third-party-licenses.txt`, in `/app/share/licenses/<app id>/` and in
+`Contents/Resources/`. The latter is what the MIT, BSD, Apache and font
+licences of the viewer's dependencies ask a binary to carry, and
+`generate-licenses.sh` puts it together from three places:
+
+- The crates, from [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+  with `common/licenses/about.toml`, for every platform there is a package
+  for. A crate offering a choice of licences is listed under the first one
+  in `accepted` it allows, which is how Slint comes under the GPL rather
+  than its own licences.
+- The libraries MuPDF compiles in, from the licence files in the sources
+  `mupdf-sys` unpacks.
+- What neither carries, kept in `common/licenses/`: the pdf.js icons' and the
+  embedding model's licences, and in `common/licenses/mupdf/` the texts the
+  `mupdf-sys` crate leaves out of MuPDF's sources. The script stops when
+  `mupdf-sys` moves to another MuPDF than those texts were taken for; the
+  README there says how to refresh them.
+
+A new dependency under a licence not in `accepted` fails the generator until
+it is added there, after checking it allows the viewer's use. One whose
+sources MuPDF compiles in, or a new data file built into the viewer, has to
+be added to the script by hand.
 
 ## Releasing
 

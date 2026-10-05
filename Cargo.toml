@@ -4,6 +4,9 @@ version = "0.13.0"
 edition = "2024"
 description = "A fast, minimal PDF viewer, inspired by SumatraPDF."
 license = "AGPL-3.0-or-later"
+# Not on crates.io. Also what keeps the viewer out of its own list of
+# third-party licences.
+publish = false
 
 [features]
 # Exposes the headless `testing::Harness` used by the integration tests,

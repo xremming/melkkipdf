@@ -1,0 +1,1589 @@
+These pattern files come from the tex-hyphen project version CTAN-2025.06.02.
+
+https://github.com/hyphenation/tex-hyphen
+
+See the hyph-utf8/tex/generic/hyph-utf8/patterns directory for the original files.
+
+af:
+% title: Hyphenation patterns for Afrikaans
+% copyright: Copyright (C) 2013 Tilla Fick and Chris Swanepoel
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%     -
+%         name: Tilla Fick
+%         contact: fickm (at) unisa.ac.za
+%     -
+%         name: Chris Swanepoel
+%         contact: swanecj (at) unisa.ac.za
+%     -
+%         email: hyphen (at) rekenaar (dot) net
+% licence:
+%     name: MIT
+%     text: |-
+%         Permission is hereby granted, free of charge, to any person obtaining a copy
+%         of this software and associated documentation files (the "Software"), to deal
+%         in the Software without restriction, including without limitation the rights
+%         to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+%         copies of the Software, and to permit persons to whom the Software is
+%         furnished to do so, subject to the following conditions:
+%
+%         The above copyright notice and this permission notice shall be included in
+%         all copies or substantial portions of the Software.
+%
+%         THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+%         IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+%         FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+%         AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+%         LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+%         OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+%         SOFTWARE.
+
+as:
+% title: Hyphenation patterns for Assamese
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+be:
+% title: Hyphenation patterns for Belarusian
+% copyright: Copyright (C) 2016 Maksim Salau
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/hyphenation/hyph-be
+% authors:
+%   -
+%     name: Maksim Salau
+%     contact: maksim.salau (at) gmail.com
+% licence:
+%     name: MIT
+%     url: https://opensource.org/licenses/MIT
+%     text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+
+bg:
+% copyright: Copyright (C) 2000, 2004, 2017 Anton Zinoviev
+% title: Hyphenation patterns for Bulgarian
+% notice: >
+%     This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+%     The Bulgarian patterns used to come from another file,
+%     by Georgi Boshnakov, named bghyphen.tex
+% authors:
+%     -
+%         name: Anton Zinoviev
+%         contact: anton:lml.bas.bg
+% licence:
+%     text: > # Seems equivalent to 3-clause BSD
+%         This software may be used, modified, copied, distributed, and sold,
+%         both in source and binary form provided that the above copyright
+%         notice and these terms are retained. The name of the author may not
+%         be used to endorse or promote products derived from this software
+%         without prior permission.  THIS SOFTWARE IS PROVIDES "AS IS" AND
+%         ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED.  IN NO EVENT
+%         SHALL THE AUTHOR BE LIABLE FOR ANY DAMAGES ARISING IN ANY WAY OUT
+%         OF THE USE OF THIS SOFTWARE.
+
+bn:
+% title: Hyphenation patterns for Bengali
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+ca:
+% title: Hyphenation patterns for Catalan
+% copyright: Copyright (C) December 1991-January 1995, July 2003 Gonçal Badenes
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Gonçal Badenes
+%     contact: g.badenes (at) ieee.org
+%   -
+%     name: Francina Turon
+% licence:
+%     name: LPPL
+%     version: 1
+%     or_later: true
+%     url: https://latex-project.org/lppl/
+
+cop:
+% title: Hyphenation patterns for Coptic
+% copyright: Copyright (C) 2004—2010 Claudio Beccari
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Claudio Beccari
+%     contact: claudio.beccari (at) gmail.com
+% licence:
+%     name: MIT
+%     url: https://opensource.org/licenses/MIT
+%     text: >
+%           Permission is hereby granted, free of charge, to any person
+%           obtaining a copy of this software and associated documentation
+%           files (the “Software”), to deal in the Software without
+%           restriction, including without limitation the rights to use,
+%           copy, modify, merge, publish, distribute, sublicense, and/or
+%           sell copies of the Software, and to permit persons to whom the
+%           Software is furnished to do so, subject to the following
+%           conditions:
+%
+%           The above copyright notice and this permission notice shall be
+%           included in all copies or substantial portions of the Software.
+%
+%           THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+%           EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%           OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%           NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%           HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%           WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%           FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%           OTHER DEALINGS IN THE SOFTWARE.
+
+da:
+% title: Hyphenation patterns for Danish
+% copyright: Copyright (C) 1994 Frank Jensen
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Frank Jensen
+%     contact: frank.jensen (at) hugin.com
+% licence:
+%     - This file is available under any of these licences:
+%     -
+%         name: LPPL
+%         version: 1.3
+%         or_later: true
+%         url: http://www.latex-project.org/lppl/lppl-1-3.html
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+
+de-1996:
+% title: German Hyphenation Patterns (Reformed Orthography, 2006)
+%
+% notice: TeX-Trennmuster für die reformierte (2006) deutsche Rechtschreibung
+%
+% authors:
+%   -
+%     name:    Deutschsprachige Trennmustermannschaft
+%     contact: trennmuster@dante.de
+%
+% copyright: Copyright (c) 2013-2024
+%            Stephan Hennig, Werner Lemberg, Günter Milde,
+%            Sander van Geloven, Georg Pfeiffer, Gisbert W. Selke,
+%            Tobias Wendorf, Keno Wehr
+%
+% licence:
+%     name: MIT
+%     url:  https://opensource.org/licenses/mit-license.php
+%     text: >
+%           Permission is hereby granted, free of charge, to any person
+%           obtaining a copy of this software and associated documentation
+%           files (the “Software”), to deal in the Software without
+%           restriction, including without limitation the rights to use,
+%           copy, modify, merge, publish, distribute, sublicense, and/or
+%           sell copies of the Software, and to permit persons to whom the
+%           Software is furnished to do so, subject to the following
+%           conditions:
+%
+%           The above copyright notice and this permission notice shall be
+%           included in all copies or substantial portions of the Software.
+%
+%           THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+%           EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%           OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%           NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%           HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%           WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%           FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%           OTHER DEALINGS IN THE SOFTWARE.
+%
+% source: https://repo.or.cz/w/wortliste.git?a=commit;h=304aaa2188a75e57afe36bad0443d90a9c715b8e
+%
+
+el-polyton:
+% title: Hyphenation patterns for Modern Greek, polytonic
+% copyright: Copyright (C) 2008-2011 Dimitrios Filippou
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Dimitrios Filippou
+%     contact: dimitrios.ap.filippou (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: LPPL
+%         url: https://latex-project.org/lppl/
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+
+en-us:
+% title: Hyphenation patterns for American English
+% copyright: Copyright (C) 1990, 2004, 2005 Gerard D.C. Kuiken
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Gerard D.C. Kuiken
+% licence:
+%     text: >
+%         Copying and distribution of this file, with or without modification,
+%         are permitted in any medium without royalty provided the copyright
+%         notice and this notice are preserved.
+
+es:
+% copyright: Copyright (C) 1993, 1997 Javier Bezos, 2001-2019 Javier Bezos, CervanTeX
+% title: Hyphenation patterns for Spanish
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Javier Bezos
+% licence:
+%     name: MIT/X11
+%     url: https://opensource.org/licenses/MIT
+%     text: >
+%         Permission is hereby granted, free of charge, to any person obtaining a copy
+%         of this software and associated documentation files (the "Software"), to deal
+%         in the Software without restriction, including without limitation the rights
+%         to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+%         copies of the Software, and to permit persons to whom the Software is
+%         furnished to do so, subject to the following conditions:
+%
+%         The above copyright notice and this permission notice shall be included in
+%         all copies or substantial portions of the Software.
+%
+%         THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+%         IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+%         FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+%         AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+%         LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+%         OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+%         SOFTWARE.
+
+et:
+% title: Hyphenation patterns for Estonian
+% copyright: Copyright (C) 2004-2015 Enn Saar
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Enn Saar
+%     contact: saar (at) aai.ee
+% licence:
+%     - This file is dual-licensed under both these licences, at your discretion:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LPPL
+%         version: 1.3
+%         or_later: true
+%         status: author-maintained
+%         url: http://www.latex-project.org/lppl.txt
+
+fi:
+% title: Hyphenation patterns for Finnish
+% copyright: Copyright (C) 1986, 1988, 1989 Kauko Saarinen
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Kauko Saarinen
+%     affiliation: Computing Centre, University of Jyväskylä, Finland
+% licence:
+%     - text: Patterns may be freely distributed
+
+fr:
+% title: Hyphenation patterns for French
+% copyright: Copyright (C) 1994-2002 Daniel Flipo, Bernard Gaulle, 2016 Arthur Reutenauer
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%     -
+%         name: Daniel Flipo
+%     -
+%         name: Bernard Gaulle
+%         note: deceased
+%     -
+%         name: Arthur Reutenauer
+%         contact: arthur (at) reutenauer.eu
+%     -
+%         email: cesure-l (at) gutenberg (dot} eu (dot) org
+% licence:
+%     name: MIT
+%     url: https://opensource.org/licenses/MIT
+%     text: >
+%         Permission is hereby granted, free of charge, to any person obtaining
+%         a copy of this software and associated documentation files (the
+%         "Software"), to deal in the Software without restriction, including
+%         without limitation the rights to use, copy, modify, merge, publish,
+%         distribute, sublicense, and/or sell copies of the Software, and to
+%         permit persons to whom the Software is furnished to do so, subject to
+%         the following conditions:
+%
+%         The above copyright notice and this permission notice shall be
+%         included in all copies or substantial portions of the Software.
+%
+%         THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%         EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+%         MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%         NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+%         BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+%         ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+%         CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+%         SOFTWARE.
+
+gu:
+% title: Hyphenation patterns for Gujarati
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+hi:
+% title: Hyphenation patterns for Hindi
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+hr:
+% title: Hyphenation patterns for Croatian
+% copyright: Copyright (C) 1994, 1996, 2011, 2015 Igor Marinović
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Igor Marinović
+%     contact: marinowski (at) gmail.com
+% licence:
+%     - This file is available under any of these licences:
+%     -
+%         name: LPPL
+%         version: 1
+%         or_later: true
+%         url: http://www.latex-project.org/lppl/lppl-1-0.html
+%     -
+%         text: >
+%             Permission is hereby granted, free of charge, to any person obtaining
+%             a copy of this file and any associated documentation
+%             (the "Data Files") to deal in the Data Files
+%             without restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, and/or sell copies of
+%             the Data Files, and to permit persons to whom the Data Files
+%             are furnished to do so, provided that
+%             (a) this copyright and permission notice appear with all copies
+%             of the Data Files,
+%             (b) this copyright and permission notice appear in associated
+%             documentation, and
+%             (c) there is clear notice in each modified Data File
+%             as well as in the documentation associated with the Data File(s)
+%             that the data has been modified.
+%
+%             THE DATA FILES ARE PROVIDED "AS IS", WITHOUT WARRANTY OF
+%             ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+%             WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT OF THIRD PARTY RIGHTS.
+%             IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS
+%             NOTICE BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL
+%             DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
+%             DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+%             TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+%             PERFORMANCE OF THE DATA FILES.
+%
+%             Except as contained in this notice, the name of a copyright holder
+%             shall not be used in advertising or otherwise to promote the sale,
+%             use or other dealings in these Data Files without prior
+%             written authorization of the copyright holder.
+
+hu:
+% title: Hyphenation patterns for Hungarian
+% copyright: Copyright (C) 2003 Bence Nagy
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Bence Nagy
+%     contact: bence.nagy (at) gmail.com
+% licence:
+%     - This file is available under any of these licences, at your option:
+%     -
+%         name: MPL
+%         version: 1.1
+%         initial_developer: Bence Nagy
+%         contributors:
+%             - Bence Nagy
+%         url: https://www.mozilla.org/en-US/MPL/1.1/
+%     -
+%         name: GPL
+%         version: 2.0
+%         url: http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+%     -
+%         name: LGPL
+%         version: 2.1
+%         url: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+hy:
+% title: Hyphenation patterns for Armenian
+% copyright: Copyright (C) 2010 Sahak Petrosyan
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Sahak Petrosyan
+%     contact: sahak (at) mit.edu
+% licence:
+%     name: LGPL
+%     url: https://www.gnu.org/licenses/lgpl-3.0.en.html
+
+is:
+% title: Hyphenation patterns for Icelandic
+% copyright: Copyright (C) 1988, 2004 Jörgen Pind
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Jörgen Pind
+%     affiliation: Institute of Lexicography, Univ. of Iceland
+%     contact: jorgen (at) lexis.hi.is
+% licence:
+%     name: LPPL
+%     version: 1.2
+%     or_later: true
+%     url: http://www.latex-project.org/lppl.txt
+
+it:
+% title: Hyphenation patterns for Italian
+% copyright: Copyright (C) 2008-2011 Claudio Beccari
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Claudio Beccari
+%     contact: claudio.beccari (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: LPPL
+%         version: 1.3
+%         or_later: true
+%         url: http://www.latex-project.org/lppl.txt
+%         status: maintained
+%         maintainer: Claudio Beccari, e-mail claudio dot beccari at gmail dot com
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+
+ka:
+% title: Hyphenation patterns for Georgian
+% copyright: Copyright (C) 2013 Levan Shoshiashvili
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: http://tex.tsu.ge
+% authors:
+%   -
+%     name: Levan Shoshiashvili
+%     contact: shoshia (at) hotmail.com
+% licence:
+%     name: MIT
+%     url: https://opensource.org/licenses/MIT
+
+kn:
+% title: Hyphenation patterns for Kannada
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+la:
+% title: Hyphenation patterns for modern and medieval Latin
+% copyright: Copyright (C) 1999-2016 Claudio Beccari
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Claudio Beccari
+%     contact: claudio.beccari (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the “Software”), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LPPL
+%         version: 1
+%         or_later: true
+%         url: https://latex-project.org/lppl/
+
+lt:
+% title: Hyphenation patterns for Lithuanian
+% copyright: Copyright (C) 1992 Sigitas Tolušis, Yannis Haralambous
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: http://www.vtex.lt/tex/littex/index.html
+% authors:
+%   -
+%     name: Vytas Statulevičius
+%     contact: vytas (at) vtex.lt
+%   -
+%     name: Sigitas Tolušis
+%     contact: sigitas (at) vtex.lt
+%   -
+%     name: Yannis Haralambous
+%     contact: yannis.haralambous (at) telecom-bretagne.eu
+% licence:
+%     name: MIT
+%     url: https://opensource.org/licenses/MIT
+%     text: >
+%         Permission is hereby granted, free of charge, to any person
+%         obtaining a copy of this software and associated documentation
+%         files (the "Software"), to deal in the Software without
+%         restriction, including without limitation the rights to use,
+%         copy, modify, merge, publish, distribute, sublicense, and/or sell
+%         copies of the Software, and to permit persons to whom the
+%         Software is furnished to do so, subject to the following
+%         conditions:
+%
+%         The above copyright notice and this permission notice shall be
+%         included in all copies or substantial portions of the Software.
+%
+%         THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%         EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%         OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%         NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%         HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%         WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%         FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%         OTHER DEALINGS IN THE SOFTWARE.
+
+lv:
+% title: Hyphenation patterns for Latvian
+% copyright: Copyright (C) 2004-2005 Janis Vilims
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: >
+%     Latvian Lingucomponents for OpenOffice,
+%     http://sourceforge.net/projects/openoffice-lv
+% authors:
+%   -
+%     name: Janis Vilims
+%     contact: jvilims (at) apollo.lv
+% licence:
+%     - This file is available under any of the following licences, at your option:
+%     -
+%         name: LGPL
+%         version: 2.1
+%         url: http://www.gnu.org/copyleft/lesser.txt
+%     -
+%         name: GPL
+%         version: 2
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+ml:
+% title: Hyphenation patterns for Malayalam
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+mn-cyrl:
+% title: Hyphenation patterns for Mongolian, Cyrillic script
+% copyright: Copyright (C) 2007-2015 by Dorjgotov Batmunkh
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Dorjgotov Batmunkh
+%     affiliation: National University of Mongolia
+%     contact: bataak (at) gmail.com
+% licence:
+%     - This file is available under any of the following licenses:
+%     -
+%         name: LPPL
+%         version: 1.3
+%         or_later: true
+%         url: http://www.latex-project.org/lppl/lppl-1-3.txt
+%     -
+%        name: MIT
+%        url: https://opensource.org/licenses/MIT
+%        text: >
+%             Permission is hereby granted, free of charge, to any person obtaining a copy
+%             of this software and associated documentation files (the "Software"), to deal
+%             in the Software without restriction, including without limitation the rights
+%             to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the Software is
+%             furnished to do so, subject to the following conditions:
+%
+%             The above copyright notice and this permission notice shall be included in
+%             all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+%             IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+%             FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+%             AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+%             LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+%             OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+%             THE SOFTWARE.
+
+mr:
+% title: Hyphenation patterns for Marathi
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences, at your option:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+nb:
+% title: Hyphenation patterns for Norwegian, bokmål
+% copyright: Copyright (C) 2004–2005 Rune Kleveland, Ole Michael Selberg, 2007 Karl Ove Hufthammer
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%     - name: Rune Kleveland
+%     - name: Ole Michael Selberg
+%     - name: Karl Ove HuftHammer
+% licence:
+%     text: >
+%         Copying and distribution of this file, with or without modification,
+%         are permitted in any medium without royalty, provided the copyright
+%         notice and this notice are preserved.
+
+nl:
+% title: Hyphenation patterns for Dutch
+% copyright: Copyright (C) 1996 Piet Tutelaers
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% licence:
+%     name: MIT
+%     url: https://opensource.org/licenses/MIT
+% authors:
+%     -
+%         name: Piet Tutelaers
+%         contact: P.T.H.Tutelaers (at) tue.nl
+
+or:
+% title: Hyphenation patterns for Oriya
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the “Software”), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+pa:
+% title: Hyphenation patterns for Panjabi
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the “Software”), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+pi:
+% copyright: Copyright (C) 2018 Wie-Ming Cittānurakkho Bhikkhu
+% title: Hyphenation patterns for Pāli
+% notice: >
+%     This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%      -
+%          name: Wie-Ming Cittānurakkho Bhikkhu
+%          contact: wiemingang:gmail.com
+% licence:
+%     name: MIT
+%     url: https://opensource.org/licenses/MIT
+%     text: >
+%         Permission is hereby granted, free of charge, to any person
+%         obtaining a copy of this software and associated documentation
+%         files (the “Software”), to deal in the Software without
+%         restriction, including without limitation the rights to use,
+%         copy, modify, merge, publish, distribute, sublicense, and/or sell
+%         copies of the Software, and to permit persons to whom the
+%         Software is furnished to do so, subject to the following
+%         conditions:
+%
+%         The above copyright notice and this permission notice shall be
+%         included in all copies or substantial portions of the Software.
+%
+%         THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+%         EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%         OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%         NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%         HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%         WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%         FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%         OTHER DEALINGS IN THE SOFTWARE.
+% source: Generated manually
+
+pl:
+% title: Hyphenation patterns for Polish
+% copyright: Copyright (C) 1987-1995 Hanna Kołodziejska, Bogusław Jackowski, Marek Ryćko
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Hanna Kołodziejska
+%   -
+%     name: Bogusław Jackowski
+%     contact: b_jackowski (at) gust.org.pl
+%   -
+%     name: Marek Ryćko
+%     contact: marek (at) do.com.pl
+% licence:
+%     - This file is made available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the “Software”), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     - text: >
+%         This macro file belongs to the public domain
+%         under the conditions specified by the author of TeX:
+%
+%            “Macro files like PLAIN.TEX should not be changed in any way,
+%             except with respect to preloaded fonts,
+%             unless the changes are authorized by the authors of the macros.”
+%
+%                                                   Donald E. Knuth
+
+pt:
+% title: Hyphenation patterns for Portuguese
+% copyright: Copyright (C) 1987, 1994, 1996, 2015 Pedro J. de Rezende, 1996, 2015 J. Joao Dias Almeida, 2024 Leonardo Araujo and Aline Benevides
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Pedro J. de Rezende
+%     contact: rezende (at) ic.unicamp.br
+%   -
+%     name: J. Joao Dias Almeida
+%     contact: jj (at) di.uminho.pt
+%   -
+%     name: Leonardo Araujo
+%     contact: leolca (at) gmail.com
+%   -
+%     name: Aline Benevides
+%     contact: benevides.aline12 (at) gmail.com
+% licence:
+%     name: BSD 3-clause licence
+%     url: https://opensource.org/licenses/BSD-3-Clause
+%     text: >
+%         Redistribution and use in source and binary forms, with or without
+%         modification, are permitted provided that the following conditions
+%         are met:
+%         * Redistributions of source code must retain the above copyright
+%           notice, this list of conditions and the following disclaimer.
+%         * Redistributions in binary form must reproduce the above copyright
+%           notice, this list of conditions and the following disclaimer in the
+%           documentation and/or other materials provided with the
+%           distribution.
+%         * Neither the name of the University of Campinas, of the University
+%           of Minho nor the names of its contributors may be used to endorse
+%           or promote products derived from this software without specific
+%           prior written permission.
+%
+%         THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+%         "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+%         LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+%         A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL PEDRO J. DE
+%         REZENDE OR J.JOAO DIAS ALMEIDA BE LIABLE FOR ANY DIRECT, INDIRECT,
+%         INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+%         BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+%         OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+%         AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+%         LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY
+%         WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+%         POSSIBILITY OF SUCH DAMAGE.
+
+ro:
+% title: Hyphenation patterns for Romanian
+% copyright: Copyright (C) 1995-1996 Adrian Rezus
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Adrian Rezus
+%     contact: adriaan (at) sci.kun.nl, adriaan (at) cs.kun.nl
+% licence:
+%     - text: [None]
+
+ru:
+% title: Hyphenation patterns for Russian
+% copyright: Copyright (C) 1999-2003 Alexander I. Lebedev
+% notice:
+%     This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%     -
+%         name: Alexander I. Lebedev
+%         contact: swan (at) scon155.phys.msu.su
+% licence:
+%     name: LPPL
+%     version: 1.2
+%     or_later: true
+%     url: https://latex-project.org/lppl/
+
+sa:
+% title: Hyphenation patterns for Sanskrit and Prakrit, Latin transliteration,
+%     and Devanāgari, Bengali, Gujarati, Kannada, Malayalam, and Telugu scripts
+% copyright: Copyright (C) 2006-2011 Yves Codet
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Yves Codet
+%     contact: ycodet (at) club-internet.fr
+% licence:
+%     text: You may freely use, copy, modify and/or distribute this file.
+
+sl:
+% title: Hyphenation patterns for Slovenian
+% copyright: Copyright (C) 1990 Matjaž Vrečko
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Matjaž Vrečko
+%     affiliation: TeXCeX
+%     contact: matjaz (at) mg-soft.si
+% licence:
+%     - This file is available under any of these licences:
+%     -
+%         name: LPPL
+%         version: 1
+%         or_later: true
+%         url: http://www.latex-project.org/lppl/lppl-1-0.html
+%     -
+%         name: MIT
+%         url: https://opensource.org/licences/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+
+sq:
+% title: Hyphenation patterns for Albanian
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+%
+% authors:
+%     -
+%         name: Claudio Beccari
+%         contact: claudio.beccari@gmail.com
+%     -
+%         name: Sabina Koliqi
+%         contact: sabina.kolici@enaip.piemonte.it
+%     -
+%         name: Arthur Rosendahl
+%         contact: arthur@rosendahl.io
+%
+% copyright: >
+%     Copyright (C) 2020 Claudio Beccari, Sabina Koliqi
+%               (C) 2025 Arthur Rosendahl
+%
+% licence:
+%     name: MIT
+%     url:  http://opensource.org/licenses/mit-license.php
+%     text: >
+%           Permission is hereby granted, free of charge, to any person
+%           obtaining a copy of this software and associated documentation
+%           files (the “Software”), to deal in the Software without
+%           restriction, including without limitation the rights to use,
+%           copy, modify, merge, publish, distribute, sublicense, and/or
+%           sell copies of the Software, and to permit persons to whom the
+%           Software is furnished to do so, subject to the following
+%           conditions:
+%
+%           The above copyright notice and this permission notice shall be
+%           included in all copies or substantial portions of the Software.
+%
+%           THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+%           EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%           OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%           NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%           HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%           WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%           FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%           OTHER DEALINGS IN THE SOFTWARE.
+%
+
+sv:
+% title: Hyphenation patterns for Swedish
+% copyright: Copyright (C) 1994 Jan Michael Rynning
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Jan Michael Rynning
+%     contact: jmr (at) incolumitas.se
+% licence:
+%     name: LPPL
+%     version: 1.2
+%     or_later: true
+
+ta:
+% title: Hyphenation patterns for Tamil
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+te:
+% title: Hyphenation patterns for Telugu
+% copyright: Copyright (C) 2016 Santhosh Thottingal
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% source: https://github.com/santhoshtr/hyphenation/
+% authors:
+%   -
+%     name: Santhosh Thottingal
+%     contact: santhosh.thottingal (at) gmail.com
+% licence:
+%     - This file is available under any of the following licences:
+%     -
+%         name: MIT
+%         url: https://opensource.org/licenses/MIT
+%         text: >
+%             Permission is hereby granted, free of charge, to any person
+%             obtaining a copy of this software and associated documentation
+%             files (the "Software"), to deal in the Software without
+%             restriction, including without limitation the rights to use,
+%             copy, modify, merge, publish, distribute, sublicense, and/or sell
+%             copies of the Software, and to permit persons to whom the
+%             Software is furnished to do so, subject to the following
+%             conditions:
+%
+%             The above copyright notice and this permission notice shall be
+%             included in all copies or substantial portions of the Software.
+%
+%             THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+%             EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+%             OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+%             NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+%             HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+%             WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%             FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+%             OTHER DEALINGS IN THE SOFTWARE.
+%     -
+%         name: LGPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/lgpl.html
+%     -
+%         name: GPL
+%         version: 3
+%         or_later: true
+%         url: http://www.gnu.org/licenses/gpl.html
+
+th:
+% title: Hyphenation patterns for Thai
+% copyright: Copyright (C) 2012-2013 Theppitak Karoonboonyanan
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Theppitak Karoonboonyanan
+%     contact: theppitak (at) gmail.com
+% licence:
+%     name: LPPL
+%     version: 1.3
+%     or_later: true
+%     status: maintained
+%     maintainer: Theppitak Karoonboonyanan
+%     url: https://latex-project.org/lppl/
+
+tk:
+% title: Hyphenation patterns for Turkmen
+% copyright: Copyright (C) 2010-2015 Nazar Annagurban
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%   -
+%     name: Nazar Annagurban
+%     contact: nazartm (at) gmail.com
+% licence:
+%     name: MIT
+%     url: https://opensource.org/licenses/MIT
+%     text: >
+%         Permission is hereby granted, free of charge, to any person obtaining a copy
+%         of this software and associated documentation files (the "Software"), to deal
+%         in the Software without restriction, including without limitation the rights
+%         to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+%         copies of the Software, and to permit persons to whom the Software is
+%         furnished to do so, subject to the following conditions:
+%
+%         The above copyright notice and this permission notice shall be included in
+%         all copies or substantial portions of the Software.
+%
+%         THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+%         IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+%         FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+%         AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+%         LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+%         OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+%         THE SOFTWARE.
+
+tr:
+% title: Hyphenation patterns for Turkish
+% copyright: Copyright (C) 1987 Pierre A. MacKay, 2008, 2011 TUG
+% notice: This file is part of the hyph-utf8 package.
+%     See http://www.hyphenation.org/tex for more information.
+% authors:
+%     -
+%         name: Pierre A. MacKay
+%     -
+%         name: H. Turgut Uyar
+%         contact: uyar (at) itu.edu.tr
+%     -
+%         name: S. Ekin Kocabas
+%         contact: kocabas (at) stanford.edu
+%     -
+%         name: Mojca Miklavec
+% licence:
+%     name: LPPL
+%     version: 1
+%     or_later: true
+%     url: https://latex-project.org/lppl/lppl-1-0.html

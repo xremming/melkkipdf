@@ -29,6 +29,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/melkkipdf "$app/Contents/MacOS/"
 # Where the viewer looks for the model, beside its binary's directory.
 target/release/examples/quantize_model data/model "$app/Contents/Resources/model"
+# Everything built into the viewer that is not its own, whose licences ask
+# for their notices to travel with the binary.
+cp LICENSE packaging/common/third-party-licenses.txt "$app/Contents/Resources/"
 
 # iconutil only accepts a directory of PNGs at fixed sizes, not an SVG.
 iconset=$(mktemp -d)/MelkkiPDF.iconset
