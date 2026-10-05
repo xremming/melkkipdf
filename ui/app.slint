@@ -798,6 +798,9 @@ export component MainWindow inherits Window {
     in property <int> page-count;
     // Two-way bound to the ListView's scroll offset so Rust can jump to a page.
     in-out property <length> scroll-y;
+    // And across, where the pages are wider than the view, so a pinch can
+    // keep the point between the fingers in place.
+    in-out property <length> scroll-x;
     // Shown in the document area while no document is open.
     in property <string> status;
     // A problem to tell the reader about, such as a document or page that
@@ -1105,6 +1108,12 @@ export component MainWindow inherits Window {
     callback zoom-in();
     callback zoom-out();
     callback zoom-reset();
+    // A pinch on the trackpad or a touchscreen: begun, scaling the zoom it
+    // began at by the first value about the point in the page area the other
+    // two give, and over.
+    callback pinch-started();
+    callback pinch-moved(float, float, float);
+    callback pinch-ended();
     callback fit-width();
     callback fit-page();
     callback set-continuous(bool);
@@ -2005,6 +2014,7 @@ export component MainWindow inherits Window {
                             // Two-way bound so Rust can both read the scroll offset (for the
                             // page counter) and set it (to jump to a page).
                             content-y <=> root.scroll-y;
+                            content-x <=> root.scroll-x;
                             changed content-y => {
                                 root.scrolled(-self.content-y / 1px);
                             }
@@ -2082,6 +2092,26 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        // A pinch zooms about the point between the fingers.
+                        // Over the views, it takes nothing else from them, and
+                        // they take no pinches, so they reach it.
+                        if root.page-count > 0: ScaleRotateGestureHandler {
+                            width: 100%;
+                            height: 100%;
+                            started => {
+                                root.pinch-started();
+                            }
+                            updated => {
+                                root.pinch-moved(self.scale, self.center.x / 1px, self.center.y / 1px);
+                            }
+                            ended => {
+                                root.pinch-ended();
+                            }
+                            cancelled => {
+                                root.pinch-ended();
                             }
                         }
 
@@ -2556,6 +2586,8 @@ export component MainWindow inherits Window {
                                 title: "Zoom and fit";
                                 HelpRow { keys: "+, -, ="; action: "Zoom in, zoom out, 100%"; }
                                 HelpRow { keys: "\{root.command-key}+, \{root.command-key}-, \{root.command-key}0"; action: "The same"; }
+                                // Trackpads elsewhere send no pinch to the window.
+                                if Platform.os == OperatingSystemType.macos: HelpRow { keys: "Pinch"; action: "Zoom about the point between the fingers"; }
                                 HelpRow { keys: "S, A"; action: "Fit the page width, fit the whole page"; }
                                 HelpRow { keys: "C"; action: "Switch between continuous and paged"; }
                                 HelpRow { keys: "1, 2, 3"; action: "Single pages, odd spreads, even spreads"; }

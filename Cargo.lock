@@ -2906,6 +2906,7 @@ dependencies = [
  "arboard",
  "dirs",
  "i-slint-backend-testing",
+ "i-slint-core",
  "icu_casemap",
  "icu_normalizer",
  "icu_properties",

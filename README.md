@@ -89,7 +89,8 @@ and about 500 MB. `mise run test:model` runs the tests that need it.
 - Reopens your tabs and each document's view where you left off
 - Continuous and single-page reading modes
 - Single, odd, and even page spreads
-- Zoom, fit-width, and fit-page
+- Zoom, fit-width, and fit-page, and zooming with a pinch on a Mac's trackpad
+  or a touchscreen, about the point between the fingers
 - Outline sidebar with page thumbnails
 - Bookmarks that hang from the page edge like flags on a book, so every
   marked page is in view and one press flips there and back, each in the
@@ -126,6 +127,7 @@ alone. Ctrl is ⌘ on macOS.
 | :                                      | Type a page number, then Enter to go there    |
 | Plus, Minus, =                         | Zoom in, zoom out, 100%                       |
 | Ctrl+Plus, Ctrl+Minus, Ctrl+0          | The same                                      |
+| Pinch on the trackpad (macOS)          | Zoom about the point between the fingers      |
 | S, A                                   | Fit the page width, fit the whole page        |
 | C                                      | Switch between continuous and paged           |
 | 1, 2, 3                                | Single pages, odd spreads, even spreads       |

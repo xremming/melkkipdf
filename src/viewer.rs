@@ -125,6 +125,17 @@ struct Place {
     into_row: f32,
 }
 
+/// The point a pinch zooms about, held so that it means the same place on the
+/// page at another zoom. In continuous mode it is the row the point is in,
+/// how far down that row as a fraction of its height, and how far across from
+/// the middle of the rows, which the list centres; in paged mode how far it is
+/// from the content's corner. Distances across are divided by the zoom.
+#[derive(Clone, Copy)]
+enum Anchor {
+    Continuous { row: usize, into_row: f32, from_middle: f32 },
+    Paged { x: f32, y: f32 },
+}
+
 const ZOOM_STEP: f32 = 1.25;
 const MIN_ZOOM: f32 = 0.1;
 const MAX_ZOOM: f32 = 8.0;
@@ -401,6 +412,14 @@ fn max_scroll_px(inner: &Inner) -> f32 {
     (inner.specs.len() as f32 * row_height_px(inner) - view_height).max(0.0)
 }
 
+/// How wide the continuous list's content is in logical pixels: the view, or
+/// the rows where they are wider, as a usual row is.
+fn list_content_width(inner: &Inner) -> f32 {
+    let view_width = inner.view.map_or(0.0, |(w, _)| w);
+    let spacing = if inner.spread != Spread::None { inner.spread_spacing } else { 0.0 };
+    view_width.max(inner.ref_w_pt * BASE_DENSITY * inner.zoom + spacing)
+}
+
 /// The current paged row's rendered content size (width, height) in logical
 /// pixels: one page, or two side by side for a spread.
 fn paged_content_size(inner: &Inner) -> (f32, f32) {
@@ -417,6 +436,18 @@ fn paged_content_size(inner: &Inner) -> (f32, f32) {
         None => (0.0, 0.0, 0.0),
     };
     ((left_w + right_w) * density + spacing, left_h.max(right_h) * density)
+}
+
+/// Where the paged content's corner is in the page area, in logical pixels:
+/// on each axis centred where the content is smaller than the view, and
+/// otherwise moved by the scroll offset.
+fn paged_origin(inner: &Inner) -> (f32, f32) {
+    let (content_w, content_h) = paged_content_size(inner);
+    let (view_w, view_h) = inner.view.unwrap_or((0.0, 0.0));
+    let along = |content: f32, view: f32, scroll: f32| {
+        if content <= view { (view - content) / 2.0 } else { -scroll }
+    };
+    (along(content_w, view_w, inner.paged_scroll_x), along(content_h, view_h, inner.paged_scroll_y))
 }
 
 /// Groups `page_count` pages into rows according to the spread mode.
@@ -744,6 +775,8 @@ struct Inner {
     view: Option<(f32, f32)>,
     /// Whether the zoom follows the viewport, and how.
     fit: FitMode,
+    /// The zoom a pinch under way began at, which its scale multiplies.
+    pinch_from: Option<f32>,
     /// The pages holding a rendered image.
     retained: HashMap<usize, Retained>,
     /// The pages that failed to render at the current scale.
@@ -888,6 +921,7 @@ impl Viewer {
                 scale_factor,
                 view: None,
                 fit: settings.fit,
+                pinch_from: None,
                 retained: HashMap::new(),
                 failed: HashSet::new(),
                 thumb_failed: HashSet::new(),
@@ -1016,6 +1050,7 @@ impl Viewer {
         self.capture_cancel();
         // Coming back replays the viewport, which renders whatever is due.
         self.resize_timer.stop();
+        self.inner.borrow_mut().pinch_from = None;
         let dropped: Vec<usize> = {
             let mut inner = self.inner.borrow_mut();
             let view = rows_in_view(&inner);
@@ -1157,6 +1192,39 @@ impl Viewer {
 
     pub fn zoom_reset(&self) {
         self.set_zoom(1.0);
+    }
+
+    /// A pinch began, on a trackpad or a touchscreen, scaling the zoom shown
+    /// now.
+    pub fn pinch_started(&self) {
+        let mut inner = self.inner.borrow_mut();
+        inner.pinch_from = Some(inner.zoom);
+    }
+
+    /// The pinch has scaled the zoom it began at by `scale`, about the point
+    /// `x`, `y` in the page area, which stays over the same place on the page.
+    /// The pages are stretched to the new zoom at once, but rendered for it
+    /// only once the fingers pause (see [`RESIZE_SETTLE`]) or lift, since a
+    /// pinch changes the zoom many times a second.
+    pub fn pinch_moved(&self, scale: f32, x: f32, y: f32) {
+        let Some(from) = self.inner.borrow().pinch_from else {
+            return;
+        };
+        // The platform's magnification can come through as NaN.
+        if !scale.is_finite() || scale <= 0.0 {
+            return;
+        }
+        self.zoom_about(from * scale, x, y);
+        self.rerender_when_settled();
+    }
+
+    /// The pinch ended, or was cancelled, leaving the zoom it reached, which
+    /// the pages are rendered for now.
+    pub fn pinch_ended(&self) {
+        if self.inner.borrow_mut().pinch_from.take().is_some() {
+            self.resize_timer.stop();
+            self.rerender_view();
+        }
     }
 
     pub fn fit_width(&self) {
@@ -1594,18 +1662,7 @@ impl Viewer {
             let max_y = (content_h - view_h).max(0.0);
             inner.paged_scroll_x = inner.paged_scroll_x.clamp(0.0, max_x);
             inner.paged_scroll_y = inner.paged_scroll_y.clamp(0.0, max_y);
-            // Center each axis when the content is smaller than the viewport,
-            // otherwise offset by the scroll position.
-            let offset_x = if content_w <= view_w {
-                (view_w - content_w) / 2.0
-            } else {
-                -inner.paged_scroll_x
-            };
-            let offset_y = if content_h <= view_h {
-                (view_h - content_h) / 2.0
-            } else {
-                -inner.paged_scroll_y
-            };
+            let (offset_x, offset_y) = paged_origin(&inner);
             (offset_x, offset_y, content_w, content_h)
         };
         if let Some(window) = self.window() {
@@ -1711,6 +1768,76 @@ impl Viewer {
         self.apply_density();
         self.restore_place(place);
         self.rerender_view();
+    }
+
+    /// Sets the zoom keeping the point `x`, `y` of the page area over the same
+    /// place on the page, as a pinch does, without rendering anything for it.
+    fn zoom_about(&self, zoom: f32, x: f32, y: f32) {
+        let Some(anchor) = self.anchor_at(x, y) else {
+            return;
+        };
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.fit = FitMode::Free;
+            inner.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        }
+        self.apply_density();
+        self.restore_anchor(anchor, x, y);
+    }
+
+    /// The place on the page under the point `x`, `y` of the page area.
+    fn anchor_at(&self, x: f32, y: f32) -> Option<Anchor> {
+        let inner = self.inner.borrow();
+        if inner.specs.is_empty() || inner.position_pending || inner.zoom <= 0.0 {
+            return None;
+        }
+        if !inner.continuous {
+            let (origin_x, origin_y) = paged_origin(&inner);
+            return Some(Anchor::Paged {
+                x: (x - origin_x) / inner.zoom,
+                y: (y - origin_y) / inner.zoom,
+            });
+        }
+        let (row, into_row) = row_at(&inner, inner.scroll_px + y);
+        // The list's offset across is its own, being scrolled by the reader.
+        let offset_x = self.window().map_or(0.0, |window| window.get_scroll_x());
+        let from_middle = (x - offset_x - list_content_width(&inner) / 2.0) / inner.zoom;
+        Some(Anchor::Continuous { row, into_row, from_middle })
+    }
+
+    /// Scrolls the view so that `anchor` is under the point `x`, `y` of the
+    /// page area again, after the zoom has changed.
+    fn restore_anchor(&self, anchor: Anchor, x: f32, y: f32) {
+        match anchor {
+            Anchor::Paged { x: from_left, y: from_top } => {
+                {
+                    let mut inner = self.inner.borrow_mut();
+                    // Kept in range, or centred, by the offsets pushed below.
+                    inner.paged_scroll_x = from_left * inner.zoom - x;
+                    inner.paged_scroll_y = from_top * inner.zoom - y;
+                }
+                self.push_paged_offsets();
+            }
+            Anchor::Continuous { row, into_row, from_middle } => {
+                let (target, offset_x) = {
+                    let mut inner = self.inner.borrow_mut();
+                    let target = ((row as f32 + into_row) * row_height_px(&inner) - y)
+                        .clamp(0.0, max_scroll_px(&inner));
+                    inner.scroll_px = target;
+                    inner.current_row = row_at(&inner, target).0;
+                    let content_w = list_content_width(&inner);
+                    let view_w = inner.view.map_or(0.0, |(w, _)| w);
+                    let offset_x = (x - content_w / 2.0 - from_middle * inner.zoom)
+                        .clamp(-(content_w - view_w).max(0.0), 0.0);
+                    (target, offset_x)
+                };
+                self.show_offset(target);
+                if let Some(window) = self.window() {
+                    window.set_scroll_x(offset_x);
+                }
+                self.update_current_page();
+            }
+        }
     }
 
     /// Re-fits the zoom to the viewport and renders the view at it.

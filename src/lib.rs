@@ -1339,6 +1339,18 @@ fn wire_callbacks(window: &MainWindow, app: &Rc<App>) {
         let app = app.clone();
         move || app.with_viewer(|v| v.zoom_reset())
     });
+    window.on_pinch_started({
+        let app = app.clone();
+        move || app.with_viewer(|v| v.pinch_started())
+    });
+    window.on_pinch_moved({
+        let app = app.clone();
+        move |scale, x, y| app.with_viewer(|v| v.pinch_moved(scale, x, y))
+    });
+    window.on_pinch_ended({
+        let app = app.clone();
+        move || app.with_viewer(|v| v.pinch_ended())
+    });
     window.on_fit_width({
         let app = app.clone();
         move || app.with_viewer(|v| v.fit_width())
