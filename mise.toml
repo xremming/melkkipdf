@@ -13,7 +13,7 @@ MELKKIPDF_MODEL_DIR = "{{config_root}}/data/model"
 [tools]
 # Pinned rather than "latest", so CI and every laptop compile the same thing
 # and a new stable cannot turn a branch red on its own. Bump it deliberately.
-rust = { version = "1.98", components = ["rustfmt", "clippy"] }
+rust = { version = "1.99", components = ["rustfmt", "clippy"] }
 # The macOS bundle and the release check read the version with it.
 jq = "1.8"
 # Runs the flatpak cargo generator with its two dependencies, in place of a

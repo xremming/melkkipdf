@@ -2,6 +2,11 @@
 name = "melkkipdf"
 version = "0.14.1"
 edition = "2024"
+# The Rust that the Flatpak builds with, which comes from Flathub's
+# org.freedesktop.Sdk.Extension.rust-stable for the runtime branch and so
+# can lag behind the toolchain pinned in mise.toml. Keep it at that version,
+# so clippy flags standard library APIs the Flatpak's Rust does not have yet.
+rust-version = "1.98.1"
 description = "A fast, minimal PDF viewer, inspired by SumatraPDF."
 license = "AGPL-3.0-or-later"
 # Not on crates.io. Also what keeps the viewer out of its own list of
